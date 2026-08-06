@@ -4,21 +4,27 @@ import path from 'node:path';
 import { parse } from 'yaml';
 
 export interface ToolDef {
-  name: string;
   description?: string;
   input_schema: Record<string, unknown>;
 }
 
 export type ExpectingState = 'initial' | 'tool_result' | 'tool_error';
 
+export interface ToolResponse {
+  status: number;
+  body?: unknown;
+}
+
 export interface ModelEntry {
   expecting?: ExpectingState;
   reply?: string;
   call_tool?: { name: string; args: Record<string, unknown> };
-}
-
-export interface ToolResponse {
-  respond: { status: number; body?: unknown };
+  /**
+   * The tool server's scripted response to the invocation this call_tool
+   * provokes. Absent on a call_tool entry = the tool server must NOT be
+   * invoked for this call (e.g. the arguments fail validation).
+   */
+  tool_responds?: ToolResponse;
 }
 
 export type Matcher =
@@ -32,16 +38,15 @@ export interface Koan {
   description?: string;
   given: {
     task: string;
-    /** Defaults to [] when omitted. */
-    tools: ToolDef[];
+    /** Tool name → definition. Defaults to {} when omitted. */
+    tools: Record<string, ToolDef>;
   };
   when: {
+    /** The run's single timeline, one entry per model request. */
     model: ModelEntry[];
-    tools?: Record<string, ToolResponse[]>;
   };
   then: {
     run?: { status?: string; output?: Matcher };
-    tools?: Record<string, { last_args?: Matcher }>;
   };
 }
 
@@ -61,8 +66,10 @@ export function loadKoan(file: string): Koan {
   if (!raw || typeof raw !== 'object') fail(file, 'not a YAML mapping');
   if (typeof raw.name !== 'string') fail(file, 'missing "name"');
   if (typeof raw.given?.task !== 'string') fail(file, 'missing "given.task"');
-  raw.given.tools ??= [];
-  if (!Array.isArray(raw.given.tools)) fail(file, '"given.tools" must be a list');
+  raw.given.tools ??= {};
+  if (typeof raw.given.tools !== 'object' || Array.isArray(raw.given.tools)) {
+    fail(file, '"given.tools" must be a mapping of tool name to definition');
+  }
   if (!Array.isArray(raw.when?.model) || raw.when.model.length === 0) {
     fail(file, '"when.model" must be a non-empty list');
   }
@@ -70,6 +77,9 @@ export function loadKoan(file: string): Koan {
     const actions = [entry.reply !== undefined, entry.call_tool !== undefined].filter(Boolean);
     if (actions.length !== 1) {
       fail(file, `when.model[${i}] must have exactly one of "reply" / "call_tool"`);
+    }
+    if (entry.tool_responds !== undefined && entry.call_tool === undefined) {
+      fail(file, `when.model[${i}] has "tool_responds" without "call_tool"`);
     }
     if (entry.expecting && !['initial', 'tool_result', 'tool_error'].includes(entry.expecting)) {
       fail(file, `when.model[${i}].expecting has unknown state "${entry.expecting}"`);

@@ -6,6 +6,9 @@ export interface Config {
     baseUrl: string;
     apiKey: string;
   };
+  tools: {
+    baseUrl: string;
+  };
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -14,6 +17,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     model: {
       baseUrl: env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
       apiKey: env.OPENAI_API_KEY ?? '',
+    },
+    tools: {
+      baseUrl: env.KOAN_TOOLS_URL ?? '',
     },
   };
 }

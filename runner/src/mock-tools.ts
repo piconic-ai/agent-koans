@@ -1,8 +1,9 @@
-// Mock tool server. Serves POST /invoke/{name} from the koan's
-// `when.tools` script and records every invocation for assertions.
+// Mock tool server. Serves POST /invoke/{name} from the shared pending
+// queue: each invocation must match the call_tool entry that permitted it,
+// both by name and by arguments (argument fidelity, SPEC.md §6.1).
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { Koan } from './koan.js';
+import { deepEqual, type PendingInvocation } from './pending.js';
 
 export interface ToolCallRecord {
   name: string;
@@ -27,10 +28,8 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-export function startMockTools(koan: Koan): Promise<MockTools> {
+export function startMockTools(pending: PendingInvocation[]): Promise<MockTools> {
   const state: MockTools['state'] = { calls: [], violations: [] };
-  const scripts = koan.when.tools ?? {};
-  const consumed: Record<string, number> = {};
 
   const server = http.createServer(async (req, res) => {
     const respond = (status: number, body: unknown) => {
@@ -55,25 +54,29 @@ export function startMockTools(koan: Koan): Promise<MockTools> {
 
     state.calls.push({ name, args });
 
-    const script = scripts[name];
-    if (!script) {
-      // R7: this tool should never have been invoked.
-      state.violations.push(`tool "${name}" was invoked but has no scripted responses`);
-      return respond(404, { error: `unknown tool "${name}"` });
-    }
-
-    const index = consumed[name] ?? 0;
-    consumed[name] = index + 1;
-    const entry = script[index];
-    if (!entry) {
-      // Catches implicit retries (R4): more invocations than scripted.
+    const expected = pending.shift();
+    if (!expected) {
+      // Catches implicit retries (R4), invocations the model never made,
+      // and calls that were supposed to fail validation (R6/R7).
       state.violations.push(
-        `tool "${name}" was invoked ${index + 1} times but the script has only ${script.length} responses`,
+        `unexpected invocation of tool "${name}": the timeline permits no tool call here`,
       );
-      return respond(500, { error: 'mock tools: script exhausted' });
+      return respond(500, { error: 'mock tools: no invocation permitted' });
+    }
+    if (expected.name !== name) {
+      state.violations.push(
+        `expected invocation of tool "${expected.name}" but got "${name}"`,
+      );
+      return respond(500, { error: `mock tools: expected "${expected.name}"` });
+    }
+    if (!deepEqual(args, expected.args)) {
+      // Argument fidelity: the agent must forward the model's args verbatim.
+      state.violations.push(
+        `tool "${name}" received args ${JSON.stringify(args)}, expected ${JSON.stringify(expected.args)}`,
+      );
     }
 
-    respond(entry.respond.status, entry.respond.body ?? {});
+    respond(expected.respond.status, expected.respond.body ?? {});
   });
 
   return new Promise((resolve) => {

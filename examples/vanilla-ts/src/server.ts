@@ -3,24 +3,26 @@
 // Hono is used for HTTP routing only.
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { createAgent } from './agent.js';
+import { createAgent, type ToolDef } from './agent.js';
 import { loadConfig } from './config.js';
 
 const config = loadConfig();
-const agent = createAgent(config.model);
+const agent = createAgent({ model: config.model, tools: config.tools });
 
 const app = new Hono();
 
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
 app.post('/runs', async (c) => {
-  const body = await c.req.json<{ task?: { prompt?: string } }>().catch(() => null);
+  const body = await c.req
+    .json<{ task?: { prompt?: string }; tools?: ToolDef[] }>()
+    .catch(() => null);
   const prompt = body?.task?.prompt;
   if (typeof prompt !== 'string') {
     return c.json({ error: 'task.prompt is required' }, 400);
   }
   // The run executes asynchronously; the caller polls GET /runs/{id}.
-  const run = agent.startRun(prompt);
+  const run = agent.startRun(prompt, body?.tools ?? []);
   return c.json({ run_id: run.run_id }, 202);
 });
 

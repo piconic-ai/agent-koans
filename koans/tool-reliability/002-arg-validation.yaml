@@ -1,0 +1,32 @@
+name: arg-validation
+description: >
+  The model first calls the tool with arguments that violate the input
+  schema (required "city" is missing). The agent must reject the call
+  without invoking the tool — the entry has no tool_responds — report a
+  validation error back to the model, and then execute the corrected call.
+
+given:
+  task: "Get the current weather in Tokyo and report it."
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+when:
+  model:
+    - call_tool: { name: get_weather, args: { town: "Tokyo" } }
+      # no tool_responds: this call must never reach the tool server
+    - expecting: tool_error
+      call_tool: { name: get_weather, args: { city: "Tokyo" } }
+      tool_responds: { status: 200, body: { temp: 31 } }
+    - expecting: tool_result
+      reply: "The weather in Tokyo is 31°C."
+
+then:
+  run:
+    status: completed
+    output: { contains: "31" }

@@ -127,8 +127,10 @@ Requirements:
 - **R3 — Error reporting.** When a tool call fails — the tool server
   returned status ≥ 400, or the arguments failed validation — the failure
   MUST be reported back to the model as a `role: "tool"` message whose
-  content includes the word `error` (case-insensitive), along with
-  available detail (status code, error body, or validation message).
+  content indicates the failure, along with available detail (status code,
+  error body, or validation message). The harness recognizes a failure
+  indicator by matching `error`, `fail`, or `invalid` (case-insensitive)
+  in the content.
 - **R4 — No implicit retries.** The agent MUST NOT retry a failed tool
   call on its own. Retry decisions belong to the model: report the error
   (R3) and let the model decide. One model tool call maps to at most one
@@ -173,55 +175,61 @@ description: >
 
 given:                    # the world as the agent sees it
   task: "Get the current weather in Tokyo and report it."
-  tools:
-    - name: get_weather
+  tools:                  # tool name → definition
+    get_weather:
       input_schema:
         type: object
         properties: { city: { type: string } }
         required: [city]
 
-when:                     # scripted behavior of the mocked world
+when:                     # the run's single timeline
   model:                  # consumed in order, one entry per model request
     - call_tool: { name: get_weather, args: { city: "Tokyo" } }
+      tool_responds: { status: 503, body: { error: "service_unavailable" } }
     - expecting: tool_error         # asserts what the Nth request must look like
       call_tool: { name: get_weather, args: { city: "Tokyo" } }
+      tool_responds: { status: 200, body: { temp: 31 } }
     - expecting: tool_result
       reply: "The weather in Tokyo is 31°C."
-  tools:
-    get_weather:          # consumed in order, one entry per invocation
-      - respond: { status: 503, body: { error: "service_unavailable" } }
-      - respond: { status: 200, body: { temp: 31 } }
 
 then:                     # assertions
   run:
     status: completed
     output: { contains: "31" }
-  tools:
-    get_weather:
-      last_args: { equals: { city: "Tokyo" } }
 ```
 
-`given.tools` defaults to an empty list and MAY be omitted.
+`given.tools` maps tool name → definition; it defaults to empty and MAY be
+omitted. The harness converts it to the wire-format list of §3.2.
 
-### 6.1 `when.model` entries
+### 6.1 The `when.model` timeline
 
 The mock LLM answers the Nth request with the Nth entry. Each entry has one
-action — `reply: <text>` or `call_tool: { name, args }` — and an optional
-`expecting` assertion on the incoming request:
+action — `reply: <text>` or `call_tool: { name, args }` — plus an optional
+`expecting` assertion on the incoming request. Because one model tool call
+maps to at most one tool invocation (R4), the tool server's scripted
+response rides on the `call_tool` entry that provokes it, as
+`tool_responds: { status, body }`. This makes `when.model` the run's single
+timeline.
 
 | `expecting`   | The request must show                                       |
 | ------------- | ----------------------------------------------------------- |
 | `initial`     | No tool interaction yet (last message is the user task)     |
 | `tool_result` | Last message is a successful `role: "tool"` result          |
-| `tool_error`  | Last message is a `role: "tool"` error report (per R3)      |
+| `tool_error`  | Last message is a `role: "tool"` failure report (per R3)    |
 
-A request beyond the end of the script, or one that contradicts its
-`expecting`, fails the koan.
+A request beyond the end of the timeline, or one that contradicts its
+`expecting`, fails the koan. Three further rules fall out of the timeline
+itself, so `then` never asserts counts or arguments explicitly:
 
-**Script consumption.** A run must consume the entire script — every
-`when.model` entry and every scripted tool response, no more and no fewer.
-The script length *is* the call-count assertion, so counts are never
-asserted explicitly in `then`.
+- **Timeline consumption.** A run must consume the entire timeline — every
+  model entry, and every `tool_responds`, no more and no fewer. The
+  timeline length *is* the call-count assertion.
+- **Argument fidelity.** The tool server asserts that each invocation's
+  arguments deep-equal the `args` of the `call_tool` entry that permitted
+  it — the agent must forward the model's arguments verbatim.
+- **Absence of `tool_responds`.** A `call_tool` entry without
+  `tool_responds` asserts the tool server MUST NOT be invoked for that
+  call (e.g. the arguments are scripted to fail validation, R6).
 
 ### 6.2 `then` matchers
 
@@ -235,9 +243,9 @@ vocabulary is a **closed set** — no general-purpose query language:
 | `{ contains: <str> }`   | Substring match                          |
 | `{ matches: <regex> }`  | Regular expression match                 |
 
-Semantic assertions: `tools.<name>.last_args`, `expecting`, and the
-implicit script-consumption rule (§6.1). New verification needs are added
-here as named assertions, not as generic matchers.
+Semantic assertions: `expecting` and the implicit timeline rules (§6.1).
+New verification needs are added here as named assertions, not as generic
+matchers.
 
 ## 7. Versioning
 

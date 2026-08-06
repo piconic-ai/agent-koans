@@ -1,0 +1,28 @@
+name: happy-path
+description: >
+  One tool call that succeeds on the first try. The agent must invoke the
+  tool with the model's arguments, feed the result back to the model, and
+  report the final answer.
+
+given:
+  task: "Get the current weather in Tokyo and report it."
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+when:
+  model:
+    - call_tool: { name: get_weather, args: { city: "Tokyo" } }
+      tool_responds: { status: 200, body: { temp: 31 } }
+    - expecting: tool_result
+      reply: "The weather in Tokyo is 31°C."
+
+then:
+  run:
+    status: completed
+    output: { contains: "31" }

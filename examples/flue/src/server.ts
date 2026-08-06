@@ -5,7 +5,7 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { AgentRunError, init } from '@flue/runtime';
 import { start } from '@flue/runtime/node';
-import { Assistant } from './agents/assistant.js';
+import { Assistant, type AssistantData, type RunToolDef } from './agents/assistant.js';
 import { loadConfig } from './config.js';
 import { createKoanProvider } from './provider.js';
 
@@ -26,14 +26,16 @@ interface Run {
 
 const runs = new Map<string, Run>();
 
-function startRun(prompt: string): Run {
+function startRun(prompt: string, tools: RunToolDef[]): Run {
   const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
   runs.set(run.run_id, run);
   void (async () => {
     try {
-      // init() without an id creates a fresh conversation per run.
+      // init() without an id creates a fresh conversation per run; the
+      // run's tool definitions travel as the instance's initial data.
       const agent = init(Assistant);
-      const receipt = await agent.dispatch(prompt);
+      const initialData: AssistantData = { tools, toolsBaseUrl: config.tools.baseUrl };
+      const receipt = await agent.dispatch({ message: prompt, initialData });
       const reply = await agent.read(receipt);
       run.status = 'completed';
       run.output = reply.text;
@@ -51,13 +53,15 @@ const app = new Hono();
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
 app.post('/runs', async (c) => {
-  const body = await c.req.json<{ task?: { prompt?: string } }>().catch(() => null);
+  const body = await c.req
+    .json<{ task?: { prompt?: string }; tools?: RunToolDef[] }>()
+    .catch(() => null);
   const prompt = body?.task?.prompt;
   if (typeof prompt !== 'string') {
     return c.json({ error: 'task.prompt is required' }, 400);
   }
   // The run executes asynchronously; the caller polls GET /runs/{id}.
-  const run = startRun(prompt);
+  const run = startRun(prompt, body?.tools ?? []);
   return c.json({ run_id: run.run_id }, 202);
 });
 

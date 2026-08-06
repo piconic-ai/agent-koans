@@ -22,6 +22,9 @@ importers:
       hono:
         specifier: ^4.7.0
         version: 4.13.0
+      valibot:
+        specifier: ^1.0.0
+        version: 1.4.2(typescript@5.9.3)
     devDependencies:
       '@types/node':
         specifier: ^22.15.0

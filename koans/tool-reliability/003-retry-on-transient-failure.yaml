@@ -1,0 +1,31 @@
+name: retry-on-transient-failure
+description: >
+  A transient 5xx must reach the model as a tool error, and the follow-up
+  call must succeed. The agent must not retry on its own: one model tool
+  call maps to at most one tool invocation.
+
+given:
+  task: "Get the current weather in Tokyo and report it."
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+when:
+  model:
+    - call_tool: { name: get_weather, args: { city: "Tokyo" } }
+      tool_responds: { status: 503, body: { error: "service_unavailable" } }
+    - expecting: tool_error
+      call_tool: { name: get_weather, args: { city: "Tokyo" } }
+      tool_responds: { status: 200, body: { temp: 31 } }
+    - expecting: tool_result
+      reply: "The weather in Tokyo is 31°C."
+
+then:
+  run:
+    status: completed
+    output: { contains: "31" }

@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import type { Koan, Matcher } from './koan.js';
 import { startMockLlm } from './mock-llm.js';
 import { startMockTools } from './mock-tools.js';
+import type { PendingInvocation } from './pending.js';
 
 export interface AgentConfig {
   /** Shell command that starts the agent (run via `sh -c`). */
@@ -71,8 +72,11 @@ function match(label: string, actual: unknown, matcher: Matcher): string | null 
 }
 
 export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
-  const llm = await startMockLlm(koan);
-  const tools = await startMockTools(koan);
+  // The timeline coupling: call_tool entries enqueue permitted invocations,
+  // the tool server consumes them (see pending.ts).
+  const pending: PendingInvocation[] = [];
+  const llm = await startMockLlm(koan, pending);
+  const tools = await startMockTools(pending);
   const port = await getFreePort();
   const base = `http://127.0.0.1:${port}`;
 
@@ -98,7 +102,8 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         task: { prompt: koan.given.task },
-        tools: koan.given.tools,
+        // The koan maps tool name → definition; the wire format is a list.
+        tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
       }),
     });
     if (submitRes.status !== 201 && submitRes.status !== 202) {
@@ -128,7 +133,7 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
     // ---- then ----
     failures.push(...llm.state.violations, ...tools.state.violations);
 
-    // Implicit base assertion: the run must consume the entire script.
+    // Implicit base assertion: the run must consume the entire timeline.
     // Overruns are recorded as violations by the mocks; underruns are
     // caught here. This makes explicit call-count assertions unnecessary.
     if (llm.state.requests.length < koan.when.model.length) {
@@ -136,11 +141,10 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
         `model script not fully consumed: ${llm.state.requests.length} of ${koan.when.model.length} requests`,
       );
     }
-    for (const [name, script] of Object.entries(koan.when.tools ?? {})) {
-      const count = tools.state.calls.filter((c) => c.name === name).length;
-      if (count < script.length) {
-        failures.push(`tool "${name}" script not fully consumed: ${count} of ${script.length} invocations`);
-      }
+    if (pending.length > 0) {
+      failures.push(
+        `tool timeline not fully consumed: ${pending.length} permitted invocation(s) never made (next: "${pending[0].name}")`,
+      );
     }
 
     if (koan.then.run?.status !== undefined && run.status !== koan.then.run.status) {
@@ -151,13 +155,6 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
     if (koan.then.run?.output !== undefined) {
       const failure = match('run.output', run.output, koan.then.run.output);
       if (failure) failures.push(failure);
-    }
-    for (const [name, expect] of Object.entries(koan.then.tools ?? {})) {
-      const calls = tools.state.calls.filter((c) => c.name === name);
-      if (expect.last_args !== undefined) {
-        const failure = match(`tools.${name}.last_args`, calls.at(-1)?.args, expect.last_args);
-        if (failure) failures.push(failure);
-      }
     }
   } finally {
     child.kill('SIGTERM');

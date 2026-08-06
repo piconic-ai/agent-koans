@@ -16,6 +16,7 @@
     "@earendil-works/pi-ai": "^0.83.0",
     "@flue/runtime": "^2.0.3",
     "@hono/node-server": "^1.14.0",
-    "hono": "^4.7.0"
+    "hono": "^4.7.0",
+    "valibot": "^1.0.0"
   }
 }

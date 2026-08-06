@@ -10,8 +10,7 @@ implementation honors the contract. No real LLM calls — every failure
 means a missing safeguard in the implementation, never a bad roll of the
 model dice. Any framework, any runtime: satisfy the contract and you pass.
 
-The contract lives in [SPEC.md](./SPEC.md) (normative;
-[SPEC.ja.md](./SPEC.ja.md) is a translation).
+The contract lives in [SPEC.md](./SPEC.md).
 
 ## Usage
 

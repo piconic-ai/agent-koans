@@ -1,8 +1,9 @@
 // Conformance suite entry point.
 //
-// By default the suite runs against examples/vanilla-ts. Point it at any
-// implementation with:
+// By default the suite runs against every implementation in examples/.
+// Point it at a single implementation with:
 //   AGENT_CMD="<shell command>" AGENT_CWD="<dir>" pnpm test
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'vitest';
@@ -11,17 +12,41 @@ import { runKoan, type AgentConfig } from '../src/harness.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-const agent: AgentConfig = {
-  command: process.env.AGENT_CMD ?? 'pnpm --silent start',
-  cwd: process.env.AGENT_CWD ?? path.join(repoRoot, 'examples/vanilla-ts'),
-};
+interface Target {
+  name: string;
+  agent: AgentConfig;
+}
+
+function discoverTargets(): Target[] {
+  if (process.env.AGENT_CMD || process.env.AGENT_CWD) {
+    return [
+      {
+        name: 'agent under test',
+        agent: {
+          command: process.env.AGENT_CMD ?? 'pnpm --silent start',
+          cwd: process.env.AGENT_CWD ?? process.cwd(),
+        },
+      },
+    ];
+  }
+  const examplesDir = path.join(repoRoot, 'examples');
+  return fs
+    .readdirSync(examplesDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && fs.existsSync(path.join(examplesDir, e.name, 'package.json')))
+    .map((e) => ({
+      name: `examples/${e.name}`,
+      agent: { command: 'pnpm --silent start', cwd: path.join(examplesDir, e.name) },
+    }));
+}
 
 const koans = discoverKoans(path.join(repoRoot, 'koans'));
 
-describe('agent-koans', () => {
-  for (const { id, koan } of koans) {
-    it(id, { timeout: 60_000 }, async () => {
-      await runKoan(koan, agent);
-    });
-  }
-});
+for (const target of discoverTargets()) {
+  describe(target.name, () => {
+    for (const { id, koan } of koans) {
+      it(id, { timeout: 60_000 }, async () => {
+        await runKoan(koan, target.agent);
+      });
+    }
+  });
+}

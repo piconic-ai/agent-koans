@@ -27,8 +27,5 @@ jobs:
           pnpm --dir examples/vanilla-ts typecheck
           pnpm --dir examples/flue typecheck
 
-      - name: Run conformance suite (vanilla-ts)
+      - name: Run conformance suite (all examples)
         run: pnpm test
-
-      - name: Run conformance suite (flue)
-        run: AGENT_CWD="$PWD/examples/flue" pnpm --dir runner test

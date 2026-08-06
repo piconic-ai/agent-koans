@@ -26,10 +26,7 @@ of the model dice.
 
 ```sh
 pnpm install
-pnpm test          # runs the suite against examples/vanilla-ts
-
-# same suite, different implementation — the framework-agnostic claim in action
-AGENT_CWD="$PWD/examples/flue" pnpm --dir runner test
+pnpm test          # runs the suite against every implementation in examples/
 ```
 
 Run the suite against your own implementation:

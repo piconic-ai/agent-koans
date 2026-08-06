@@ -19,12 +19,17 @@ of the model dice.
 - **runner/** — reference harness: mock LLM server (OpenAI-compatible),
   mock tool server, and a Vitest-based runner
 - **examples/vanilla-ts/** — a no-framework reference implementation
+- **examples/flue/** — the same contract implemented with the
+  [Flue](https://flueframework.com/) agent framework
 
 ## Quick start
 
 ```sh
 pnpm install
 pnpm test          # runs the suite against examples/vanilla-ts
+
+# same suite, different implementation — the framework-agnostic claim in action
+AGENT_CWD="$PWD/examples/flue" pnpm --dir runner test
 ```
 
 Run the suite against your own implementation:

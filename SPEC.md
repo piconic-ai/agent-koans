@@ -108,9 +108,10 @@ Unknown `run_id` SHOULD return `404`.
 ## 4. Model interaction
 
 The agent talks to the model via the OpenAI Chat Completions API
-(`POST {OPENAI_BASE_URL}/chat/completions`, non-streaming). The mock LLM
-responds from the koan's script; each incoming request is matched against
-the next script entry.
+(`POST {OPENAI_BASE_URL}/chat/completions`). The mock LLM supports both
+streaming (`stream: true`, SSE) and non-streaming responses, so the agent
+MAY use either. The mock responds from the koan's script; each incoming
+request is matched against the next script entry.
 
 Requirements:
 

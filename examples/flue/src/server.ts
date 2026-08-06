@@ -1,0 +1,72 @@
+// Composition root + HTTP adapter: boots the Flue runtime in-process and
+// exposes the agent behind the conformance contract's endpoints (SPEC.md §3).
+// Hono is used for HTTP routing only.
+import { serve } from '@hono/node-server';
+import { Hono } from 'hono';
+import { AgentRunError, init } from '@flue/runtime';
+import { start } from '@flue/runtime/node';
+import { Assistant } from './agents/assistant.js';
+import { loadConfig } from './config.js';
+import { createKoanProvider } from './provider.js';
+
+const config = loadConfig();
+
+// In-memory persistence; only the koan provider is registered.
+await start({
+  agents: [Assistant],
+  providers: [createKoanProvider(config.model)],
+});
+
+interface Run {
+  run_id: string;
+  status: 'running' | 'completed' | 'failed' | 'aborted';
+  output?: string;
+  error?: string;
+}
+
+const runs = new Map<string, Run>();
+
+function startRun(prompt: string): Run {
+  const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
+  runs.set(run.run_id, run);
+  void (async () => {
+    try {
+      // init() without an id creates a fresh conversation per run.
+      const agent = init(Assistant);
+      const receipt = await agent.dispatch(prompt);
+      const reply = await agent.read(receipt);
+      run.status = 'completed';
+      run.output = reply.text;
+    } catch (err) {
+      // Terminal-state guarantee: errors end the run, they never strand it.
+      run.status = err instanceof AgentRunError ? err.outcome : 'failed';
+      run.error = err instanceof Error ? err.message : String(err);
+    }
+  })();
+  return run;
+}
+
+const app = new Hono();
+
+app.get('/health', (c) => c.json({ status: 'ok' }));
+
+app.post('/runs', async (c) => {
+  const body = await c.req.json<{ task?: { prompt?: string } }>().catch(() => null);
+  const prompt = body?.task?.prompt;
+  if (typeof prompt !== 'string') {
+    return c.json({ error: 'task.prompt is required' }, 400);
+  }
+  // The run executes asynchronously; the caller polls GET /runs/{id}.
+  const run = startRun(prompt);
+  return c.json({ run_id: run.run_id }, 202);
+});
+
+app.get('/runs/:id', (c) => {
+  const run = runs.get(c.req.param('id'));
+  if (!run) return c.json({ error: 'run not found' }, 404);
+  return c.json(run);
+});
+
+serve({ fetch: app.fetch, port: config.port }, () => {
+  console.log(`flue agent listening on :${config.port}`);
+});

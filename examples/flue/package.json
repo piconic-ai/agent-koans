@@ -1,0 +1,21 @@
+{
+  "name": "@agent-koans/example-flue",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.83.0",
+    "@flue/runtime": "^2.0.3",
+    "@hono/node-server": "^1.14.0",
+    "hono": "^4.7.0"
+  }
+}

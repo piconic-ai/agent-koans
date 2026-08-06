@@ -110,9 +110,11 @@ koanに不合格となります。
 ## 4. モデルとのやりとり
 
 エージェントは OpenAI Chat Completions API
-(`POST {OPENAI_BASE_URL}/chat/completions`、非ストリーミング)でモデルと
-通信します。モックLLMはkoanの台本から応答し、受信した各リクエストは
-台本の次のエントリと照合されます。
+(`POST {OPENAI_BASE_URL}/chat/completions`)でモデルと通信します。
+モックLLMはストリーミング(`stream: true`、SSE)と非ストリーミングの
+両方をサポートしており、エージェントはどちらを使っても構いません(MAY)。
+モックはkoanの台本から応答し、受信した各リクエストは台本の次のエントリと
+照合されます。
 
 要件:
 

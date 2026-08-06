@@ -19,6 +19,7 @@ interface ChatMessage {
 interface ChatRequest {
   messages: ChatMessage[];
   tools?: Array<{ type: string; function?: { name: string } }>;
+  stream?: boolean;
 }
 
 export interface MockLlm {
@@ -140,13 +141,39 @@ export function startMockLlm(koan: Koan): Promise<MockLlm> {
       finishReason = 'stop';
     }
 
+    const id = `chatcmpl-koan-${index + 1}`;
+    const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+
+    if (body.stream) {
+      // OpenAI-compatible SSE streaming: one delta chunk carrying the whole
+      // message, a finish chunk, then [DONE].
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      });
+      const chunk = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      const base = { id, object: 'chat.completion.chunk', created: 0, model: 'agent-koans-mock' };
+      const delta: Record<string, unknown> = { role: 'assistant' };
+      if (message.tool_calls) {
+        delta.tool_calls = message.tool_calls.map((tc, i) => ({ index: i, ...tc }));
+      } else {
+        delta.content = message.content ?? '';
+      }
+      chunk({ ...base, choices: [{ index: 0, delta, finish_reason: null }] });
+      chunk({ ...base, choices: [{ index: 0, delta: {}, finish_reason: finishReason }], usage });
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+
     respond(200, {
-      id: `chatcmpl-koan-${index + 1}`,
+      id,
       object: 'chat.completion',
       created: 0,
       model: 'agent-koans-mock',
       choices: [{ index: 0, message, finish_reason: finishReason }],
-      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      usage,
     });
   });
 

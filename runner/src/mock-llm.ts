@@ -1,0 +1,163 @@
+// OpenAI Chat Completions-compatible mock LLM server.
+// Answers the Nth request with the Nth `when.model` script entry, and
+// records violations of the koan script (SPEC.md §6.1) for later assertion.
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import type { ExpectingState, Koan } from './koan.js';
+
+interface ChatMessage {
+  role: string;
+  content?: string | null;
+  tool_call_id?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: string;
+    function: { name: string; arguments: string };
+  }>;
+}
+
+interface ChatRequest {
+  messages: ChatMessage[];
+  tools?: Array<{ type: string; function?: { name: string } }>;
+}
+
+export interface MockLlm {
+  /** Base URL without the /v1 prefix. */
+  url: string;
+  state: {
+    requests: ChatRequest[];
+    violations: string[];
+  };
+  close(): Promise<void>;
+}
+
+/** Classify what the incoming conversation shows (SPEC.md §6.1). */
+function classify(messages: ChatMessage[]): ExpectingState {
+  const last = messages[messages.length - 1];
+  if (last?.role === 'tool') {
+    // R3: errors are tool messages whose content includes "error".
+    return /error/i.test(String(last.content ?? '')) ? 'tool_error' : 'tool_result';
+  }
+  return 'initial';
+}
+
+function readBody(req: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => (data += chunk));
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
+}
+
+export function startMockLlm(koan: Koan): Promise<MockLlm> {
+  const state: MockLlm['state'] = { requests: [], violations: [] };
+  const issuedToolCallIds = new Set<string>();
+  const script = koan.when.model;
+
+  const server = http.createServer(async (req, res) => {
+    const respond = (status: number, body: unknown) => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+    };
+
+    if (req.method !== 'POST' || !req.url?.endsWith('/chat/completions')) {
+      return respond(404, { error: { message: `mock LLM: unknown route ${req.method} ${req.url}` } });
+    }
+
+    let body: ChatRequest;
+    try {
+      body = JSON.parse(await readBody(req)) as ChatRequest;
+    } catch {
+      state.violations.push('model request body is not valid JSON');
+      return respond(400, { error: { message: 'invalid JSON' } });
+    }
+
+    state.requests.push(body);
+    const index = state.requests.length - 1;
+    const entry = script[index];
+
+    if (!entry) {
+      state.violations.push(
+        `model was called ${state.requests.length} times but the script has only ${script.length} entries`,
+      );
+      return respond(400, { error: { message: 'mock LLM: script exhausted' } });
+    }
+
+    // R1: tool definitions must be forwarded on every request.
+    if (koan.given.tools.length > 0) {
+      const offered = new Set(
+        (body.tools ?? []).map((t) => t.function?.name).filter(Boolean),
+      );
+      for (const tool of koan.given.tools) {
+        if (!offered.has(tool.name)) {
+          state.violations.push(
+            `request #${index + 1} is missing the definition of tool "${tool.name}" (R1)`,
+          );
+        }
+      }
+    }
+
+    // R2: tool messages must reference a tool_call_id we actually issued.
+    const last = body.messages?.[body.messages.length - 1];
+    if (last?.role === 'tool' && !issuedToolCallIds.has(String(last.tool_call_id))) {
+      state.violations.push(
+        `request #${index + 1} has a tool message with unknown tool_call_id "${last.tool_call_id}" (R2)`,
+      );
+    }
+
+    // `expecting` assertion: the Nth request must look like the script says.
+    const actual = classify(body.messages ?? []);
+    if (entry.expecting && entry.expecting !== actual) {
+      state.violations.push(
+        `request #${index + 1}: expecting "${entry.expecting}" but the conversation shows "${actual}"`,
+      );
+    }
+
+    // Respond with the scripted action.
+    let message: ChatMessage;
+    let finishReason: string;
+    if (entry.call_tool) {
+      const id = `call_${index + 1}`;
+      issuedToolCallIds.add(id);
+      message = {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id,
+            type: 'function',
+            function: {
+              name: entry.call_tool.name,
+              arguments: JSON.stringify(entry.call_tool.args ?? {}),
+            },
+          },
+        ],
+      };
+      finishReason = 'tool_calls';
+    } else {
+      message = { role: 'assistant', content: entry.reply ?? '' };
+      finishReason = 'stop';
+    }
+
+    respond(200, {
+      id: `chatcmpl-koan-${index + 1}`,
+      object: 'chat.completion',
+      created: 0,
+      model: 'agent-koans-mock',
+      choices: [{ index: 0, message, finish_reason: finishReason }],
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    });
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as AddressInfo;
+      resolve({
+        url: `http://127.0.0.1:${port}`,
+        state,
+        close: () => new Promise((r) => server.close(() => r())),
+      });
+    });
+  });
+}

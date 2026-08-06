@@ -1,0 +1,14 @@
+name: plain-completion
+description: The agent forwards the task to the model and reports the final text.
+
+given:
+  task: "Say hello."
+
+when:
+  model:
+    - reply: "Hello!"
+
+then:
+  run:
+    status: completed
+    output: { contains: "Hello" }

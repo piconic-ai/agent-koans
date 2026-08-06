@@ -54,6 +54,10 @@ executions to `KOAN_TOOLS_URL`.
 
 ## 3. Agent HTTP interface
 
+The wire format — endpoints, request/response schemas, status codes — is
+defined normatively in [openapi.yaml](./openapi.yaml). This section
+summarizes it and adds the behavioral requirements.
+
 ### 3.1 `GET /health`
 
 Readiness probe. MUST return `200` once the agent can accept runs.

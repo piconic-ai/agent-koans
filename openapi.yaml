@@ -1,0 +1,131 @@
+# The wire format of the agent HTTP interface — normative.
+# Behavioral requirements (terminal-state guarantee, model interaction
+# rules R1-R7, tool invocation) live in SPEC.md.
+openapi: 3.1.0
+info:
+  title: agent-koans Agent HTTP Interface
+  version: 0.1.0-draft
+  description: >
+    The HTTP surface every agent under test MUST expose. The harness is
+    the only client. Unknown request fields MUST be ignored; response
+    objects MAY carry additional fields, which the harness ignores.
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Readiness probe
+      description: >
+        MUST return 200 once the agent can accept runs. The response body
+        is unspecified and ignored by the harness.
+      responses:
+        "200":
+          description: The agent is ready.
+
+  /runs:
+    post:
+      operationId: createRun
+      summary: Submit a task
+      description: >
+        Accepts a task and starts a run asynchronously. The harness polls
+        `GET /runs/{run_id}` until the run reaches a terminal state.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunRequest"
+      responses:
+        "201":
+          description: Run created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunCreated"
+        "202":
+          description: Run accepted. Equivalent to 201.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunCreated"
+        "400":
+          description: Malformed body (not JSON, or `task.prompt` missing).
+
+  /runs/{run_id}:
+    get:
+      operationId: getRun
+      summary: Read run state
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Current run state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "404":
+          description: Unknown `run_id`.
+
+components:
+  schemas:
+    RunRequest:
+      type: object
+      required: [task]
+      properties:
+        task:
+          type: object
+          required: [prompt]
+          properties:
+            prompt:
+              type: string
+              description: The user task, verbatim.
+        tools:
+          type: array
+          default: []
+          items:
+            $ref: "#/components/schemas/ToolDef"
+
+    ToolDef:
+      type: object
+      required: [name, input_schema]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+        input_schema:
+          type: object
+          description: JSON Schema for the tool's arguments.
+
+    RunCreated:
+      type: object
+      required: [run_id]
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+
+    Run:
+      type: object
+      required: [run_id, status]
+      properties:
+        run_id:
+          type: string
+        status:
+          type: string
+          enum: [running, completed, failed, aborted]
+          description: >
+            `running` is the only non-terminal state. Every run MUST reach
+            a terminal state in finite time (SPEC.md §3.3).
+        output:
+          type: string
+          description: Final answer. REQUIRED when `status` is `completed`.
+        error:
+          type: string
+          description: Failure detail. SHOULD be present when `status` is `failed`.

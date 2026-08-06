@@ -36,6 +36,7 @@ framework. Start from one of them.
 | Path        | Contents                                                    |
 | ----------- | ----------------------------------------------------------- |
 | `SPEC.md`   | The conformance contract — the real deliverable             |
+| `openapi.yaml` | Wire format of the agent HTTP interface (OpenAPI 3.1)    |
 | `koans/`    | The tests, as declarative YAML                              |
 | `runner/`   | Mock LLM server (OpenAI-compatible), mock tool server, harness |
 | `examples/` | Implementations that pass                                   |

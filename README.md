@@ -2,53 +2,41 @@
 
 A framework-agnostic conformance suite for AI agent implementations.
 
-Frameworks churn; contracts survive. agent-koans defines what a *correctly
-built* agent loop looks like — argument validation, failure recovery,
-idempotent execution, termination — as a set of deterministic, black-box
-HTTP tests called **koans**. Build your agent with any framework (or none):
-if it satisfies the contract, it passes.
+An agent's failure is the sum of model failure and implementation failure.
+Evals measure the sum; agent-koans isolates the latter. Each **koan** is a
+deterministic black-box test: the harness drives your agent over HTTP,
+plays the model's part with a scripted mock, and verifies that the
+implementation honors the contract. No real LLM calls — every failure
+means a missing safeguard in the implementation, never a bad roll of the
+model dice. Any framework, any runtime: satisfy the contract and you pass.
 
-Unlike evals, koans do not measure model capability. The model is fully
-mocked, so every test is deterministic, fast, and free — and a failure
-always means a missing safeguard in the *implementation*, never a bad roll
-of the model dice.
+The contract lives in [SPEC.md](./SPEC.md) (normative;
+[SPEC.ja.md](./SPEC.ja.md) is a translation).
 
-- **[SPEC.md](./SPEC.md)** — the conformance contract (normative)
-- **[SPEC.ja.md](./SPEC.ja.md)** — Japanese translation (informative)
-- **koans/** — the test suite as declarative YAML, organized in chapters
-- **runner/** — reference harness: mock LLM server (OpenAI-compatible),
-  mock tool server, and a Vitest-based runner
-- **examples/vanilla-ts/** — a no-framework reference implementation
-- **examples/flue/** — the same contract implemented with the
-  [Flue](https://flueframework.com/) agent framework
+## Usage
 
-## Quick start
+Your agent is an HTTP server that:
+
+1. reads `PORT`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `KOAN_TOOLS_URL`
+   from the environment
+2. serves `GET /health`, `POST /runs`, and `GET /runs/{id}`
+
+Run the suite against it:
 
 ```sh
 pnpm install
-pnpm test          # runs the suite against every implementation in examples/
+AGENT_CMD="<command that starts your agent>" AGENT_CWD="<its directory>" pnpm test
 ```
 
-Run the suite against your own implementation:
+Plain `pnpm test` runs the suite against everything in `examples/` —
+reference implementations of the contract, with and without an agent
+framework. Start from one of them.
 
-```sh
-AGENT_CMD="<command that starts your agent>" AGENT_CWD="<dir>" pnpm test
-```
+## Repository
 
-Your agent reads `PORT`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and
-`KOAN_TOOLS_URL` from the environment, serves `GET /health`, `POST /runs`,
-and `GET /runs/{id}`, and talks to the mock servers. See
-[SPEC.md](./SPEC.md) for the full contract.
-
-## Chapters
-
-| Chapter            | Verifies                                        |
-| ------------------ | ----------------------------------------------- |
-| `lifecycle`        | The minimal run lifecycle contract              |
-| `tool-reliability` | Tool-calling reliability: validation, recovery, idempotency |
-
-## Status
-
-Early draft (M1): 4 koans, the reference runner, and one example
-implementation. The suite and SPEC are expected to change without notice
-until 1.0.
+| Path        | Contents                                                    |
+| ----------- | ----------------------------------------------------------- |
+| `SPEC.md`   | The conformance contract — the real deliverable             |
+| `koans/`    | The tests, as declarative YAML                              |
+| `runner/`   | Mock LLM server (OpenAI-compatible), mock tool server, harness |
+| `examples/` | Implementations that pass                                   |

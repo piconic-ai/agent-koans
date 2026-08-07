@@ -5,7 +5,7 @@ given:
   task: "Say hello."
 
 when:
-  - request: { model: initial }
+  - request: model
     response: "Hello!"
 
 then:

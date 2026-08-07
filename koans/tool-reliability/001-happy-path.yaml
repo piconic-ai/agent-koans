@@ -16,11 +16,11 @@ given:
         required: [city]
 
 when:
-  - request: { model: initial }
+  - request: model
     response: { tool: get_weather, args: { city: "Tokyo" } }
   - request: { tool: get_weather }
     response: { status: 200, body: { temp: 31 } }
-  - request: { model: tool_result }
+  - request: model
     response: "The weather in Tokyo is 31°C."
 
 then:

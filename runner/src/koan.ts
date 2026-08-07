@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
+import { deepEqual } from './pending.js';
 
 export interface ToolDef {
   description?: string;
@@ -22,12 +23,20 @@ export interface ToolResponse {
 
 /**
  * One step of the YAML trace: the agent's request (asserted) and the
- * called party's scripted response. The response discriminates by form:
- * a bare string is the model's text reply; { tool, args } is the model's
- * tool-call instruction; { status, body } is the tool server's response.
+ * called party's scripted response.
+ *
+ * A request is `model` (bare scalar) or `{ tool: <name> }`. What a model
+ * request's conversation must show is not written — it is derived from
+ * the preceding trace (conversation coherence, SPEC.md §6.1). A tool
+ * request MAY carry explicit `args` for readability; they must equal the
+ * provoking instruction's args (argument fidelity fixes them).
+ *
+ * The response discriminates by form: a bare string is the model's text
+ * reply; { tool, args } is the model's tool-call instruction;
+ * { status, body } is the tool server's response.
  */
 interface TraceEntry {
-  request?: { model?: ConversationState; tool?: string };
+  request?: 'model' | { tool?: string; args?: Record<string, unknown> };
   response?:
     | string
     | {
@@ -86,51 +95,68 @@ function fail(file: string, message: string): never {
   throw new Error(`Invalid koan ${file}: ${message}`);
 }
 
+/**
+ * Conversation coherence: what a model request's conversation must show
+ * is fully determined by the preceding trace (SPEC.md §6.1).
+ */
+function deriveExpecting(file: string, at: string, prev: ModelTurn | undefined): ConversationState {
+  if (!prev) return 'initial';
+  if (!prev.call_tool) {
+    fail(file, `${at}: a model request cannot follow a text reply (multi-turn traces are not supported yet)`);
+  }
+  if (!prev.tool_responds) return 'tool_error'; // the agent refused the call (R6/R7)
+  return prev.tool_responds.status < 400 ? 'tool_result' : 'tool_error';
+}
+
 function compileTrace(file: string, trace: TraceEntry[]): ModelTurn[] {
   const turns: ModelTurn[] = [];
   for (const [i, e] of trace.entries()) {
     const at = `when[${i}]`;
     const req = e?.request;
     const res = e?.response;
-    if (!req || typeof req !== 'object') fail(file, `${at} needs "request"`);
+    if (req === undefined || req === null) fail(file, `${at} needs "request"`);
     if (res === undefined || res === null) fail(file, `${at} needs "response"`);
-    const targets = [req.model !== undefined, req.tool !== undefined].filter(Boolean);
-    if (targets.length !== 1) {
-      fail(file, `${at}.request must name exactly one of "model" / "tool"`);
-    }
 
-    if (req.model !== undefined) {
-      if (!['initial', 'tool_result', 'tool_error'].includes(req.model)) {
-        fail(file, `${at}.request.model has unknown state "${req.model}"`);
-      }
+    if (req === 'model') {
+      const expecting = deriveExpecting(file, at, turns.at(-1));
       if (typeof res === 'string') {
-        turns.push({ expecting: req.model, reply: res });
+        turns.push({ expecting, reply: res });
       } else if (typeof res.tool === 'string') {
         if (res.status !== undefined) {
           fail(file, `${at}.response mixes a tool-call instruction with "status"`);
         }
         turns.push({
-          expecting: req.model,
+          expecting,
           call_tool: { name: res.tool, args: res.args ?? {} },
         });
       } else {
         fail(file, `${at}.response for a model request must be a reply string or { tool, args }`);
       }
-    } else {
+    } else if (typeof req === 'object' && typeof req.tool === 'string') {
       if (typeof res === 'string' || typeof res.status !== 'number') {
         fail(file, `${at}.response needs a numeric "status" for a tool request`);
       }
       const turn = turns.at(-1);
       if (!turn?.call_tool) {
-        fail(file, `${at}: a tool request must follow a model response containing a tool_call`);
+        fail(file, `${at}: a tool request must follow a model response containing a tool-call instruction`);
       }
       if (turn.tool_responds !== undefined) {
-        fail(file, `${at}: the preceding tool_call already has a tool request`);
+        fail(file, `${at}: the preceding tool-call instruction already has a tool request`);
       }
       if (turn.call_tool.name !== req.tool) {
         fail(file, `${at}.request.tool is "${req.tool}" but the model requested "${turn.call_tool.name}"`);
       }
+      if (req.args !== undefined && !deepEqual(req.args, turn.call_tool.args)) {
+        // Explicit args are documentation; fidelity fixes their value.
+        fail(
+          file,
+          `${at}.request.args differ from the provoking instruction's args ` +
+            `(${JSON.stringify(req.args)} vs ${JSON.stringify(turn.call_tool.args)})`,
+        );
+      }
       turn.tool_responds = { status: res.status, body: res.body };
+    } else {
+      fail(file, `${at}.request must be "model" or { tool: <name> }`);
     }
   }
   if (turns.length === 0) fail(file, '"when" compiled to an empty timeline');

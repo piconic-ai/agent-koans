@@ -186,15 +186,15 @@ given:                    # the world as the agent sees it
         required: [city]
 
 when:                     # the expected wire log, in order
-  - request: { model: initial }
+  - request: model
     response: { tool: get_weather, args: { city: "Tokyo" } }
   - request: { tool: get_weather }
     response: { status: 503, body: { error: "service_unavailable" } }
-  - request: { model: tool_error }
+  - request: model
     response: { tool: get_weather, args: { city: "Tokyo" } }
   - request: { tool: get_weather }
     response: { status: 200, body: { temp: 31 } }
-  - request: { model: tool_result }
+  - request: model
     response: "The weather in Tokyo is 31°C."
 
 then:                     # assertions on the run's outcome
@@ -209,7 +209,19 @@ omitted. The harness converts it to the wire-format list of §3.2.
 ### 6.1 The `when` trace
 
 Each step pairs the agent's request (asserted) with the called party's
-scripted response. The response discriminates by form:
+scripted response. Requests take two forms:
+
+- `request: model` — the agent calls the model. What the conversation
+  must show is not written: it is **derived from the preceding trace**
+  (conversation coherence, below).
+- `request: { tool: <name> }` — the agent invokes that tool, directly
+  following the model response whose tool-call instruction provokes it
+  (one model tool call maps to at most one invocation, R4). `args` MAY be
+  written for readability; argument fidelity already fixes their value,
+  so a koan whose explicit args differ from the instruction's is rejected
+  at load time.
+
+Responses discriminate by form:
 
 | Form                     | Meaning                                    |
 | ------------------------ | ------------------------------------------ |
@@ -217,18 +229,15 @@ scripted response. The response discriminates by form:
 | `{ tool: <name>, args }` | The model's tool-call instruction          |
 | `{ status, body }`       | The tool server's HTTP response            |
 
-`request: { model: <state> }` asserts what the conversation the agent
-sends must show:
+**Conversation coherence.** For every model request, what the incoming
+conversation must show is fully determined by the trace before it:
 
-| state         | The conversation must show                                  |
-| ------------- | ----------------------------------------------------------- |
-| `initial`     | No tool interaction yet (last message is the user task)     |
-| `tool_result` | Last message is a successful `role: "tool"` result          |
-| `tool_error`  | Last message is a `role: "tool"` failure report (per R3)    |
-
-`request: { tool: <name> }` asserts that the agent invokes that tool, and
-must directly follow the model response whose tool-call instruction
-provokes it (one model tool call maps to at most one invocation, R4).
+| Preceding trace                                  | The conversation must show               |
+| ------------------------------------------------ | ---------------------------------------- |
+| Nothing (first request)                          | The task; no tool interaction yet        |
+| Instruction + tool request with status < 400     | The tool's result (R2)                   |
+| Instruction + tool request with status ≥ 400     | A failure report (R3)                    |
+| Instruction with **no** tool request             | A failure report for the refused call (R6/R7 + R3) |
 
 A request beyond the end of the trace, or one that contradicts its step,
 fails the koan. Three further rules fall out of the trace itself, so

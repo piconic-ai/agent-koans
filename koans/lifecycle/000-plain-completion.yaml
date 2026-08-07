@@ -5,8 +5,8 @@ given:
   task: "Say hello."
 
 when:
-  model:
-    - reply: "Hello!"
+  - request: { model: initial }
+    response: { reply: "Hello!" }
 
 then:
   run:

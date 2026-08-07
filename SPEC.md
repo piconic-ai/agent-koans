@@ -165,7 +165,10 @@ made available to the model as the tool result content.
 ## 6. Koan file format
 
 Koans are declarative YAML files using a given / when / then structure.
-Keys are actor names (`model`, `tools`); verbs live in the entries.
+The `when` block is the run's **expected wire log**: an ordered sequence
+of request/response exchanges observed at the two mock servers. Only the
+agent issues requests — they are assertions on its behavior; the mocked
+world only responds — responses are the script.
 
 ```yaml
 name: retry-on-transient-failure
@@ -182,17 +185,19 @@ given:                    # the world as the agent sees it
         properties: { city: { type: string } }
         required: [city]
 
-when:                     # the run's single timeline
-  model:                  # consumed in order, one entry per model request
-    - call_tool: { name: get_weather, args: { city: "Tokyo" } }
-      tool_responds: { status: 503, body: { error: "service_unavailable" } }
-    - expecting: tool_error         # asserts what the Nth request must look like
-      call_tool: { name: get_weather, args: { city: "Tokyo" } }
-      tool_responds: { status: 200, body: { temp: 31 } }
-    - expecting: tool_result
-      reply: "The weather in Tokyo is 31°C."
+when:                     # the expected wire log, in order
+  - request: { model: initial }
+    response: { tool_call: { name: get_weather, args: { city: "Tokyo" } } }
+  - request: { tool: get_weather }
+    response: { status: 503, body: { error: "service_unavailable" } }
+  - request: { model: tool_error }
+    response: { tool_call: { name: get_weather, args: { city: "Tokyo" } } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: { model: tool_result }
+    response: { reply: "The weather in Tokyo is 31°C." }
 
-then:                     # assertions
+then:                     # assertions on the run's outcome
   run:
     status: completed
     output: { contains: "31" }
@@ -201,35 +206,40 @@ then:                     # assertions
 `given.tools` maps tool name → definition; it defaults to empty and MAY be
 omitted. The harness converts it to the wire-format list of §3.2.
 
-### 6.1 The `when.model` timeline
+### 6.1 The `when` trace
 
-The mock LLM answers the Nth request with the Nth entry. Each entry has one
-action — `reply: <text>` or `call_tool: { name, args }` — plus an optional
-`expecting` assertion on the incoming request. Because one model tool call
-maps to at most one tool invocation (R4), the tool server's scripted
-response rides on the `call_tool` entry that provokes it, as
-`tool_responds: { status, body }`. This makes `when.model` the run's single
-timeline.
+Each step pairs the agent's request (asserted) with the called party's
+scripted response. The response shape follows the callee: a model request
+is answered with `tool_call: { name, args }` or `reply: <text>`; a tool
+request with `status` and `body`.
 
-| `expecting`   | The request must show                                       |
+`request: { model: <state> }` asserts what the conversation the agent
+sends must show:
+
+| state         | The conversation must show                                  |
 | ------------- | ----------------------------------------------------------- |
 | `initial`     | No tool interaction yet (last message is the user task)     |
 | `tool_result` | Last message is a successful `role: "tool"` result          |
 | `tool_error`  | Last message is a `role: "tool"` failure report (per R3)    |
 
-A request beyond the end of the timeline, or one that contradicts its
-`expecting`, fails the koan. Three further rules fall out of the timeline
-itself, so `then` never asserts counts or arguments explicitly:
+`request: { tool: <name> }` asserts that the agent invokes that tool, and
+must directly follow the model response whose `tool_call` provokes it
+(one model tool call maps to at most one invocation, R4).
 
-- **Timeline consumption.** A run must consume the entire timeline — every
-  model entry, and every `tool_responds`, no more and no fewer. The
-  timeline length *is* the call-count assertion.
-- **Argument fidelity.** The tool server asserts that each invocation's
-  arguments deep-equal the `args` of the `call_tool` entry that permitted
-  it — the agent must forward the model's arguments verbatim.
-- **Absence of `tool_responds`.** A `call_tool` entry without
-  `tool_responds` asserts the tool server MUST NOT be invoked for that
-  call (e.g. the arguments are scripted to fail validation, R6).
+A request beyond the end of the trace, or one that contradicts its step,
+fails the koan. Three further rules fall out of the trace itself, so
+`then` never asserts counts or arguments explicitly:
+
+- **Trace consumption.** A run must produce the entire trace — every
+  exchange, no more and no fewer. The trace length *is* the call-count
+  assertion.
+- **Argument fidelity.** A tool request's arguments must deep-equal the
+  `args` of the `tool_call` that provoked it — the agent forwards the
+  model's arguments verbatim.
+- **Absence of a tool request.** A `tool_call` response with no following
+  `request: { tool: ... }` step asserts the tool server MUST NOT be
+  invoked for that call (e.g. the arguments are scripted to fail
+  validation, R6).
 
 ### 6.2 `then` matchers
 
@@ -243,9 +253,9 @@ vocabulary is a **closed set** — no general-purpose query language:
 | `{ contains: <str> }`   | Substring match                          |
 | `{ matches: <regex> }`  | Regular expression match                 |
 
-Semantic assertions: `expecting` and the implicit timeline rules (§6.1).
-New verification needs are added here as named assertions, not as generic
-matchers.
+Semantic assertions: the `request` steps and the implicit trace rules
+(§6.1). New verification needs are added here as named assertions, not as
+generic matchers.
 
 ## 7. Versioning
 

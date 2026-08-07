@@ -5,7 +5,7 @@
 // permits onto the shared pending queue (see pending.ts).
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { ExpectingState, Koan } from './koan.js';
+import type { ConversationState, Koan } from './koan.js';
 import type { PendingInvocation } from './pending.js';
 
 interface ChatMessage {
@@ -36,7 +36,7 @@ export interface MockLlm {
 }
 
 /** Classify what the incoming conversation shows (SPEC.md §6.1). */
-function classify(messages: ChatMessage[]): ExpectingState {
+function classify(messages: ChatMessage[]): ConversationState {
   const last = messages[messages.length - 1];
   if (last?.role === 'tool') {
     // R3: tool failures are reported as tool messages whose content shows

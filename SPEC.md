@@ -162,14 +162,6 @@ made available to the model as the tool result content.
   `required` properties and primitive types of declared properties. If
   validation fails, the tool server MUST NOT be called; report the failure
   to the model per R3.
-
-  *Open question — scalar coercion.* Whether a coercible scalar mismatch
-  (e.g. `"123"` where the schema says `number`) must be rejected, or may
-  be accepted, is deliberately left open; the suite does not currently
-  test it. Note that *coercing before forwarding* would alter the model's
-  arguments in transit and thus collide with argument fidelity (§6.1) —
-  implementations that want leniency should prefer reject-and-report,
-  letting the model correct itself.
 - **R7 — Unknown tools.** A model tool call naming a tool that was not in
   the run's `tools` MUST NOT reach the tool server; report per R3.
 

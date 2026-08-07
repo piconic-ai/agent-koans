@@ -5,7 +5,7 @@
 // permits onto the shared pending queue (see pending.ts).
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { ConversationState, Koan } from './koan.js';
+import type { Koan } from './koan.js';
 import type { PendingInvocation } from './pending.js';
 
 interface ChatMessage {
@@ -35,17 +35,59 @@ export interface MockLlm {
   close(): Promise<void>;
 }
 
-/** Classify what the incoming conversation shows (SPEC.md §6.1). */
-function classify(messages: ChatMessage[]): ConversationState {
+/** All scalar leaf values of a JSON value, stringified. */
+function scalarLeaves(value: unknown): string[] {
+  if (value === null || value === undefined) return [];
+  if (typeof value !== 'object') return [String(value)];
+  return Object.values(value as object).flatMap(scalarLeaves);
+}
+
+/**
+ * Conversation coherence (SPEC.md §6.1), verified by information flow
+ * rather than vocabulary: the mock produced the tool response, so it
+ * knows what content must have reached the model. For a tool failure the
+ * report must carry the status code or the error body's content (R3);
+ * for a success the result must carry the response body's content (R2).
+ * A refused call (no tool request scripted) is checked structurally only.
+ */
+function checkCoherence(
+  index: number,
+  script: Koan['when']['model'],
+  messages: ChatMessage[],
+  violations: string[],
+): void {
   const last = messages[messages.length - 1];
-  if (last?.role === 'tool') {
-    // R3: tool failures are reported as tool messages whose content shows
-    // a failure indicator. Frameworks phrase this differently ("Error:",
-    // "Validation failed", "invalid arguments", "Tool X not found"), so
-    // match the family.
-    return /error|fail|invalid|not found/i.test(String(last.content ?? '')) ? 'tool_error' : 'tool_result';
+  const prev = index > 0 ? script[index - 1] : undefined;
+
+  if (!prev) {
+    if (last?.role === 'tool') {
+      violations.push('request #1 must carry the task, but its last message is a tool message');
+    }
+    return;
   }
-  return 'initial';
+
+  // The loader guarantees a model request only follows a tool-call
+  // instruction (multi-turn traces are not supported yet).
+  if (last?.role !== 'tool') {
+    violations.push(
+      `request #${index + 1} must close the pending tool call, but its last message has role "${last?.role}"`,
+    );
+    return;
+  }
+  if (!prev.tool_responds) return; // refused call: structural check only
+
+  const { status, body } = prev.tool_responds;
+  const failed = status >= 400;
+  const indicators = failed ? [String(status), ...scalarLeaves(body)] : scalarLeaves(body);
+  if (indicators.length === 0) return;
+
+  const content = String(last.content ?? '');
+  if (!indicators.some((s) => content.includes(s))) {
+    violations.push(
+      `request #${index + 1}: the tool ${failed ? `failure (status ${status})` : 'result'} did not reach ` +
+        `the model — the tool message carries none of ${JSON.stringify(indicators)} (${failed ? 'R3' : 'R2'})`,
+    );
+  }
 }
 
 function readBody(req: http.IncomingMessage): Promise<string> {
@@ -114,13 +156,8 @@ export function startMockLlm(koan: Koan, pending: PendingInvocation[]): Promise<
       );
     }
 
-    // `expecting` assertion: the Nth request must look like the script says.
-    const actual = classify(body.messages ?? []);
-    if (entry.expecting && entry.expecting !== actual) {
-      state.violations.push(
-        `request #${index + 1}: expecting "${entry.expecting}" but the conversation shows "${actual}"`,
-      );
-    }
+    // Conversation coherence: the Nth request must reflect the trace so far.
+    checkCoherence(index, script, body.messages ?? [], state.violations);
 
     // Respond with the scripted action.
     let message: ChatMessage;

@@ -5,9 +5,10 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { AgentRunError, init } from '@flue/runtime';
 import { start } from '@flue/runtime/node';
-import { Assistant, type AssistantData, type RunToolDef } from './agents/assistant.js';
+import { Assistant, type AssistantData } from './agents/assistant.js';
 import { loadConfig } from './config.js';
 import { createKoanProvider } from './provider.js';
+import type { RunToolDef } from './tools.js';
 
 const config = loadConfig();
 

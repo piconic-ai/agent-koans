@@ -7,10 +7,8 @@ import { startMockTools } from './mock-tools.js';
 import type { PendingInvocation } from './pending.js';
 
 export interface AgentConfig {
-  /** Shell command that starts the agent (run via `sh -c`). */
   command: string;
   cwd?: string;
-  /** Seconds to wait for /health, and for the run to reach a terminal state. */
   startupTimeoutMs?: number;
   runTimeoutMs?: number;
 }
@@ -50,7 +48,6 @@ async function waitForHealth(base: string, timeoutMs: number, child: ChildProces
   throw new Error(`agent did not become healthy within ${timeoutMs}ms`);
 }
 
-/** Returns a failure message, or null when the matcher passes. */
 function match(label: string, actual: unknown, matcher: Matcher): string | null {
   if (matcher !== null && typeof matcher === 'object') {
     if ('equals' in matcher) {
@@ -67,14 +64,10 @@ function match(label: string, actual: unknown, matcher: Matcher): string | null 
     }
     return `${label}: unknown matcher ${JSON.stringify(matcher)}`;
   }
-  // Scalar shorthand for equals.
   return actual === matcher ? null : `${label}: expected ${JSON.stringify(matcher)}, got ${JSON.stringify(actual)}`;
 }
 
 export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
-  // A koan with `when` has a single unnamed variant; `one_of` has several.
-  // The implementation conforms if at least one variant's run passes; a
-  // single run exhibits exactly one of the processes (SPEC.md §6.3).
   const variants = Object.entries(koan.traces);
   const allFailures: string[] = [];
   for (const [variant, script] of variants) {
@@ -85,10 +78,7 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
   throw new Error(`koan "${koan.name}" failed:\n  - ${allFailures.join('\n  - ')}`);
 }
 
-/** One full run against one trace; returns the failures (empty = pass). */
 async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Promise<string[]> {
-  // The timeline coupling: call_tool entries enqueue permitted invocations,
-  // the tool server consumes them (see pending.ts).
   const pending: PendingInvocation[] = [];
   const llm = await startMockLlm(koan, script, pending);
   const tools = await startMockTools(pending);
@@ -112,14 +102,12 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
     try {
       await waitForHealth(base, agent.startupTimeoutMs ?? 10_000, child);
 
-      // Submit the run.
       const submitRes = await fetch(`${base}/runs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           task: { prompt: koan.given.task },
-          // The koan maps tool name → definition; the wire format is a list.
-          tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
+            tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
         }),
       });
       if (submitRes.status !== 201 && submitRes.status !== 202) {
@@ -130,7 +118,6 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
         throw new Error('POST /runs response is missing "run_id"');
       }
 
-      // Poll to a terminal state (terminal-state guarantee, SPEC.md §3.3).
       const deadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
       let run: { status?: string; output?: string; error?: string } = {};
       for (;;) {
@@ -146,12 +133,9 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
         await sleep(100);
       }
 
-      // ---- then ----
       failures.push(...llm.state.violations, ...tools.state.violations);
 
-      // Implicit base assertion: the run must consume the entire timeline.
-      // Overruns are recorded as violations by the mocks; underruns are
-      // caught here. This makes explicit call-count assertions unnecessary.
+      // Underruns only: overruns are already recorded by the mocks.
       if (llm.state.requests.length < script.length) {
         failures.push(
           `model script not fully consumed: ${llm.state.requests.length} of ${script.length} requests`,
@@ -177,7 +161,6 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
     }
   } finally {
     child.kill('SIGTERM');
-    // Escalate if the agent ignores SIGTERM.
     const killTimer = setTimeout(() => child.kill('SIGKILL'), 2_000);
     await new Promise<void>((r) => {
       if (child.exitCode !== null) return r();

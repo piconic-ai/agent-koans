@@ -1,6 +1,3 @@
-// Mock tool server. Serves POST /invoke/{name} from the shared pending
-// queue: each invocation must match the call_tool entry that permitted it,
-// both by name and by arguments (argument fidelity, SPEC.md §6.1).
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { deepEqual, type PendingInvocation } from './pending.js';
@@ -56,8 +53,6 @@ export function startMockTools(pending: PendingInvocation[]): Promise<MockTools>
 
     const expected = pending.shift();
     if (!expected) {
-      // Catches implicit retries (R4), invocations the model never made,
-      // and calls that were supposed to fail validation (R6/R7).
       state.violations.push(
         `unexpected invocation of tool "${name}": the timeline permits no tool call here`,
       );
@@ -70,7 +65,6 @@ export function startMockTools(pending: PendingInvocation[]): Promise<MockTools>
       return respond(500, { error: `mock tools: expected "${expected.name}"` });
     }
     if (!deepEqual(args, expected.args)) {
-      // Argument fidelity: the agent must forward the model's args verbatim.
       state.violations.push(
         `tool "${name}" received args ${JSON.stringify(args)}, expected ${JSON.stringify(expected.args)}`,
       );

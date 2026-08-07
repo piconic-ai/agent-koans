@@ -1,8 +1,3 @@
-// Conformance suite entry point.
-//
-// By default the suite runs against every implementation in examples/.
-// Point it at a single implementation with:
-//   AGENT_CMD="<shell command>" AGENT_CWD="<dir>" pnpm test
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

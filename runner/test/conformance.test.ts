@@ -1,9 +1,11 @@
+// What the suite asserts: every discovered koan passes against every
+// implementation in examples/ — or against the single agent given via
+// AGENT_CMD / AGENT_CWD.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'vitest';
-import { discoverKoans } from '../src/koan.js';
-import { runKoan, type AgentConfig } from '../src/harness.js';
+import { discoverKoans, runKoan, type AgentConfig } from '../src/index.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 

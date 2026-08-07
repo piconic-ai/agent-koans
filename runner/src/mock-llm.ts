@@ -1,3 +1,6 @@
+// Internal: the scripted stand-in for the OpenAI Chat Completions API,
+// and the coherence checks on what the agent sends it. Tool invocation
+// belongs to mock-tools.ts; pass/fail aggregation to harness.ts.
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Koan, ModelTurn } from './koan.js';
@@ -20,7 +23,7 @@ interface ChatRequest {
   stream?: boolean;
 }
 
-export interface MockLlm {
+interface MockLlm {
   url: string;
   state: {
     requests: ChatRequest[];
@@ -86,6 +89,7 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
+/** Serve one trace's model turns; records requests and violations. */
 export function startMockLlm(
   koan: Koan,
   script: ModelTurn[],

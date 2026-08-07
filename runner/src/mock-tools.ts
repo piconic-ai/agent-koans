@@ -1,13 +1,16 @@
+// Internal: the scripted stand-in for the tool server, consuming the
+// pending queue that mock-llm.ts fills. Anything about model turns
+// belongs there, not here.
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { deepEqual, type PendingInvocation } from './pending.js';
 
-export interface ToolCallRecord {
+interface ToolCallRecord {
   name: string;
   args: unknown;
 }
 
-export interface MockTools {
+interface MockTools {
   url: string;
   state: {
     calls: ToolCallRecord[];
@@ -25,6 +28,7 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
+/** Serve tool invocations against the pending queue; records calls and violations. */
 export function startMockTools(pending: PendingInvocation[]): Promise<MockTools> {
   const state: MockTools['state'] = { calls: [], violations: [] };
 

@@ -1,15 +1,23 @@
 // Per-koan harness: start mock servers, spawn the agent under test,
 // submit the run, poll to a terminal state, then evaluate `then`.
+// Executing a koan against one agent implementation and judging it.
+// Process and mock orchestration plus pass/fail aggregation belong here;
+// what to verify is decided by the compiled koan and the mocks.
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Koan, Matcher, ModelTurn } from './koan.js';
 import { startMockLlm } from './mock-llm.js';
 import { startMockTools } from './mock-tools.js';
 import type { PendingInvocation } from './pending.js';
 
+/** How to launch the agent under test. */
 export interface AgentConfig {
+  /** Shell command that starts the agent (run via `sh -c`). */
   command: string;
+  /** Working directory for the command. */
   cwd?: string;
+  /** Milliseconds to wait for `GET /health`. Default 10000. */
   startupTimeoutMs?: number;
+  /** Milliseconds to wait for a terminal run state. Default 15000. */
   runTimeoutMs?: number;
 }
 
@@ -67,6 +75,10 @@ function match(label: string, actual: unknown, matcher: Matcher): string | null 
   return actual === matcher ? null : `${label}: expected ${JSON.stringify(matcher)}, got ${JSON.stringify(actual)}`;
 }
 
+/**
+ * Run a koan against an agent: once per trace variant, until one passes.
+ * Resolves on conformance; throws with every variant's failures otherwise.
+ */
 export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
   const variants = Object.entries(koan.traces);
   const allFailures: string[] = [];

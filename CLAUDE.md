@@ -13,6 +13,15 @@ Each kind of information lives in exactly one place:
 
 Comments never explain what code is, restate SPEC.md, or record history.
 
+Two comment kinds are required on top of why-not:
+
+- Every TS file opens with a short responsibility header: what this file
+  is for, what belongs in it, and what does not.
+- Every export in `runner/` carries JSDoc — it is user documentation.
+  Keep exports minimal: the public surface is `runner/src/index.ts`;
+  every module behind it is internal, and test-only exposure is kept
+  separate from the package surface.
+
 ## Pull request descriptions
 
 Write for non-native English readers: short sentences, no idioms.

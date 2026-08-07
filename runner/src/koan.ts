@@ -1,12 +1,17 @@
+// Loading and compiling koan YAML into the runner's internal trace form.
+// File-format validation belongs here and nowhere else; runtime
+// verification belongs to the mocks and the harness.
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
 
+/** A tool definition as written in `given.tools` (JSON Schema input). */
 export interface ToolDef {
   description?: string;
   input_schema: Record<string, unknown>;
 }
 
+/** A scripted tool-server response. */
 export interface ToolResponse {
   status: number;
   body?: unknown;
@@ -24,6 +29,7 @@ interface TraceEntry {
       };
 }
 
+/** One compiled model turn of a trace. */
 export interface ModelTurn {
   reply?: string;
   call_tool?: { name: string; args: Record<string, unknown> };
@@ -31,12 +37,14 @@ export interface ModelTurn {
   tool_responds?: ToolResponse;
 }
 
+/** A `then`-block matcher; a bare scalar means `equals`. */
 export type Matcher =
   | string
   | number
   | boolean
   | { equals?: unknown; contains?: string; matches?: string };
 
+/** A compiled koan: shared `given`/`then` plus one or more trace variants. */
 export interface Koan {
   name: string;
   description?: string;
@@ -50,6 +58,7 @@ export interface Koan {
   };
 }
 
+/** A koan found on disk, addressed by its `<chapter>/<file>` id. */
 export interface DiscoveredKoan {
   id: string;
   file: string;
@@ -112,6 +121,7 @@ function compileTrace(file: string, trace: TraceEntry[], label = 'when'): ModelT
   return turns;
 }
 
+/** Load and compile one koan file; throws on any format violation. */
 export function loadKoan(file: string): Koan {
   const raw = parse(fs.readFileSync(file, 'utf8')) as {
     name?: unknown;
@@ -166,6 +176,7 @@ export function loadKoan(file: string): Koan {
   };
 }
 
+/** Load every koan under a chapter directory tree, sorted by id. */
 export function discoverKoans(dir: string): DiscoveredKoan[] {
   const found: DiscoveredKoan[] = [];
   for (const chapter of fs.readdirSync(dir, { withFileTypes: true })) {

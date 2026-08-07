@@ -1,11 +1,15 @@
+// Internal: the queue coupling mock-llm.ts (producer) to mock-tools.ts
+// (consumer). Only queue-shaped code belongs here.
 import type { ToolResponse } from './koan.js';
 
+/** One permitted tool invocation and its scripted response. */
 export interface PendingInvocation {
   name: string;
   args: Record<string, unknown>;
   respond: ToolResponse;
 }
 
+/** Structural equality over JSON values. */
 export function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;

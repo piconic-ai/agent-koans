@@ -1,11 +1,9 @@
-// OpenAI Chat Completions-compatible mock LLM server.
-// Answers the Nth request with the Nth `when.model` script entry, and
-// records violations of the koan script (SPEC.md §6.1) for later assertion.
-// A call_tool entry with tool_responds enqueues the one tool invocation it
-// permits onto the shared pending queue (see pending.ts).
+// Internal: the scripted stand-in for the OpenAI Chat Completions API,
+// and the coherence checks on what the agent sends it. Tool invocation
+// belongs to mock-tools.ts; pass/fail aggregation to harness.ts.
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { Koan } from './koan.js';
+import type { Koan, ModelTurn } from './koan.js';
 import type { PendingInvocation } from './pending.js';
 
 interface ChatMessage {
@@ -25,8 +23,7 @@ interface ChatRequest {
   stream?: boolean;
 }
 
-export interface MockLlm {
-  /** Base URL without the /v1 prefix. */
+interface MockLlm {
   url: string;
   state: {
     requests: ChatRequest[];
@@ -35,24 +32,17 @@ export interface MockLlm {
   close(): Promise<void>;
 }
 
-/** All scalar leaf values of a JSON value, stringified. */
 function scalarLeaves(value: unknown): string[] {
   if (value === null || value === undefined) return [];
   if (typeof value !== 'object') return [String(value)];
   return Object.values(value as object).flatMap(scalarLeaves);
 }
 
-/**
- * Conversation coherence (SPEC.md §6.1), verified by information flow
- * rather than vocabulary: the mock produced the tool response, so it
- * knows what content must have reached the model. For a tool failure the
- * report must carry the status code or the error body's content (R3);
- * for a success the result must carry the response body's content (R2).
- * A refused call (no tool request scripted) is checked structurally only.
- */
+// Never matched against wording: failure phrasing is framework-specific,
+// so only values the mock itself scripted are looked for (SPEC.md §6.1).
 function checkCoherence(
   index: number,
-  script: Koan['when']['model'],
+  script: ModelTurn[],
   messages: ChatMessage[],
   violations: string[],
 ): void {
@@ -66,15 +56,15 @@ function checkCoherence(
     return;
   }
 
-  // The loader guarantees a model request only follows a tool-call
-  // instruction (multi-turn traces are not supported yet).
   if (last?.role !== 'tool') {
     violations.push(
       `request #${index + 1} must close the pending tool call, but its last message has role "${last?.role}"`,
     );
     return;
   }
-  if (!prev.tool_responds) return; // refused call: structural check only
+  // No content check for refused calls: self-generated report phrasing
+  // is implementation-specific (SPEC.md §4 R3).
+  if (!prev.tool_responds) return;
 
   const { status, body } = prev.tool_responds;
   const failed = status >= 400;
@@ -99,10 +89,14 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-export function startMockLlm(koan: Koan, pending: PendingInvocation[]): Promise<MockLlm> {
+/** Serve one trace's model turns; records requests and violations. */
+export function startMockLlm(
+  koan: Koan,
+  script: ModelTurn[],
+  pending: PendingInvocation[],
+): Promise<MockLlm> {
   const state: MockLlm['state'] = { requests: [], violations: [] };
   const issuedToolCallIds = new Set<string>();
-  const script = koan.when.model;
   const givenToolNames = Object.keys(koan.given.tools);
 
   const server = http.createServer(async (req, res) => {
@@ -134,7 +128,6 @@ export function startMockLlm(koan: Koan, pending: PendingInvocation[]): Promise<
       return respond(400, { error: { message: 'mock LLM: script exhausted' } });
     }
 
-    // R1: tool definitions must be forwarded on every request.
     if (givenToolNames.length > 0) {
       const offered = new Set(
         (body.tools ?? []).map((t) => t.function?.name).filter(Boolean),
@@ -148,7 +141,6 @@ export function startMockLlm(koan: Koan, pending: PendingInvocation[]): Promise<
       }
     }
 
-    // R2: tool messages must reference a tool_call_id we actually issued.
     const last = body.messages?.[body.messages.length - 1];
     if (last?.role === 'tool' && !issuedToolCallIds.has(String(last.tool_call_id))) {
       state.violations.push(
@@ -156,20 +148,17 @@ export function startMockLlm(koan: Koan, pending: PendingInvocation[]): Promise<
       );
     }
 
-    // Conversation coherence: the Nth request must reflect the trace so far.
     checkCoherence(index, script, body.messages ?? [], state.violations);
 
-    // Respond with the scripted action.
     let message: ChatMessage;
     let finishReason: string;
     if (entry.call_tool) {
       const id = `call_${index + 1}`;
       issuedToolCallIds.add(id);
-      // Permit (and require) the one invocation this call provokes.
       if (entry.tool_responds) {
         pending.push({
           name: entry.call_tool.name,
-          args: entry.call_tool.args ?? {},
+          args: entry.invoke_args ?? entry.call_tool.args ?? {},
           respond: entry.tool_responds,
         });
       }
@@ -197,8 +186,6 @@ export function startMockLlm(koan: Koan, pending: PendingInvocation[]): Promise<
     const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
     if (body.stream) {
-      // OpenAI-compatible SSE streaming: one delta chunk carrying the whole
-      // message, a finish chunk, then [DONE].
       res.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',

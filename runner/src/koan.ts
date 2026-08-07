@@ -7,7 +7,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
-import { deepEqual } from './pending.js';
 
 export interface ToolDef {
   description?: string;
@@ -26,8 +25,9 @@ export interface ToolResponse {
  * A request is `model` (bare scalar) or `{ tool: <name> }`. What a model
  * request's conversation must show is not written — it is derived from
  * the preceding trace (conversation coherence, SPEC.md §6.1). A tool
- * request MAY carry explicit `args` for readability; they must equal the
- * provoking instruction's args (argument fidelity fixes them).
+ * request MAY carry explicit `args` declaring the expected invocation
+ * arguments when they legitimately differ from the instruction's (e.g. a
+ * declared transformation); omitted, argument fidelity applies.
  *
  * The response discriminates by form: a bare string is the model's text
  * reply; { tool, args } is the model's tool-call instruction;
@@ -50,9 +50,14 @@ export interface ModelTurn {
   reply?: string;
   call_tool?: { name: string; args: Record<string, unknown> };
   /**
+   * The arguments the tool server must receive: the trace's explicit
+   * args override, else the instruction's args (argument fidelity).
+   */
+  invoke_args?: Record<string, unknown>;
+  /**
    * The tool server's scripted response to the invocation the agent must
-   * make (the calls_tool step). Absent = the agent must NOT invoke the
-   * tool for this turn's tool_call.
+   * make. Absent = the agent must NOT invoke the tool for this turn's
+   * tool-call instruction.
    */
   tool_responds?: ToolResponse;
 }
@@ -71,10 +76,12 @@ export interface Koan {
     /** Tool name → definition. Defaults to {} when omitted. */
     tools: Record<string, ToolDef>;
   };
-  when: {
-    /** Compiled timeline, one entry per model request. */
-    model: ModelTurn[];
-  };
+  /**
+   * Variant name → compiled timeline. A plain `when` compiles to a single
+   * unnamed variant (""); `one_of` compiles to one entry per alternative.
+   * The implementation conforms if at least one variant's run passes.
+   */
+  traces: Record<string, ModelTurn[]>;
   then: {
     run?: { status?: string; output?: Matcher };
   };
@@ -91,10 +98,10 @@ function fail(file: string, message: string): never {
   throw new Error(`Invalid koan ${file}: ${message}`);
 }
 
-function compileTrace(file: string, trace: TraceEntry[]): ModelTurn[] {
+function compileTrace(file: string, trace: TraceEntry[], label = 'when'): ModelTurn[] {
   const turns: ModelTurn[] = [];
   for (const [i, e] of trace.entries()) {
-    const at = `when[${i}]`;
+    const at = `${label}[${i}]`;
     const req = e?.request;
     const res = e?.response;
     if (req === undefined || req === null) fail(file, `${at} needs "request"`);
@@ -131,14 +138,10 @@ function compileTrace(file: string, trace: TraceEntry[]): ModelTurn[] {
       if (turn.call_tool.name !== req.tool) {
         fail(file, `${at}.request.tool is "${req.tool}" but the model requested "${turn.call_tool.name}"`);
       }
-      if (req.args !== undefined && !deepEqual(req.args, turn.call_tool.args)) {
-        // Explicit args are documentation; fidelity fixes their value.
-        fail(
-          file,
-          `${at}.request.args differ from the provoking instruction's args ` +
-            `(${JSON.stringify(req.args)} vs ${JSON.stringify(turn.call_tool.args)})`,
-        );
-      }
+      // Explicit args declare the expected invocation arguments (a
+      // declared transformation); omitted, fidelity inherits the
+      // instruction's args.
+      turn.invoke_args = req.args ?? turn.call_tool.args;
       turn.tool_responds = { status: res.status, body: res.body };
     } else {
       fail(file, `${at}.request must be "model" or { tool: <name> }`);
@@ -154,6 +157,7 @@ export function loadKoan(file: string): Koan {
     description?: string;
     given?: { task?: unknown; tools?: unknown };
     when?: unknown;
+    one_of?: unknown;
     then?: Koan['then'];
   };
   if (!raw || typeof raw !== 'object') fail(file, 'not a YAML mapping');
@@ -163,14 +167,40 @@ export function loadKoan(file: string): Koan {
   if (typeof tools !== 'object' || Array.isArray(tools)) {
     fail(file, '"given.tools" must be a mapping of tool name to definition');
   }
-  if (!Array.isArray(raw.when) || raw.when.length === 0) {
-    fail(file, '"when" must be a non-empty list of trace steps');
+
+  if ((raw.when === undefined) === (raw.one_of === undefined)) {
+    fail(file, 'a koan needs exactly one of "when" / "one_of"');
   }
+
+  let traces: Record<string, ModelTurn[]>;
+  if (raw.when !== undefined) {
+    if (!Array.isArray(raw.when) || raw.when.length === 0) {
+      fail(file, '"when" must be a non-empty list of trace steps');
+    }
+    traces = { '': compileTrace(file, raw.when as TraceEntry[]) };
+  } else {
+    const oneOf = raw.one_of as Record<string, unknown>;
+    if (typeof oneOf !== 'object' || oneOf === null || Array.isArray(oneOf)) {
+      fail(file, '"one_of" must be a mapping of variant name to trace');
+    }
+    const entries = Object.entries(oneOf);
+    if (entries.length < 2) {
+      fail(file, '"one_of" needs at least two variants — use "when" for a single trace');
+    }
+    traces = {};
+    for (const [variant, trace] of entries) {
+      if (!Array.isArray(trace) || trace.length === 0) {
+        fail(file, `"one_of.${variant}" must be a non-empty list of trace steps`);
+      }
+      traces[variant] = compileTrace(file, trace as TraceEntry[], `one_of.${variant}`);
+    }
+  }
+
   return {
     name: raw.name,
     description: raw.description,
     given: { task: raw.given.task, tools },
-    when: { model: compileTrace(file, raw.when as TraceEntry[]) },
+    traces,
     then: raw.then ?? {},
   };
 }

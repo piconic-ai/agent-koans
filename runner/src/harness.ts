@@ -1,7 +1,7 @@
 // Per-koan harness: start mock servers, spawn the agent under test,
 // submit the run, poll to a terminal state, then evaluate `then`.
 import { spawn, type ChildProcess } from 'node:child_process';
-import type { Koan, Matcher } from './koan.js';
+import type { Koan, Matcher, ModelTurn } from './koan.js';
 import { startMockLlm } from './mock-llm.js';
 import { startMockTools } from './mock-tools.js';
 import type { PendingInvocation } from './pending.js';
@@ -72,10 +72,25 @@ function match(label: string, actual: unknown, matcher: Matcher): string | null 
 }
 
 export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
+  // A koan with `when` has a single unnamed variant; `one_of` has several.
+  // The implementation conforms if at least one variant's run passes; a
+  // single run exhibits exactly one of the processes (SPEC.md §6.3).
+  const variants = Object.entries(koan.traces);
+  const allFailures: string[] = [];
+  for (const [variant, script] of variants) {
+    const failures = await runTrace(koan, script, agent);
+    if (failures.length === 0) return;
+    allFailures.push(...(variant ? failures.map((f) => `[${variant}] ${f}`) : failures));
+  }
+  throw new Error(`koan "${koan.name}" failed:\n  - ${allFailures.join('\n  - ')}`);
+}
+
+/** One full run against one trace; returns the failures (empty = pass). */
+async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Promise<string[]> {
   // The timeline coupling: call_tool entries enqueue permitted invocations,
   // the tool server consumes them (see pending.ts).
   const pending: PendingInvocation[] = [];
-  const llm = await startMockLlm(koan, pending);
+  const llm = await startMockLlm(koan, script, pending);
   const tools = await startMockTools(pending);
   const port = await getFreePort();
   const base = `http://127.0.0.1:${port}`;
@@ -94,67 +109,71 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
 
   const failures: string[] = [];
   try {
-    await waitForHealth(base, agent.startupTimeoutMs ?? 10_000, child);
+    try {
+      await waitForHealth(base, agent.startupTimeoutMs ?? 10_000, child);
 
-    // Submit the run.
-    const submitRes = await fetch(`${base}/runs`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        task: { prompt: koan.given.task },
-        // The koan maps tool name → definition; the wire format is a list.
-        tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
-      }),
-    });
-    if (submitRes.status !== 201 && submitRes.status !== 202) {
-      throw new Error(`POST /runs returned ${submitRes.status}, expected 201 or 202`);
-    }
-    const { run_id: runId } = (await submitRes.json()) as { run_id?: string };
-    if (typeof runId !== 'string' || runId.length === 0) {
-      throw new Error('POST /runs response is missing "run_id"');
-    }
+      // Submit the run.
+      const submitRes = await fetch(`${base}/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          task: { prompt: koan.given.task },
+          // The koan maps tool name → definition; the wire format is a list.
+          tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
+        }),
+      });
+      if (submitRes.status !== 201 && submitRes.status !== 202) {
+        throw new Error(`POST /runs returned ${submitRes.status}, expected 201 or 202`);
+      }
+      const { run_id: runId } = (await submitRes.json()) as { run_id?: string };
+      if (typeof runId !== 'string' || runId.length === 0) {
+        throw new Error('POST /runs response is missing "run_id"');
+      }
 
-    // Poll to a terminal state (terminal-state guarantee, SPEC.md §3.3).
-    const deadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
-    let run: { status?: string; output?: string; error?: string } = {};
-    for (;;) {
-      const res = await fetch(`${base}/runs/${runId}`);
-      if (!res.ok) throw new Error(`GET /runs/${runId} returned ${res.status}`);
-      run = (await res.json()) as typeof run;
-      if (TERMINAL_STATES.has(String(run.status))) break;
-      if (Date.now() > deadline) {
-        throw new Error(
-          `terminal-state guarantee violated: run still "${run.status}" after ${agent.runTimeoutMs ?? 15_000}ms`,
+      // Poll to a terminal state (terminal-state guarantee, SPEC.md §3.3).
+      const deadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
+      let run: { status?: string; output?: string; error?: string } = {};
+      for (;;) {
+        const res = await fetch(`${base}/runs/${runId}`);
+        if (!res.ok) throw new Error(`GET /runs/${runId} returned ${res.status}`);
+        run = (await res.json()) as typeof run;
+        if (TERMINAL_STATES.has(String(run.status))) break;
+        if (Date.now() > deadline) {
+          throw new Error(
+            `terminal-state guarantee violated: run still "${run.status}" after ${agent.runTimeoutMs ?? 15_000}ms`,
+          );
+        }
+        await sleep(100);
+      }
+
+      // ---- then ----
+      failures.push(...llm.state.violations, ...tools.state.violations);
+
+      // Implicit base assertion: the run must consume the entire timeline.
+      // Overruns are recorded as violations by the mocks; underruns are
+      // caught here. This makes explicit call-count assertions unnecessary.
+      if (llm.state.requests.length < script.length) {
+        failures.push(
+          `model script not fully consumed: ${llm.state.requests.length} of ${script.length} requests`,
         );
       }
-      await sleep(100);
-    }
+      if (pending.length > 0) {
+        failures.push(
+          `tool timeline not fully consumed: ${pending.length} permitted invocation(s) never made (next: "${pending[0].name}")`,
+        );
+      }
 
-    // ---- then ----
-    failures.push(...llm.state.violations, ...tools.state.violations);
-
-    // Implicit base assertion: the run must consume the entire timeline.
-    // Overruns are recorded as violations by the mocks; underruns are
-    // caught here. This makes explicit call-count assertions unnecessary.
-    if (llm.state.requests.length < koan.when.model.length) {
-      failures.push(
-        `model script not fully consumed: ${llm.state.requests.length} of ${koan.when.model.length} requests`,
-      );
-    }
-    if (pending.length > 0) {
-      failures.push(
-        `tool timeline not fully consumed: ${pending.length} permitted invocation(s) never made (next: "${pending[0].name}")`,
-      );
-    }
-
-    if (koan.then.run?.status !== undefined && run.status !== koan.then.run.status) {
-      failures.push(
-        `run.status: expected "${koan.then.run.status}", got "${run.status}"${run.error ? ` (error: ${run.error})` : ''}`,
-      );
-    }
-    if (koan.then.run?.output !== undefined) {
-      const failure = match('run.output', run.output, koan.then.run.output);
-      if (failure) failures.push(failure);
+      if (koan.then.run?.status !== undefined && run.status !== koan.then.run.status) {
+        failures.push(
+          `run.status: expected "${koan.then.run.status}", got "${run.status}"${run.error ? ` (error: ${run.error})` : ''}`,
+        );
+      }
+      if (koan.then.run?.output !== undefined) {
+        const failure = match('run.output', run.output, koan.then.run.output);
+        if (failure) failures.push(failure);
+      }
+    } catch (err) {
+      failures.push(err instanceof Error ? err.message : String(err));
     }
   } finally {
     child.kill('SIGTERM');
@@ -168,7 +187,5 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
     await Promise.all([llm.close(), tools.close()]);
   }
 
-  if (failures.length > 0) {
-    throw new Error(`koan "${koan.name}" failed:\n  - ${failures.join('\n  - ')}`);
-  }
+  return failures;
 }

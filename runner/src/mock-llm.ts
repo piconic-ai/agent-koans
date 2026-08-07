@@ -5,7 +5,7 @@
 // permits onto the shared pending queue (see pending.ts).
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { Koan } from './koan.js';
+import type { Koan, ModelTurn } from './koan.js';
 import type { PendingInvocation } from './pending.js';
 
 interface ChatMessage {
@@ -52,7 +52,7 @@ function scalarLeaves(value: unknown): string[] {
  */
 function checkCoherence(
   index: number,
-  script: Koan['when']['model'],
+  script: ModelTurn[],
   messages: ChatMessage[],
   violations: string[],
 ): void {
@@ -99,10 +99,13 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-export function startMockLlm(koan: Koan, pending: PendingInvocation[]): Promise<MockLlm> {
+export function startMockLlm(
+  koan: Koan,
+  script: ModelTurn[],
+  pending: PendingInvocation[],
+): Promise<MockLlm> {
   const state: MockLlm['state'] = { requests: [], violations: [] };
   const issuedToolCallIds = new Set<string>();
-  const script = koan.when.model;
   const givenToolNames = Object.keys(koan.given.tools);
 
   const server = http.createServer(async (req, res) => {
@@ -169,7 +172,7 @@ export function startMockLlm(koan: Koan, pending: PendingInvocation[]): Promise<
       if (entry.tool_responds) {
         pending.push({
           name: entry.call_tool.name,
-          args: entry.call_tool.args ?? {},
+          args: entry.invoke_args ?? entry.call_tool.args ?? {},
           respond: entry.tool_responds,
         });
       }

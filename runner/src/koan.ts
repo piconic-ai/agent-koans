@@ -1,38 +1,22 @@
-// Koan file format: loading, validation, and compilation. See SPEC.md §6.
-//
-// The YAML `when` block is the run's expected wire log: a sequence of
-// request/response exchanges. Only the agent issues requests (they are
-// asserted); the mocked world only responds (scripted). The loader compiles
-// the trace into the internal per-model-turn script the mocks consume.
+// Loading and compiling koan YAML into the runner's internal trace form.
+// File-format validation belongs here and nowhere else; runtime
+// verification belongs to the mocks and the harness.
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
-import { deepEqual } from './pending.js';
 
+/** A tool definition as written in `given.tools` (JSON Schema input). */
 export interface ToolDef {
   description?: string;
   input_schema: Record<string, unknown>;
 }
 
+/** A scripted tool-server response. */
 export interface ToolResponse {
   status: number;
   body?: unknown;
 }
 
-/**
- * One step of the YAML trace: the agent's request (asserted) and the
- * called party's scripted response.
- *
- * A request is `model` (bare scalar) or `{ tool: <name> }`. What a model
- * request's conversation must show is not written — it is derived from
- * the preceding trace (conversation coherence, SPEC.md §6.1). A tool
- * request MAY carry explicit `args` for readability; they must equal the
- * provoking instruction's args (argument fidelity fixes them).
- *
- * The response discriminates by form: a bare string is the model's text
- * reply; { tool, args } is the model's tool-call instruction;
- * { status, body } is the tool server's response.
- */
 interface TraceEntry {
   request?: string | { tool?: string; args?: Record<string, unknown> };
   response?:
@@ -45,43 +29,37 @@ interface TraceEntry {
       };
 }
 
-/** Internal, compiled form: one entry per model request. */
+/** One compiled model turn of a trace. */
 export interface ModelTurn {
   reply?: string;
   call_tool?: { name: string; args: Record<string, unknown> };
-  /**
-   * The tool server's scripted response to the invocation the agent must
-   * make (the calls_tool step). Absent = the agent must NOT invoke the
-   * tool for this turn's tool_call.
-   */
+  invoke_args?: Record<string, unknown>;
   tool_responds?: ToolResponse;
 }
 
+/** A `then`-block matcher; a bare scalar means `equals`. */
 export type Matcher =
   | string
   | number
   | boolean
   | { equals?: unknown; contains?: string; matches?: string };
 
+/** A compiled koan: shared `given`/`then` plus one or more trace variants. */
 export interface Koan {
   name: string;
   description?: string;
   given: {
     task: string;
-    /** Tool name → definition. Defaults to {} when omitted. */
     tools: Record<string, ToolDef>;
   };
-  when: {
-    /** Compiled timeline, one entry per model request. */
-    model: ModelTurn[];
-  };
+  traces: Record<string, ModelTurn[]>;
   then: {
     run?: { status?: string; output?: Matcher };
   };
 }
 
+/** A koan found on disk, addressed by its `<chapter>/<file>` id. */
 export interface DiscoveredKoan {
-  /** e.g. "tool-reliability/003-retry-on-transient-failure" */
   id: string;
   file: string;
   koan: Koan;
@@ -91,10 +69,10 @@ function fail(file: string, message: string): never {
   throw new Error(`Invalid koan ${file}: ${message}`);
 }
 
-function compileTrace(file: string, trace: TraceEntry[]): ModelTurn[] {
+function compileTrace(file: string, trace: TraceEntry[], label = 'when'): ModelTurn[] {
   const turns: ModelTurn[] = [];
   for (const [i, e] of trace.entries()) {
-    const at = `when[${i}]`;
+    const at = `${label}[${i}]`;
     const req = e?.request;
     const res = e?.response;
     if (req === undefined || req === null) fail(file, `${at} needs "request"`);
@@ -131,14 +109,9 @@ function compileTrace(file: string, trace: TraceEntry[]): ModelTurn[] {
       if (turn.call_tool.name !== req.tool) {
         fail(file, `${at}.request.tool is "${req.tool}" but the model requested "${turn.call_tool.name}"`);
       }
-      if (req.args !== undefined && !deepEqual(req.args, turn.call_tool.args)) {
-        // Explicit args are documentation; fidelity fixes their value.
-        fail(
-          file,
-          `${at}.request.args differ from the provoking instruction's args ` +
-            `(${JSON.stringify(req.args)} vs ${JSON.stringify(turn.call_tool.args)})`,
-        );
-      }
+      // No mismatch check against the instruction's args: explicit args
+      // are a declared transform (SPEC.md §6.3), not a koan bug.
+      turn.invoke_args = req.args ?? turn.call_tool.args;
       turn.tool_responds = { status: res.status, body: res.body };
     } else {
       fail(file, `${at}.request must be "model" or { tool: <name> }`);
@@ -148,12 +121,14 @@ function compileTrace(file: string, trace: TraceEntry[]): ModelTurn[] {
   return turns;
 }
 
+/** Load and compile one koan file; throws on any format violation. */
 export function loadKoan(file: string): Koan {
   const raw = parse(fs.readFileSync(file, 'utf8')) as {
     name?: unknown;
     description?: string;
     given?: { task?: unknown; tools?: unknown };
     when?: unknown;
+    one_of?: unknown;
     then?: Koan['then'];
   };
   if (!raw || typeof raw !== 'object') fail(file, 'not a YAML mapping');
@@ -163,18 +138,45 @@ export function loadKoan(file: string): Koan {
   if (typeof tools !== 'object' || Array.isArray(tools)) {
     fail(file, '"given.tools" must be a mapping of tool name to definition');
   }
-  if (!Array.isArray(raw.when) || raw.when.length === 0) {
-    fail(file, '"when" must be a non-empty list of trace steps');
+
+  if ((raw.when === undefined) === (raw.one_of === undefined)) {
+    fail(file, 'a koan needs exactly one of "when" / "one_of"');
   }
+
+  let traces: Record<string, ModelTurn[]>;
+  if (raw.when !== undefined) {
+    if (!Array.isArray(raw.when) || raw.when.length === 0) {
+      fail(file, '"when" must be a non-empty list of trace steps');
+    }
+    traces = { '': compileTrace(file, raw.when as TraceEntry[]) };
+  } else {
+    const oneOf = raw.one_of as Record<string, unknown>;
+    if (typeof oneOf !== 'object' || oneOf === null || Array.isArray(oneOf)) {
+      fail(file, '"one_of" must be a mapping of variant name to trace');
+    }
+    const entries = Object.entries(oneOf);
+    if (entries.length < 2) {
+      fail(file, '"one_of" needs at least two variants — use "when" for a single trace');
+    }
+    traces = {};
+    for (const [variant, trace] of entries) {
+      if (!Array.isArray(trace) || trace.length === 0) {
+        fail(file, `"one_of.${variant}" must be a non-empty list of trace steps`);
+      }
+      traces[variant] = compileTrace(file, trace as TraceEntry[], `one_of.${variant}`);
+    }
+  }
+
   return {
     name: raw.name,
     description: raw.description,
     given: { task: raw.given.task, tools },
-    when: { model: compileTrace(file, raw.when as TraceEntry[]) },
+    traces,
     then: raw.then ?? {},
   };
 }
 
+/** Load every koan under a chapter directory tree, sorted by id. */
 export function discoverKoans(dir: string): DiscoveredKoan[] {
   const found: DiscoveredKoan[] = [];
   for (const chapter of fs.readdirSync(dir, { withFileTypes: true })) {

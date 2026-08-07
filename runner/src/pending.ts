@@ -1,18 +1,15 @@
-// The timeline coupling between the mock LLM and the mock tool server.
-//
-// A koan's `when.model` is a single timeline: a call_tool entry with
-// tool_responds enqueues the one invocation it permits; the tool server
-// consumes the queue in order. An invocation with nothing pending is a
-// contract violation (either the model turn permitted no tool call, or
-// the arguments were supposed to fail validation).
+// Internal: the queue coupling mock-llm.ts (producer) to mock-tools.ts
+// (consumer). Only queue-shaped code belongs here.
 import type { ToolResponse } from './koan.js';
 
+/** One permitted tool invocation and its scripted response. */
 export interface PendingInvocation {
   name: string;
   args: Record<string, unknown>;
   respond: ToolResponse;
 }
 
+/** Structural equality over JSON values. */
 export function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;

@@ -1,0 +1,43 @@
+name: scalar-mismatch
+description: >
+  The model sends "3" where the schema says number — a coercible scalar
+  mismatch. Whatever the process, the user's expectation must be met: the
+  tool ends up correctly invoked and the run completes. Two processes are
+  acceptable: coerce the argument and invoke immediately, or reject it,
+  report back, and let the model correct itself.
+
+given:
+  task: "Get the 3-day forecast for Tokyo."
+  tools:
+    get_forecast:
+      description: "Get the weather forecast for the coming days"
+      input_schema:
+        type: object
+        properties:
+          days: { type: number }
+        required: [days]
+
+one_of:
+  coerce:
+    - request: model
+      response: { tool: get_forecast, args: { days: "3" } }
+    - request: { tool: get_forecast, args: { days: 3 } }   # declared transform
+      response: { status: 200, body: { forecast: "sunny" } }
+    - request: model
+      response: "Sunny for the next 3 days."
+
+  reject-and-report:
+    - request: model
+      response: { tool: get_forecast, args: { days: "3" } }
+    # no tool request: the mismatched args must not reach the tool server
+    - request: model
+      response: { tool: get_forecast, args: { days: 3 } }
+    - request: { tool: get_forecast }
+      response: { status: 200, body: { forecast: "sunny" } }
+    - request: model
+      response: "Sunny for the next 3 days."
+
+then:
+  run:
+    status: completed
+    output: { contains: "Sunny" }

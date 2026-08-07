@@ -220,9 +220,9 @@ scripted response. Requests take two forms:
 - `request: { tool: <name> }` — the agent invokes that tool, directly
   following the model response whose tool-call instruction provokes it
   (one model tool call maps to at most one invocation, R4). `args` MAY be
-  written for readability; argument fidelity already fixes their value,
-  so a koan whose explicit args differ from the instruction's is rejected
-  at load time.
+  written to declare the expected invocation arguments when the trace
+  legitimately transforms them (see §6.3); omitted, argument fidelity
+  applies — the invocation must carry the instruction's args verbatim.
 
 Responses discriminate by form:
 
@@ -275,6 +275,41 @@ vocabulary is a **closed set** — no general-purpose query language:
 Semantic assertions: the `request` steps and the implicit trace rules
 (§6.1). New verification needs are added here as named assertions, not as
 generic matchers.
+
+### 6.3 Alternative processes (`one_of`)
+
+Some contracts are outcome-level: more than one process legitimately
+reaches the user's expected result. Such a koan replaces its top-level
+`when` with `one_of`, a mapping of variant name → trace, where each trace
+has exactly the shape of `when`. `given` and `then` stay single and
+shared — the variants may differ only in process, by construction.
+
+```yaml
+one_of:
+  coerce:
+    - request: model
+      response: { tool: get_forecast, args: { days: "3" } }
+    - request: { tool: get_forecast, args: { days: 3 } }   # declared transform
+      response: { status: 200, body: { forecast: "sunny" } }
+    - request: model
+      response: "Sunny for the next 3 days."
+  reject-and-report:
+    - request: model
+      response: { tool: get_forecast, args: { days: "3" } }
+    - request: model
+      response: { tool: get_forecast, args: { days: 3 } }
+    - request: { tool: get_forecast }
+      response: { status: 200, body: { forecast: "sunny" } }
+    - request: model
+      response: "Sunny for the next 3 days."
+```
+
+The harness runs the koan once per variant, each run fully deterministic
+against that variant's script, and the implementation conforms if at
+least one run passes. A single run exhibits exactly one of the processes
+— hence `one_of`. Composition order is fixed: `one_of` composes whole
+traces (OR, outside); the structure inside a trace is reserved for the
+interaction shape itself (e.g. future concurrent conversation logs).
 
 ## 7. Versioning
 

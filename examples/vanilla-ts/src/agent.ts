@@ -3,21 +3,14 @@
 //
 // Runtime-neutral by design: only Web-standard APIs (fetch,
 // crypto.randomUUID), no imports. Runs on Node, Deno, Bun, and Workers.
-//
-// Scope: tracks the current suite (chapters: lifecycle, tool-reliability).
-// The implementation grows chapter by chapter, together with the koans it
-// passes.
 
-/** What the agent needs to talk to a model; the caller provides it. */
-export interface ModelConfig {
+interface ModelConfig {
   baseUrl: string;
   apiKey: string;
-  /** Model name sent to the API, e.g. "gpt-4o-mini". */
   model: string;
 }
 
-/** Where tool invocations go; the caller provides it. */
-export interface ToolsConfig {
+interface ToolsConfig {
   baseUrl: string;
 }
 
@@ -31,7 +24,7 @@ export interface ToolDef {
   };
 }
 
-export interface Run {
+interface Run {
   run_id: string;
   status: 'running' | 'completed' | 'failed' | 'aborted';
   output?: string;
@@ -59,10 +52,6 @@ function jsonType(value: unknown): string {
   return typeof value;
 }
 
-/**
- * Minimal JSON Schema validation: `required` properties and primitive
- * types of declared properties (SPEC.md R6).
- */
 function validateArgs(args: Record<string, unknown>, schema: ToolDef['input_schema']): string[] {
   const errors: string[] = [];
   for (const key of schema.required ?? []) {
@@ -79,7 +68,6 @@ function validateArgs(args: Record<string, unknown>, schema: ToolDef['input_sche
 export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) {
   const runs = new Map<string, Run>();
 
-  /** Start a run and return immediately; execution continues in background. */
   function startRun(prompt: string, tools: ToolDef[]): Run {
     const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
     runs.set(run.run_id, run);
@@ -112,7 +100,6 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
         return;
       }
 
-      // R5: bounded loop — give up rather than run forever.
       run.status = 'aborted';
       run.error = `exceeded ${MAX_STEPS} model steps`;
     } catch (err) {
@@ -122,11 +109,9 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
     }
   }
 
-  /** Execute one model tool call; returns the tool-result message content. */
   async function executeToolCall(call: ToolCall, tools: ToolDef[]): Promise<string> {
     const def = tools.find((t) => t.name === call.function.name);
     if (!def) {
-      // R7: never forward unknown tools to the tool server.
       return `Error: unknown tool "${call.function.name}"`;
     }
 
@@ -139,7 +124,6 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
 
     const validationErrors = validateArgs(args, def.input_schema ?? {});
     if (validationErrors.length > 0) {
-      // R6: invalid arguments never reach the tool server.
       return `Error: invalid arguments for "${def.name}": ${validationErrors.join('; ')}`;
     }
 
@@ -150,7 +134,6 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
     });
     const body = await res.text();
     if (!res.ok) {
-      // R3: report the failure to the model; R4: no retry here.
       return `Error: tool "${def.name}" failed with status ${res.status}: ${body}`;
     }
     return body;
@@ -185,5 +168,3 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
 
   return { startRun, getRun };
 }
-
-export type Agent = ReturnType<typeof createAgent>;

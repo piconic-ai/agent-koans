@@ -1,0 +1,33 @@
+name: unknown-tool
+description: >
+  The model first calls a tool that was never declared (a typo'd name).
+  The agent must reject the call without invoking the tool server — there
+  is no tool request in the trace — report the failure back to the model,
+  and then execute the correctly-named call.
+
+given:
+  task: "Get the current weather in Tokyo and report it."
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+when:
+  - request: model
+    response: { tool: get_wether, args: { city: "Tokyo" } }
+  # no tool request here: an unknown tool must never reach the tool server
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: model
+    response: "The weather in Tokyo is 31°C."
+
+then:
+  run:
+    status: completed
+    output: { contains: "31" }

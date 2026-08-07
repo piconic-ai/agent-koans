@@ -1,0 +1,34 @@
+name: wrong-arg-type
+description: >
+  The model first calls the tool with an argument of the wrong primitive
+  type ("city" must be a string, not an array). The agent must reject the
+  call without invoking the tool — there is no tool request in the trace —
+  report a validation error back to the model, and then execute the
+  corrected call.
+
+given:
+  task: "Get the current weather in Tokyo and report it."
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: ["Tokyo"] } }
+  # no tool request here: the invalid call must never reach the tool server
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: model
+    response: "The weather in Tokyo is 31°C."
+
+then:
+  run:
+    status: completed
+    output: { contains: "31" }

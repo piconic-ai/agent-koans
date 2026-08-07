@@ -14,8 +14,6 @@ export interface ToolDef {
   input_schema: Record<string, unknown>;
 }
 
-export type ConversationState = 'initial' | 'tool_result' | 'tool_error';
-
 export interface ToolResponse {
   status: number;
   body?: unknown;
@@ -36,7 +34,7 @@ export interface ToolResponse {
  * { status, body } is the tool server's response.
  */
 interface TraceEntry {
-  request?: 'model' | { tool?: string; args?: Record<string, unknown> };
+  request?: string | { tool?: string; args?: Record<string, unknown> };
   response?:
     | string
     | {
@@ -49,8 +47,6 @@ interface TraceEntry {
 
 /** Internal, compiled form: one entry per model request. */
 export interface ModelTurn {
-  /** What the incoming conversation must show (the agent's calls_model). */
-  expecting: ConversationState;
   reply?: string;
   call_tool?: { name: string; args: Record<string, unknown> };
   /**
@@ -95,19 +91,6 @@ function fail(file: string, message: string): never {
   throw new Error(`Invalid koan ${file}: ${message}`);
 }
 
-/**
- * Conversation coherence: what a model request's conversation must show
- * is fully determined by the preceding trace (SPEC.md §6.1).
- */
-function deriveExpecting(file: string, at: string, prev: ModelTurn | undefined): ConversationState {
-  if (!prev) return 'initial';
-  if (!prev.call_tool) {
-    fail(file, `${at}: a model request cannot follow a text reply (multi-turn traces are not supported yet)`);
-  }
-  if (!prev.tool_responds) return 'tool_error'; // the agent refused the call (R6/R7)
-  return prev.tool_responds.status < 400 ? 'tool_result' : 'tool_error';
-}
-
 function compileTrace(file: string, trace: TraceEntry[]): ModelTurn[] {
   const turns: ModelTurn[] = [];
   for (const [i, e] of trace.entries()) {
@@ -118,15 +101,17 @@ function compileTrace(file: string, trace: TraceEntry[]): ModelTurn[] {
     if (res === undefined || res === null) fail(file, `${at} needs "response"`);
 
     if (req === 'model') {
-      const expecting = deriveExpecting(file, at, turns.at(-1));
+      const prev = turns.at(-1);
+      if (prev && !prev.call_tool) {
+        fail(file, `${at}: a model request cannot follow a text reply (multi-turn traces are not supported yet)`);
+      }
       if (typeof res === 'string') {
-        turns.push({ expecting, reply: res });
+        turns.push({ reply: res });
       } else if (typeof res.tool === 'string') {
         if (res.status !== undefined) {
           fail(file, `${at}.response mixes a tool-call instruction with "status"`);
         }
         turns.push({
-          expecting,
           call_tool: { name: res.tool, args: res.args ?? {} },
         });
       } else {

@@ -124,13 +124,16 @@ Requirements:
 - **R2 — Tool results.** After executing a tool call, the agent MUST append
   a `role: "tool"` message whose `tool_call_id` matches the model's tool
   call, and send the updated conversation back to the model.
-- **R3 — Error reporting.** When a tool call fails — the tool server
-  returned status ≥ 400, or the arguments failed validation — the failure
-  MUST be reported back to the model as a `role: "tool"` message whose
-  content indicates the failure, along with available detail (status code,
-  error body, or validation message). The harness recognizes a failure
-  indicator by matching `error`, `fail`, or `invalid` (case-insensitive)
-  in the content.
+- **R3 — Error reporting.** When a tool call fails, the failure MUST be
+  reported back to the model as the `role: "tool"` message closing that
+  call. When the failure came from the tool server (status ≥ 400), the
+  report MUST carry the failure information the agent received — the
+  status code or the error body's content; the harness verifies this by
+  information flow (it produced the response, so it knows what must reach
+  the model), not by matching any vocabulary. When the agent itself
+  refused the call (R6/R7), it SHOULD state the reason; the harness
+  verifies only that the call was closed without invoking the tool, since
+  the phrasing of self-generated reports is implementation-specific.
 - **R4 — No implicit retries.** The agent MUST NOT retry a failed tool
   call on its own. Retry decisions belong to the model: report the error
   (R3) and let the model decide. One model tool call maps to at most one
@@ -232,12 +235,15 @@ Responses discriminate by form:
 **Conversation coherence.** For every model request, what the incoming
 conversation must show is fully determined by the trace before it:
 
-| Preceding trace                                  | The conversation must show               |
-| ------------------------------------------------ | ---------------------------------------- |
-| Nothing (first request)                          | The task; no tool interaction yet        |
-| Instruction + tool request with status < 400     | The tool's result (R2)                   |
-| Instruction + tool request with status ≥ 400     | A failure report (R3)                    |
-| Instruction with **no** tool request             | A failure report for the refused call (R6/R7 + R3) |
+| Preceding trace                              | The conversation must show                                          |
+| -------------------------------------------- | ------------------------------------------------------------------- |
+| Nothing (first request)                      | The task; no tool interaction yet                                   |
+| Instruction + tool request with status < 400 | The call closed with a tool message carrying the response body's content (R2) |
+| Instruction + tool request with status ≥ 400 | The call closed with a tool message carrying the status code or the error body's content (R3) |
+| Instruction with **no** tool request         | The call closed back to the model without any invocation (R6/R7); content unconstrained |
+
+Content checks are by information flow: the harness looks for the scalar
+values it scripted into the tool response, never for any wording.
 
 A request beyond the end of the trace, or one that contradicts its step,
 fails the koan. Three further rules fall out of the trace itself, so

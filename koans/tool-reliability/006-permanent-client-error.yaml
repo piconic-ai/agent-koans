@@ -1,0 +1,30 @@
+name: permanent-client-error
+description: >
+  A permanent 4xx (the city does not exist) must reach the model as a tool
+  error. Unlike a transient failure, there is no follow-up call to retry —
+  the model gives up gracefully and reports it could not find the data.
+  Exactly one tool invocation is made.
+
+given:
+  task: "Get the current weather in Atlantis and report it."
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Atlantis" } }
+  - request: { tool: get_weather }
+    response: { status: 404, body: { error: "unknown_city" } }
+  - request: model
+    response: "I couldn't find weather data for Atlantis."
+
+then:
+  run:
+    status: completed
+    output: { contains: "Atlantis" }

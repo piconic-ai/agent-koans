@@ -129,8 +129,8 @@ Requirements:
   MUST be reported back to the model as a `role: "tool"` message whose
   content indicates the failure, along with available detail (status code,
   error body, or validation message). The harness recognizes a failure
-  indicator by matching `error`, `fail`, or `invalid` (case-insensitive)
-  in the content.
+  indicator by matching `error`, `fail`, `invalid`, or `not found`
+  (case-insensitive) in the content.
 - **R4 — No implicit retries.** The agent MUST NOT retry a failed tool
   call on its own. Retry decisions belong to the model: report the error
   (R3) and let the model decide. One model tool call maps to at most one

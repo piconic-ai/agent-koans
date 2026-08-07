@@ -41,8 +41,9 @@ function classify(messages: ChatMessage[]): ConversationState {
   if (last?.role === 'tool') {
     // R3: tool failures are reported as tool messages whose content shows
     // a failure indicator. Frameworks phrase this differently ("Error:",
-    // "Validation failed", "invalid arguments"), so match the family.
-    return /error|fail|invalid/i.test(String(last.content ?? '')) ? 'tool_error' : 'tool_result';
+    // "Validation failed", "invalid arguments", "Tool X not found"), so
+    // match the family.
+    return /error|fail|invalid|not found/i.test(String(last.content ?? '')) ? 'tool_error' : 'tool_result';
   }
   return 'initial';
 }

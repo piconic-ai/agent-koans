@@ -187,15 +187,15 @@ given:                    # the world as the agent sees it
 
 when:                     # the expected wire log, in order
   - request: { model: initial }
-    response: { tool_call: { name: get_weather, args: { city: "Tokyo" } } }
+    response: { tool: get_weather, args: { city: "Tokyo" } }
   - request: { tool: get_weather }
     response: { status: 503, body: { error: "service_unavailable" } }
   - request: { model: tool_error }
-    response: { tool_call: { name: get_weather, args: { city: "Tokyo" } } }
+    response: { tool: get_weather, args: { city: "Tokyo" } }
   - request: { tool: get_weather }
     response: { status: 200, body: { temp: 31 } }
   - request: { model: tool_result }
-    response: { reply: "The weather in Tokyo is 31°C." }
+    response: "The weather in Tokyo is 31°C."
 
 then:                     # assertions on the run's outcome
   run:
@@ -209,9 +209,13 @@ omitted. The harness converts it to the wire-format list of §3.2.
 ### 6.1 The `when` trace
 
 Each step pairs the agent's request (asserted) with the called party's
-scripted response. The response shape follows the callee: a model request
-is answered with `tool_call: { name, args }` or `reply: <text>`; a tool
-request with `status` and `body`.
+scripted response. The response discriminates by form:
+
+| Form                     | Meaning                                    |
+| ------------------------ | ------------------------------------------ |
+| bare string              | The model's text reply                     |
+| `{ tool: <name>, args }` | The model's tool-call instruction          |
+| `{ status, body }`       | The tool server's HTTP response            |
 
 `request: { model: <state> }` asserts what the conversation the agent
 sends must show:
@@ -223,8 +227,8 @@ sends must show:
 | `tool_error`  | Last message is a `role: "tool"` failure report (per R3)    |
 
 `request: { tool: <name> }` asserts that the agent invokes that tool, and
-must directly follow the model response whose `tool_call` provokes it
-(one model tool call maps to at most one invocation, R4).
+must directly follow the model response whose tool-call instruction
+provokes it (one model tool call maps to at most one invocation, R4).
 
 A request beyond the end of the trace, or one that contradicts its step,
 fails the koan. Three further rules fall out of the trace itself, so
@@ -234,11 +238,11 @@ fails the koan. Three further rules fall out of the trace itself, so
   exchange, no more and no fewer. The trace length *is* the call-count
   assertion.
 - **Argument fidelity.** A tool request's arguments must deep-equal the
-  `args` of the `tool_call` that provoked it — the agent forwards the
-  model's arguments verbatim.
-- **Absence of a tool request.** A `tool_call` response with no following
-  `request: { tool: ... }` step asserts the tool server MUST NOT be
-  invoked for that call (e.g. the arguments are scripted to fail
+  `args` of the tool-call instruction that provoked it — the agent
+  forwards the model's arguments verbatim.
+- **Absence of a tool request.** A tool-call instruction with no
+  following `request: { tool: ... }` step asserts the tool server MUST
+  NOT be invoked for that call (e.g. the arguments are scripted to fail
   validation, R6).
 
 ### 6.2 `then` matchers

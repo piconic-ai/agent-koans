@@ -17,11 +17,11 @@ given:
 
 when:
   - request: { model: initial }
-    response: { tool_call: { name: get_weather, args: { city: "Tokyo" } } }
+    response: { tool: get_weather, args: { city: "Tokyo" } }
   - request: { tool: get_weather }
     response: { status: 200, body: { temp: 31 } }
   - request: { model: tool_result }
-    response: { reply: "The weather in Tokyo is 31°C." }
+    response: "The weather in Tokyo is 31°C."
 
 then:
   run:

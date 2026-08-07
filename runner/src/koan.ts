@@ -22,18 +22,20 @@ export interface ToolResponse {
 
 /**
  * One step of the YAML trace: the agent's request (asserted) and the
- * called party's scripted response. The response shape follows the
- * callee: tool_call/reply for a model request, status/body for a tool
- * request.
+ * called party's scripted response. The response discriminates by form:
+ * a bare string is the model's text reply; { tool, args } is the model's
+ * tool-call instruction; { status, body } is the tool server's response.
  */
 interface TraceEntry {
   request?: { model?: ConversationState; tool?: string };
-  response?: {
-    tool_call?: { name: string; args: Record<string, unknown> };
-    reply?: string;
-    status?: number;
-    body?: unknown;
-  };
+  response?:
+    | string
+    | {
+        tool?: string;
+        args?: Record<string, unknown>;
+        status?: number;
+        body?: unknown;
+      };
 }
 
 /** Internal, compiled form: one entry per model request. */
@@ -91,7 +93,7 @@ function compileTrace(file: string, trace: TraceEntry[]): ModelTurn[] {
     const req = e?.request;
     const res = e?.response;
     if (!req || typeof req !== 'object') fail(file, `${at} needs "request"`);
-    if (!res || typeof res !== 'object') fail(file, `${at} needs "response"`);
+    if (res === undefined || res === null) fail(file, `${at} needs "response"`);
     const targets = [req.model !== undefined, req.tool !== undefined].filter(Boolean);
     if (targets.length !== 1) {
       fail(file, `${at}.request must name exactly one of "model" / "tool"`);
@@ -101,16 +103,21 @@ function compileTrace(file: string, trace: TraceEntry[]): ModelTurn[] {
       if (!['initial', 'tool_result', 'tool_error'].includes(req.model)) {
         fail(file, `${at}.request.model has unknown state "${req.model}"`);
       }
-      const actions = [res.tool_call !== undefined, res.reply !== undefined].filter(Boolean);
-      if (actions.length !== 1) {
-        fail(file, `${at}.response must have exactly one of "tool_call" / "reply" for a model request`);
+      if (typeof res === 'string') {
+        turns.push({ expecting: req.model, reply: res });
+      } else if (typeof res.tool === 'string') {
+        if (res.status !== undefined) {
+          fail(file, `${at}.response mixes a tool-call instruction with "status"`);
+        }
+        turns.push({
+          expecting: req.model,
+          call_tool: { name: res.tool, args: res.args ?? {} },
+        });
+      } else {
+        fail(file, `${at}.response for a model request must be a reply string or { tool, args }`);
       }
-      turns.push({
-        expecting: req.model,
-        ...(res.tool_call ? { call_tool: res.tool_call } : { reply: res.reply }),
-      });
     } else {
-      if (typeof res.status !== 'number') {
+      if (typeof res === 'string' || typeof res.status !== 'number') {
         fail(file, `${at}.response needs a numeric "status" for a tool request`);
       }
       const turn = turns.at(-1);

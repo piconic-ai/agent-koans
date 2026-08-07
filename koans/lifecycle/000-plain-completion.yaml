@@ -6,7 +6,7 @@ given:
 
 when:
   - request: { model: initial }
-    response: { reply: "Hello!" }
+    response: "Hello!"
 
 then:
   run:

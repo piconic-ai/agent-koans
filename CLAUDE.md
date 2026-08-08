@@ -25,7 +25,10 @@ Two comment kinds are required on top of why-not:
 ## Pull request descriptions
 
 Write for non-native English readers: short sentences, no idioms.
-Structure: Problem → Solution → (optional) rejected alternatives → verification.
+Structure: Problem → Solution → Verification. Add a "Rejected
+alternatives" section only when the PR carries a design decision —
+never in mechanical changes (cleanups, dependency bumps, koan
+additions that follow an already-decided format).
 
 ## Conventions
 

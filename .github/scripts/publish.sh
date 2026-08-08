@@ -18,8 +18,11 @@ if npm view "agent-koans@$version" version >/dev/null 2>&1; then
   exit 0
 fi
 
+# Extracted before publishing so a missing or malformed CHANGELOG can
+# only stop the release while there is nothing to undo.
+notes=$(awk -v ver="$version" '$0 == "## " ver {flag=1; next} /^## / {flag=0} flag' CHANGELOG.md 2>/dev/null || true)
+
 npm publish
 git tag "v$version"
 git push origin "v$version"
-notes=$(awk -v ver="$version" '$0 == "## " ver {flag=1; next} /^## / {flag=0} flag' CHANGELOG.md)
 gh release create "v$version" --title "v$version" --notes "${notes:-See CHANGELOG.md}"

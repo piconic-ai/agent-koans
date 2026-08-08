@@ -17,17 +17,17 @@ described in RFC 2119.
 
 ## 1. Architecture
 
-The agent under test is a black box behind an HTTP interface. The harness
+The agent under test is a black box behind an HTTP interface. The runner
 observes it from both sides:
 
 ```
-harness ──(1) POST /runs──────────▶ agent under test (black box)
+runner ───(1) POST /runs──────────▶ agent under test (black box)
                                         │
    mock LLM server ◀──(2) chat/completions──┤
    mock tool server ◀──(3) invoke/{tool}────┘
 ```
 
-1. The harness submits a task and the tool definitions.
+1. The runner submits a task and the tool definitions.
 2. The agent talks to a **mock LLM server** (OpenAI Chat Completions
    compatible) instead of a real model. The mock replies from a per-koan
    script.
@@ -40,7 +40,7 @@ touching the implementation's internals.
 
 ## 2. Environment
 
-The harness launches the agent process with these environment variables:
+The runner launches the agent process with these environment variables:
 
 | Variable          | Meaning                                                        |
 | ----------------- | -------------------------------------------------------------- |
@@ -105,7 +105,7 @@ Response: `201` or `202` with a body containing `run_id` (string).
 
 **Terminal-state guarantee.** Every run MUST reach a terminal state in
 finite time — regardless of tool failures, model misbehavior, or internal
-errors. A run that stays `running` past the harness timeout fails the koan.
+errors. A run that stays `running` past the runner timeout fails the koan.
 
 Unknown `run_id` SHOULD return `404`.
 
@@ -128,10 +128,10 @@ Requirements:
   reported back to the model as the `role: "tool"` message closing that
   call. When the failure came from the tool server (status ≥ 400), the
   report MUST carry the failure information the agent received — the
-  status code or the error body's content; the harness verifies this by
+  status code or the error body's content; the runner verifies this by
   information flow (it produced the response, so it knows what must reach
   the model), not by matching any vocabulary. When the agent itself
-  refused the call (R6/R7), it SHOULD state the reason; the harness
+  refused the call (R6/R7), it SHOULD state the reason; the runner
   verifies only that the call was closed without invoking the tool, since
   the phrasing of self-generated reports is implementation-specific.
 - **R4 — No implicit retries.** The agent MUST NOT retry a failed tool
@@ -207,7 +207,7 @@ then:                     # assertions on the run's outcome
 ```
 
 `given.tools` maps tool name → definition; it defaults to empty and MAY be
-omitted. The harness converts it to the wire-format list of §3.2.
+omitted. The runner converts it to the wire-format list of §3.2.
 
 ### 6.1 The `when` trace
 
@@ -242,7 +242,7 @@ conversation must show is fully determined by the trace before it:
 | Instruction + tool request with status ≥ 400 | The call closed with a tool message carrying the status code or the error body's content (R3) |
 | Instruction with **no** tool request         | The call closed back to the model without any invocation (R6/R7); content unconstrained |
 
-Content checks are by information flow: the harness looks for the scalar
+Content checks are by information flow: the runner looks for the scalar
 values it scripted into the tool response, never for any wording.
 
 A request beyond the end of the trace, or one that contradicts its step,
@@ -304,7 +304,7 @@ one_of:
       response: "Sunny for the next 3 days."
 ```
 
-The harness runs the koan once per variant, each run fully deterministic
+The runner runs the koan once per variant, each run fully deterministic
 against that variant's script, and the implementation conforms if at
 least one run passes. A single run exhibits exactly one of the processes
 — hence `one_of`. Composition order is fixed: `one_of` composes whole

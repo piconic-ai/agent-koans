@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // CLI entry: run the koan suite against one agent command, no test
 // file needed. Argument parsing and reporting live here; discovery and
-// execution stay in koan.ts and harness.ts. Not part of the package
+// execution stay in koan.ts and runner.ts. Not part of the package
 // surface (index.ts) — nothing here is importable.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { runKoan } from './harness.js';
+import { runKoan } from './runner.js';
 import { discoverKoans } from './koan.js';
 
 const HELP = `Usage: agent-koans --agent "<command>" [options]

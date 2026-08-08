@@ -87,5 +87,5 @@ in this repository to see the suite pass against all of them.
 | `SPEC.md`   | The conformance contract — the real deliverable             |
 | `openapi.yaml` | Wire format of the agent HTTP interface (OpenAPI 3.1)    |
 | `koans/`    | The tests, as declarative YAML                              |
-| `runner/`   | Mock LLM server (OpenAI-compatible), mock tool server, harness |
+| `runner/`   | The runner: mock LLM server (OpenAI-compatible), mock tool server, CLI |
 | `examples/` | Implementations that pass                                   |

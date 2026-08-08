@@ -1,6 +1,6 @@
 // Loading and compiling koan YAML into the runner's internal trace form.
 // File-format validation belongs here and nowhere else; runtime
-// verification belongs to the mocks and the harness.
+// verification belongs to the mocks and the runner.
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';

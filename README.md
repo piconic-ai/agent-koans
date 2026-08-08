@@ -4,8 +4,8 @@
 question that tests true understanding — is a framework-agnostic
 conformance suite for AI agent implementations.
 
-You are building an AI agent. When it misbehaves, was it the model or
-your code? Evals cannot tell — they measure the two together.
+Your AI agent misbehaves. Was it the model or your code? Evals cannot
+tell — they measure the two together.
 agent-koans isolates your code: a failing koan always means a bug in
 the agent implementation, never the model. Any framework, any runtime:
 satisfy the contract and you pass.

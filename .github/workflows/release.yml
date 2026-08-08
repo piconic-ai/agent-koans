@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the version branch, tags, and GitHub releases
+      pull-requests: write # the Version Packages PR
+      # npm trusted publishing: the OIDC token replaces any npm token.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The changesets action compares against existing tags and
+          # history; a shallow clone can misjudge both.
+          fetch-depth: 0
+
+      # Reads the pnpm version from the root package.json "packageManager" field
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # Trusted publishing needs npm >= 11.5.1; node 24 bundles it.
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Run the suite before publishing
+        run: |
+          pnpm typecheck
+          pnpm test
+
+      # With pending changesets: maintains the Version Packages PR.
+      # Without (that PR just merged): publishes, tags, and creates the
+      # GitHub release.
+      - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        with:
+          publish: pnpm changeset publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

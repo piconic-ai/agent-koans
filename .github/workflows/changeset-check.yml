@@ -1,0 +1,36 @@
+name: Changeset check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions: {}
+
+jobs:
+  check:
+    # Runs only on a release PR — the Version Packages PR the changesets
+    # action maintains (its head branch is fixed), or anything a human
+    # marks with the release label. Topic PRs carry no changesets and
+    # are not checked.
+    if: github.head_ref == 'changeset-release/main' || contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: The release PR consumes changesets
+        run: |
+          git fetch origin "$GITHUB_BASE_REF"
+          consumed=$(git diff --name-only --diff-filter=D "origin/${GITHUB_BASE_REF}...HEAD" -- '.changeset/*.md')
+          if [ -z "$consumed" ]; then
+            echo "This release PR consumes no changesets." >&2
+            echo "Write them from the changes accumulated since the last release" >&2
+            echo "(pnpm changeset, one per user-visible change), merge them to" >&2
+            echo "main, and let the changesets action regenerate this PR." >&2
+            exit 1
+          fi
+          echo "Changesets consumed:"
+          echo "$consumed"

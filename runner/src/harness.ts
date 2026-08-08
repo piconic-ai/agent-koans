@@ -107,6 +107,10 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
       KOAN_TOOLS_URL: tools.url,
     },
     stdio: ['ignore', 'inherit', 'inherit'],
+    // Own process group, killed as a group below: killing only the
+    // direct child leaves the agent's own children (pnpm → sh → node)
+    // running and holding the inherited stdio open.
+    detached: true,
   });
 
   const failures: string[] = [];
@@ -172,8 +176,16 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
       failures.push(err instanceof Error ? err.message : String(err));
     }
   } finally {
-    child.kill('SIGTERM');
-    const killTimer = setTimeout(() => child.kill('SIGKILL'), 2_000);
+    const killTree = (signal: NodeJS.Signals) => {
+      if (child.pid === undefined) return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        /* group already gone */
+      }
+    };
+    killTree('SIGTERM');
+    const killTimer = setTimeout(() => killTree('SIGKILL'), 2_000);
     await new Promise<void>((r) => {
       if (child.exitCode !== null) return r();
       child.on('exit', () => r());

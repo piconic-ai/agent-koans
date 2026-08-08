@@ -8,11 +8,9 @@ permissions: {}
 
 jobs:
   check:
-    # Runs only on a release PR — the Version Packages PR the changesets
-    # action maintains (its head branch is fixed), or anything a human
-    # marks with the release label. Topic PRs carry no changesets and
-    # are not checked.
-    if: github.head_ref == 'changeset-release/main' || contains(github.event.pull_request.labels.*.name, 'release')
+    # Runs only on a release PR — head branch release/* or the release
+    # label. Topic PRs carry no changesets and are not checked.
+    if: startsWith(github.head_ref, 'release/') || contains(github.event.pull_request.labels.*.name, 'release')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -21,16 +19,26 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: The release PR consumes changesets
+      - name: The release branch carries changesets and the version bump
         run: |
           git fetch origin "$GITHUB_BASE_REF"
-          consumed=$(git diff --name-only --diff-filter=D "origin/${GITHUB_BASE_REF}...HEAD" -- '.changeset/*.md')
-          if [ -z "$consumed" ]; then
-            echo "This release PR consumes no changesets." >&2
-            echo "Write them from the changes accumulated since the last release" >&2
-            echo "(pnpm changeset, one per user-visible change), merge them to" >&2
-            echo "main, and let the changesets action regenerate this PR." >&2
+          changesets=$(git log --format= --name-only --diff-filter=A \
+            "origin/${GITHUB_BASE_REF}..HEAD" -- '.changeset/*.md' | sort -u)
+          if [ -z "$changesets" ]; then
+            echo "No changeset was written on this release branch." >&2
+            echo "Write them from what accumulated on main (pnpm changeset," >&2
+            echo "one per user-visible change), commit, then run" >&2
+            echo "pnpm changeset version in a separate commit so the" >&2
+            echo "changesets stay visible in the branch history." >&2
             exit 1
           fi
-          echo "Changesets consumed:"
-          echo "$consumed"
+          base_version=$(git show "origin/${GITHUB_BASE_REF}:package.json" \
+            | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")
+          version=$(node -p "require('./package.json').version")
+          if [ "$version" = "$base_version" ]; then
+            echo "package.json still says $base_version — run pnpm changeset version." >&2
+            exit 1
+          fi
+          echo "Changesets written:"
+          echo "$changesets"
+          echo "Version: $base_version -> $version"

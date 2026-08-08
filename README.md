@@ -55,7 +55,7 @@ starts your agent; it plays the model's turns from the script, serves
 the tool responses, and checks the outcome:
 
 ```console
-$ agent-koans --agent "node dist/server.js"
+$ npx agent-koans --agent "node dist/server.js"
 ok    lifecycle/000-plain-completion
 ok    tool-reliability/001-happy-path
 FAIL  tool-reliability/003-retry-on-transient-failure

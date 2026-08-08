@@ -1,35 +1,85 @@
 # agent-koans
 
-A framework-agnostic conformance suite for AI agent implementations.
+**agent-koans** — a *koan* (公案, pronounced "KOH-ahn") is a short Zen
+question that tests true understanding — is a framework-agnostic
+conformance suite for AI agent implementations.
 
-An agent's failure is the sum of model failure and implementation failure.
-Evals measure the sum; agent-koans isolates the latter. Each **koan** is a
-deterministic black-box test: the harness drives your agent over HTTP,
-plays the model's part with a scripted mock, and verifies that the
-implementation honors the contract. No real LLM calls — every failure
-means a missing safeguard in the implementation, never a bad roll of the
-model dice. Any framework, any runtime: satisfy the contract and you pass.
+Your AI agent misbehaves. Was it the model, the prompt, or your code?
+Evals cannot tell — they measure the three together. agent-koans
+isolates your code: a failing koan always means a bug in the agent
+implementation, never the model or the prompt. Any framework, any
+runtime: satisfy the contract and you pass.
 
-The contract lives in [SPEC.md](./SPEC.md).
+## What is a koan
 
-## Usage
+A deterministic black-box test, written as YAML: a task, a scripted
+conversation, and the expected outcome. The simplest one,
+[001-happy-path.yaml](./koans/tool-reliability/001-happy-path.yaml):
 
-Your agent is an HTTP server that:
+```yaml
+given:
+  task: "Get the current weather in Tokyo and report it."
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
 
-1. reads `PORT`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `KOAN_TOOLS_URL`
-   from the environment
-2. serves `GET /health`, `POST /runs`, and `GET /runs/{id}`
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: model
+    response: "The weather in Tokyo is 31°C."
 
-Run the suite against it:
-
-```sh
-pnpm install
-AGENT_CMD="<command that starts your agent>" AGENT_CWD="<its directory>" pnpm test
+then:
+  run:
+    status: completed
+    output: { contains: "31" }
 ```
 
-Plain `pnpm test` runs the suite against everything in `examples/` —
-reference implementations of the contract, with and without an agent
-framework. Start from one of them.
+Other koans probe the rest of the tool-calling contract: transient
+tool failures, a tool name the model typo'd, bad arguments, multi-tool
+sequences. Browse [koans/](./koans/) — each file is self-describing.
+
+## How to use
+
+Point the runner at the command that starts your agent. It runs every
+koan: starts the agent, plays the scripted turns, and checks the
+outcome:
+
+```console
+$ npx agent-koans --agent "node dist/server.js"
+ok    lifecycle/000-plain-completion
+ok    tool-reliability/001-happy-path
+FAIL  tool-reliability/003-retry-on-transient-failure
+      unexpected invocation of tool "get_weather": the timeline
+      permits no tool call here
+...
+9/10 passed
+```
+
+Your agent is an HTTP server; [openapi.yaml](./openapi.yaml) defines
+its three endpoints and [SPEC.md](./SPEC.md) the rules. No server yet?
+Paste this prompt into your coding agent:
+
+```text
+Build an HTTP server that passes the agent-koans conformance suite.
+Wire format: https://raw.githubusercontent.com/piconic-ai/agent-koans/main/openapi.yaml
+Rules: https://raw.githubusercontent.com/piconic-ai/agent-koans/main/SPEC.md
+The server reads PORT, OPENAI_BASE_URL, OPENAI_API_KEY and
+KOAN_TOOLS_URL from the environment, serves GET /health, POST /runs
+and GET /runs/{id}, and calls the model with an OpenAI-compatible
+client pointed at OPENAI_BASE_URL.
+```
+
+`examples/` holds reference implementations of the contract, with and
+without an agent framework. Start from one of them, or run `pnpm test`
+in this repository to see the suite pass against all of them.
 
 ## Repository
 

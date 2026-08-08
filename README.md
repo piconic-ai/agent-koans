@@ -48,8 +48,7 @@ sequences. Browse [koans/](./koans/) — each file is self-describing.
 
 ## How to use
 
-Point the runner at the command that starts your agent; it runs every
-koan:
+Test whether your agent satisfies every koan:
 
 ```console
 $ npx agent-koans --agent "node dist/server.js"

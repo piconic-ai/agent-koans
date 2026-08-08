@@ -50,16 +50,19 @@ Other koans probe the rest of the tool-calling contract: transient
 tool failures, a tool name the model typo'd, bad arguments, multi-tool
 sequences. Browse [koans/](./koans/) — each file is self-describing.
 
-The runner turns each file into a test. It starts your agent, plays
-the model's turns from the script, serves the tool responses, and
-checks the outcome:
+The runner turns each file into a test. Point it at the command that
+starts your agent; it plays the model's turns from the script, serves
+the tool responses, and checks the outcome:
 
-```ts
-import { discoverKoans, runKoan } from '@agent-koans/runner';
-
-for (const { koan } of discoverKoans('koans')) {
-  await runKoan(koan, { command: 'node dist/server.js' });
-}
+```console
+$ agent-koans --agent "node dist/server.js"
+ok    lifecycle/000-plain-completion
+ok    tool-reliability/001-happy-path
+FAIL  tool-reliability/003-retry-on-transient-failure
+      unexpected invocation of tool "get_weather": the timeline
+      permits no tool call here
+...
+9/10 passed
 ```
 
 ## Quickstart

@@ -39,9 +39,11 @@ already-decided format).
 - English everywhere in the repo. SPEC.md and openapi.yaml are normative.
 - Published koans are immutable; koans and SPEC change together.
 - Every new koan must be shown falsifiable: a broken implementation (mutant) must fail it.
-- Topic PRs carry no changesets. To release, cut a release/vX.Y.Z
-  branch: write changesets from what accumulated on main
-  (`pnpm changeset`, one per user-visible change), commit, then run
-  `pnpm changeset version` as a separate commit. Merging the release
-  PR publishes to npm, tags vX.Y.Z, and creates the GitHub release;
-  nothing is published or tagged by hand.
+- Topic PRs carry no changesets. Whenever main holds unreleased
+  changes, the Release PR workflow regenerates the release/next
+  branch — the accumulated changes recorded as a changeset,
+  `changeset version` applied — and keeps one release PR open.
+  Default bump is patch; label the PR minor or major to change it.
+  Review its CHANGELOG, edit wording freely, and merge — that
+  publishes to npm, tags vX.Y.Z, and creates the GitHub release.
+  Nothing is released by hand.

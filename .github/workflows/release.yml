@@ -30,6 +30,9 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
             echo "release=false" >> "$GITHUB_OUTPUT"
+          elif npm view "agent-koans@$version" version >/dev/null 2>&1; then
+            echo "agent-koans@$version is already on npm; only the v$version tag is missing. Backfill it by hand."
+            echo "release=false" >> "$GITHUB_OUTPUT"
           else
             echo "release=true" >> "$GITHUB_OUTPUT"
           fi

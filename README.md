@@ -84,6 +84,26 @@ client pointed at OPENAI_BASE_URL.
 without an agent framework. Start from one of them, or run `pnpm test`
 in this repository to see the suite pass against all of them.
 
+## Custom koans and skips
+
+The default `npx agent-koans --agent "..."` run needs no config file.
+For advanced use, drop an `agent-koans.yaml` next to where you run the
+CLI — it is picked up automatically, or pointed at with `--config`:
+
+```yaml
+skip:
+  # koan id -> reason; a reason is required, so a skip never rots silently
+  tool-reliability/009-scalar-mismatch: "pi-ai coerces scalars before validation (upstream #12)"
+add:
+  - ./my-koans
+```
+
+Added koans get ids prefixed by their directory's basename (e.g.
+`my-koans/billing/001-refund-idempotency`), so they can never collide
+with the bundled suite, and the summary reports them separately — a
+conformance claim against the published suite always stays distinct
+from your own koans.
+
 ## Repository
 
 | Path        | Contents                                                    |

@@ -1,0 +1,15 @@
+name: model-api-failure
+description: >
+  The model endpoint rejects the request with 401. The agent must not
+  re-issue it and must end the run as failed.
+
+given:
+  task: "Say hello."
+
+when:
+  - request: model
+    response: { status: 401 }
+
+then:
+  run:
+    status: failed

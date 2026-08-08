@@ -141,6 +141,12 @@ Requirements:
 - **R5 — Bounded loops.** The agent MUST bound the number of model steps
   per run and terminate the run (terminal-state guarantee) when the bound
   is exceeded.
+- **R8 — Model API failure.** When a model request fails with a client
+  error that OpenAI-compatible SDKs surface without retrying (a 4xx other
+  than 408 or 429), the agent MUST NOT re-issue the request and MUST end
+  the run as `failed`. How the failure is reported beyond the status is
+  the implementation's business. Retry behavior for 408, 429, and 5xx is
+  SDK-dependent and deliberately unspecified — koans do not script those.
 
 ## 5. Tool invocation
 
@@ -230,7 +236,15 @@ Responses discriminate by form:
 | ------------------------ | ------------------------------------------ |
 | bare string              | The model's text reply                     |
 | `{ tool: <name>, args }` | The model's tool-call instruction          |
-| `{ status, body }`       | The tool server's HTTP response            |
+| `{ status, body }`       | The called party's HTTP response           |
+
+A `{ status }` response to `request: model` scripts a **model API
+failure**. Its `status` MUST be a 4xx other than 408 or 429: those two
+and 5xx are auto-retried by common SDKs, which would make the trace
+nondeterministic — 401 is the canonical choice. `body` MAY be omitted;
+the mock then serves an OpenAI-style error envelope, since its content
+is not part of the contract (R8). Such a step MUST be the last one:
+after a non-retryable API failure the agent contacts no one.
 
 **Conversation coherence.** For every model request, what the incoming
 conversation must show is fully determined by the trace before it:

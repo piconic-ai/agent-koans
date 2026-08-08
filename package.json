@@ -1,7 +1,7 @@
 {
   "name": "agent-koans",
   "version": "0.1.0",
-  "description": "Conformance suite for AI agent implementations: deterministic koans run against your agent over HTTP, with the model played by a scripted mock",
+  "description": "Framework-agnostic conformance suite for AI agent implementations",
   "license": "MIT",
   "type": "module",
   "bin": {

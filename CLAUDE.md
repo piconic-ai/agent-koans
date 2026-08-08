@@ -39,11 +39,13 @@ already-decided format).
 - English everywhere in the repo. SPEC.md and openapi.yaml are normative.
 - Published koans are immutable; koans and SPEC change together.
 - Every new koan must be shown falsifiable: a broken implementation (mutant) must fail it.
-- Topic PRs carry no changesets. Whenever main holds unreleased
-  changes, the Release PR workflow regenerates the release/next
-  branch — the accumulated changes recorded as a changeset,
-  `changeset version` applied — and keeps one release PR open.
-  Default bump is patch; label the PR minor or major to change it.
-  Review its CHANGELOG, edit wording freely, and merge — that
+- Topic PRs carry no changesets. A user-visible change drops a rough
+  note in release-drafts/ (changeset format: bump guess plus a few
+  lines) in any one PR of its stack. Drafts are invisible to the
+  changesets tooling, so they cannot leak into release notes; CI also
+  rejects a changeset added outside a polish. To release, polish:
+  rewrite the drafts into .changeset/*.md, delete them, and merge that
+  PR. The changesets action then keeps a release PR open; merging it
   publishes to npm, tags vX.Y.Z, and creates the GitHub release.
-  Nothing is released by hand.
+  Publishing refuses while release-drafts/ holds anything; nothing is
+  released by hand.

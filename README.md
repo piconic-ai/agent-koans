@@ -48,9 +48,7 @@ sequences. Browse [koans/](./koans/) — each file is self-describing.
 
 ## How to use
 
-Point the runner at the command that starts your agent. It runs every
-koan: starts the agent, plays the scripted turns, and checks the
-outcome:
+Test whether your agent satisfies every koan:
 
 ```console
 $ npx agent-koans --agent "node dist/server.js"
@@ -63,9 +61,10 @@ FAIL  tool-reliability/003-retry-on-transient-failure
 9/10 passed
 ```
 
-Your agent is an HTTP server; [openapi.yaml](./openapi.yaml) defines
-its three endpoints and [SPEC.md](./SPEC.md) the rules. No server yet?
-Paste this prompt into your coding agent:
+To run the suite, your agent needs to be an HTTP server:
+[openapi.yaml](./openapi.yaml) defines the three endpoints and
+[SPEC.md](./SPEC.md) the rules. No server yet? Paste this prompt into
+your coding agent:
 
 ```text
 Build an HTTP server that passes the agent-koans conformance suite.

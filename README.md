@@ -9,9 +9,8 @@ it. Evals measure both at once; agent-koans isolates the code. Each
 **koan** is a deterministic black-box test: the harness starts your
 agent, plays the model's part with a scripted mock, and checks your
 code's behavior over HTTP. There are no real LLM calls, so a failing
-koan always means a bug in the implementation — never bad luck with
-the model. Any framework, any runtime: satisfy the contract and you
-pass.
+koan always means a bug in the agent implementation. Any framework,
+any runtime: satisfy the contract and you pass.
 
 The contract lives in [SPEC.md](./SPEC.md).
 

@@ -25,10 +25,12 @@ Two comment kinds are required on top of why-not:
 ## Pull request descriptions
 
 Write for non-native English readers: short sentences, no idioms.
-Structure: Problem → Solution → Verification. Add a "Rejected
-alternatives" section only when the PR carries a design decision —
-never in mechanical changes (cleanups, dependency bumps, koan
-additions that follow an already-decided format).
+Structure: Overview → Problem → Solution → Verification. The overview
+opens the description: a few sentences saying what this PR does, so a
+reader can stop there. Add a "Rejected alternatives" section only when
+the PR carries a design decision — never in mechanical changes
+(cleanups, dependency bumps, koan additions that follow an
+already-decided format).
 
 ## Conventions
 

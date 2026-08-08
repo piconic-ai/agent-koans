@@ -5,19 +5,15 @@ question that tests true understanding — is a framework-agnostic
 conformance suite for AI agent implementations.
 
 When an agent fails, the cause is either the model or the code around
-it. Evals measure both at once; agent-koans isolates the code. Each
-**koan** is a deterministic black-box test: the harness starts your
-agent, plays the model's part with a scripted mock, and checks your
-code's behavior over HTTP. There are no real LLM calls, so a failing
-koan always means a bug in the agent implementation. Any framework,
-any runtime: satisfy the contract and you pass.
+it. Evals measure both at once; agent-koans isolates the code: it
+plays the model's part with a scripted mock, so a failing koan always
+means a bug in the agent implementation. Any framework, any runtime:
+satisfy the contract ([SPEC.md](./SPEC.md)) and you pass.
 
-The contract lives in [SPEC.md](./SPEC.md).
+## What is a koan
 
-## Koans and the runner
-
-A koan is a YAML file: a task, a scripted conversation, and the
-expected outcome. The simplest one,
+A deterministic black-box test, written as YAML: a task, a scripted
+conversation, and the expected outcome. The simplest one,
 [001-happy-path.yaml](./koans/tool-reliability/001-happy-path.yaml):
 
 ```yaml
@@ -50,9 +46,11 @@ Other koans probe the rest of the tool-calling contract: transient
 tool failures, a tool name the model typo'd, bad arguments, multi-tool
 sequences. Browse [koans/](./koans/) — each file is self-describing.
 
-The runner turns each file into a test. Point it at the command that
-starts your agent; it plays the model's turns from the script, serves
-the tool responses, and checks the outcome:
+## How to use
+
+Point the runner at the command that starts your agent. It runs every
+koan: starts the agent, plays the scripted turns, and checks the
+outcome:
 
 ```console
 $ npx agent-koans --agent "node dist/server.js"
@@ -64,8 +62,6 @@ FAIL  tool-reliability/003-retry-on-transient-failure
 ...
 9/10 passed
 ```
-
-## Quickstart
 
 Your agent is an HTTP server; [openapi.yaml](./openapi.yaml) defines
 its three endpoints and [SPEC.md](./SPEC.md) the rules. No server yet?
@@ -79,12 +75,6 @@ The server reads PORT, OPENAI_BASE_URL, OPENAI_API_KEY and
 KOAN_TOOLS_URL from the environment, serves GET /health, POST /runs
 and GET /runs/{id}, and calls the model with an OpenAI-compatible
 client pointed at OPENAI_BASE_URL.
-```
-
-Then run the suite against the command that starts it:
-
-```sh
-npx agent-koans --agent "node dist/server.js"
 ```
 
 `examples/` holds reference implementations of the contract, with and

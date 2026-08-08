@@ -14,46 +14,11 @@ any runtime: satisfy the contract and you pass.
 
 The contract lives in [SPEC.md](./SPEC.md).
 
-## Usage
+## What koans test
 
-Your agent is an HTTP server with three endpoints. This is the whole
-surface — [openapi.yaml](./openapi.yaml) has the exact wire format:
-
-```ts
-app.get('/health', (c) => c.json({ status: 'ok' }));
-
-app.post('/runs', async (c) => {
-  const { task, tools } = await c.req.json();
-  const run = agent.startRun(task.prompt, tools ?? []);
-  return c.json({ run_id: run.run_id }, 202); // run executes async
-});
-
-app.get('/runs/:id', (c) => {
-  const run = agent.getRun(c.req.param('id'));
-  if (!run) return c.json({ error: 'run not found' }, 404);
-  return c.json(run); // { status, output, ... }
-});
-```
-
-The harness tells your agent where the mock servers are through
-environment variables. Read them at startup:
-
-```ts
-const config = {
-  port: Number(process.env.PORT),
-  model: {
-    baseUrl: process.env.OPENAI_BASE_URL, // mock LLM (OpenAI-compatible)
-    apiKey: process.env.OPENAI_API_KEY,
-  },
-  tools: {
-    baseUrl: process.env.KOAN_TOOLS_URL, // mock tool server
-  },
-};
-```
-
-Each koan is a YAML file: a task, a scripted conversation, and the
-expected outcome. `koans/tool-reliability/001-happy-path.yaml` for
-example:
+A koan is a YAML file: a task, a scripted conversation, and the
+expected outcome. The simplest one,
+[001-happy-path.yaml](./koans/tool-reliability/001-happy-path.yaml):
 
 ```yaml
 given:
@@ -81,10 +46,39 @@ then:
     output: { contains: "31" }
 ```
 
-Run the suite against your agent:
+The script can also set traps. In
+[003-retry-on-transient-failure.yaml](./koans/tool-reliability/003-retry-on-transient-failure.yaml)
+the tool fails once with a 503. The agent must report the error to the
+model and make the follow-up call — but must not retry on its own: the
+script allows exactly one tool request per model tool call, so a hidden
+retry loop fails the koan.
+
+```yaml
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 503, body: { error: "service_unavailable" } }
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: model
+    response: "The weather in Tokyo is 31°C."
+```
+
+Other koans probe the rest of the tool-calling contract: a tool name
+the model typo'd must never reach the tool server, bad arguments must
+be rejected, multi-tool sequences must run in order. Browse
+[koans/](./koans/) — each file is self-describing.
+
+## Quickstart
+
+Your agent is an HTTP server with three endpoints; the harness starts
+it and drives it. [QUICKSTART.md](./QUICKSTART.md) shows the endpoints
+and the environment variables, then it comes down to:
 
 ```sh
-pnpm install
 AGENT_CMD="<command that starts your agent>" AGENT_CWD="<its directory>" pnpm test
 ```
 
@@ -97,6 +91,7 @@ framework. Start from one of them.
 | Path        | Contents                                                    |
 | ----------- | ----------------------------------------------------------- |
 | `SPEC.md`   | The conformance contract — the real deliverable             |
+| `QUICKSTART.md` | How to connect your agent and run the suite             |
 | `openapi.yaml` | Wire format of the agent HTTP interface (OpenAPI 3.1)    |
 | `koans/`    | The tests, as declarative YAML                              |
 | `runner/`   | Mock LLM server (OpenAI-compatible), mock tool server, harness |

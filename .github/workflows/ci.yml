@@ -27,5 +27,8 @@ jobs:
           pnpm --dir examples/vanilla-ts typecheck
           pnpm --dir examples/flue typecheck
 
+      - name: Build the publishable package
+        run: pnpm --dir runner build
+
       - name: Run conformance suite (all examples)
         run: pnpm test

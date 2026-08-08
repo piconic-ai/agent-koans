@@ -1,5 +1,5 @@
 {
-  "name": "agent-koans",
+  "name": "agent-koans-workspace",
   "version": "0.1.0",
   "private": true,
   "description": "A framework-agnostic conformance suite for AI agent implementations",

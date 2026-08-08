@@ -1,0 +1,5 @@
+# Build output and the files prepack.mjs copies in for npm pack/publish.
+dist/
+koans/
+README.md
+LICENSE

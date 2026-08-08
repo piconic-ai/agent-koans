@@ -1,14 +1,57 @@
 {
-  "name": "agent-koans-workspace",
+  "name": "agent-koans",
   "version": "0.1.0",
-  "private": true,
-  "description": "A framework-agnostic conformance suite for AI agent implementations",
+  "description": "Conformance suite for AI agent implementations: deterministic koans run against your agent over HTTP, with the model played by a scripted mock",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "agent-koans": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "koans",
+    "SPEC.md",
+    "openapi.yaml"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/piconic-ai/agent-koans.git"
+  },
+  "homepage": "https://github.com/piconic-ai/agent-koans#readme",
+  "bugs": "https://github.com/piconic-ai/agent-koans/issues",
+  "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "testing",
+    "conformance",
+    "tool-calling",
+    "openai"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "koan": "tsx runner/src/cli.ts",
-    "test": "pnpm --dir runner test"
+    "build": "tsc -p tsconfig.build.json",
+    "koan": "tsx src/cli.ts",
+    "prepack": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "yaml": "^2.8.0"
   },
   "devDependencies": {
-    "tsx": "^4.20.3"
+    "@types/node": "^22.15.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
   },
   "packageManager": "pnpm@8.15.4+sha1.c85a4305534f76d461407b59277b954bac97b5c4"
 }

@@ -48,13 +48,10 @@ if (values.help) {
 }
 if (!values.agent) usageError('--agent is required');
 
-// Two built-in fallbacks rather than one: koans/ sits beside runner/ in
-// the source tree but at the package root in a published package, so a
-// single relative path cannot serve both layouts.
 const here = path.dirname(fileURLToPath(import.meta.url));
 const candidates = values.koans
   ? [values.koans]
-  : ['koans', path.join(here, '..', '..', 'koans'), path.join(here, '..', 'koans')];
+  : ['koans', path.join(here, '..', 'koans')];
 const isDirectory = (dir: string): boolean => {
   try {
     return fs.statSync(dir).isDirectory();

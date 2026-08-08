@@ -25,6 +25,8 @@ Two comment kinds are required on top of why-not:
 ## Pull request descriptions
 
 Write for non-native English readers: short sentences, no idioms.
+Never hard-wrap lines: GitHub renders each newline in a PR body as a
+line break, so one paragraph (or list item) must be one source line.
 Structure: Overview → Problem → Solution → Verification. The overview
 opens the description: a few sentences saying what this PR does, so a
 reader can stop there. Add a "Rejected alternatives" section only when

@@ -1,0 +1,31 @@
+name: give-up-on-persistent-5xx
+description: >
+  A 5xx tool failure must reach the model as a tool error, same as a 4xx
+  (SPEC.md R3). The model may give up instead of asking for a retry;
+  unlike 003, there is no follow-up call. The agent must not retry on
+  its own (R4) — exactly one tool invocation is made, and the run still
+  completes.
+
+given:
+  task: "Get the current weather in Osaka and report it."
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Osaka" } }
+  - request: { tool: get_weather }
+    response: { status: 503, body: { error: "service_unavailable" } }
+  - request: model
+    response: "I'm sorry, the weather service for Osaka is unavailable right now."
+
+then:
+  run:
+    status: completed
+    output: { contains: "Osaka" }

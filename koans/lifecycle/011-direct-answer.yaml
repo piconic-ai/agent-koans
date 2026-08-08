@@ -1,0 +1,26 @@
+name: direct-answer
+description: >
+  Tools are offered but the model's first response is a bare text
+  answer, with no tool call. The agent must not force tool use — no
+  tool_choice coercion, no looping until a tool is called — and must
+  report the answer as soon as the model gives one.
+
+given:
+  task: "What is the capital of France?"
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+when:
+  - request: model
+    response: "The capital of France is Paris."
+
+then:
+  run:
+    status: completed
+    output: { contains: "Paris" }

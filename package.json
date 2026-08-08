@@ -4,7 +4,11 @@
   "private": true,
   "description": "A framework-agnostic conformance suite for AI agent implementations",
   "scripts": {
+    "koan": "tsx runner/src/cli.ts",
     "test": "pnpm --dir runner test"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.3"
   },
   "packageManager": "pnpm@8.15.4+sha1.c85a4305534f76d461407b59277b954bac97b5c4"
 }

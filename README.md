@@ -1,5 +1,9 @@
 # agent-koans
 
+[![npm version](https://img.shields.io/npm/v/agent-koans.svg)](https://www.npmjs.com/package/agent-koans)
+[![CI](https://github.com/piconic-ai/agent-koans/actions/workflows/ci.yml/badge.svg)](https://github.com/piconic-ai/agent-koans/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 **agent-koans** — a *koan* (公案, pronounced "KOH-ahn") is a short Zen
 question that tests true understanding — is a framework-agnostic
 conformance suite for AI agent implementations.

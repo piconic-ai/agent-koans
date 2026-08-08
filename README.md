@@ -14,7 +14,7 @@ any runtime: satisfy the contract and you pass.
 
 The contract lives in [SPEC.md](./SPEC.md).
 
-## What koans test
+## Koans and the runner
 
 A koan is a YAML file: a task, a scripted conversation, and the
 expected outcome. The simplest one,
@@ -46,31 +46,21 @@ then:
     output: { contains: "31" }
 ```
 
-The script can also set traps. In
-[003-retry-on-transient-failure.yaml](./koans/tool-reliability/003-retry-on-transient-failure.yaml)
-the tool fails once with a 503. The agent must report the error to the
-model and make the follow-up call — but must not retry on its own: the
-script allows exactly one tool request per model tool call, so a hidden
-retry loop fails the koan.
+Other koans probe the rest of the tool-calling contract: transient
+tool failures, a tool name the model typo'd, bad arguments, multi-tool
+sequences. Browse [koans/](./koans/) — each file is self-describing.
 
-```yaml
-when:
-  - request: model
-    response: { tool: get_weather, args: { city: "Tokyo" } }
-  - request: { tool: get_weather }
-    response: { status: 503, body: { error: "service_unavailable" } }
-  - request: model
-    response: { tool: get_weather, args: { city: "Tokyo" } }
-  - request: { tool: get_weather }
-    response: { status: 200, body: { temp: 31 } }
-  - request: model
-    response: "The weather in Tokyo is 31°C."
+The runner turns each file into a test. It starts your agent, plays
+the model's turns from the script, serves the tool responses, and
+checks the outcome:
+
+```ts
+import { discoverKoans, runKoan } from '@agent-koans/runner';
+
+for (const { koan } of discoverKoans('koans')) {
+  await runKoan(koan, { command: 'node dist/server.js' });
+}
 ```
-
-Other koans probe the rest of the tool-calling contract: a tool name
-the model typo'd must never reach the tool server, bad arguments must
-be rejected, multi-tool sequences must run in order. Browse
-[koans/](./koans/) — each file is self-describing.
 
 ## Quickstart
 

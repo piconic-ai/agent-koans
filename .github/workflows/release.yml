@@ -12,15 +12,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # the version branch, tags, and GitHub releases
-      pull-requests: write # the Version Packages PR
+      contents: write # the version branch, the vX.Y.Z tag, the GitHub release
+      pull-requests: write # the release PR
       # npm trusted publishing: the OIDC token replaces any npm token.
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The changesets action compares against existing tags and
-          # history; a shallow clone can misjudge both.
           fetch-depth: 0
 
       # Reads the pnpm version from the root package.json "packageManager" field
@@ -35,16 +33,17 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Run the suite before publishing
+      - name: Run the suite before any release step
         run: |
           pnpm typecheck
           pnpm test
 
-      # With pending changesets: maintains the Version Packages PR.
-      # Without (that PR just merged): publishes, tags, and creates the
-      # GitHub release.
+      # With pending changesets: maintains the release PR. Without:
+      # runs the publish script, which no-ops unless main carries an
+      # unreleased version.
       - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
         with:
-          publish: pnpm changeset publish
+          publish: bash .github/scripts/publish.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}

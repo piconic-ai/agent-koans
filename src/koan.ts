@@ -11,7 +11,7 @@ export interface ToolDef {
   input_schema: Record<string, unknown>;
 }
 
-/** A scripted tool-server response. */
+/** A scripted HTTP response of a mocked party (tool server or model API). */
 export interface ToolResponse {
   status: number;
   body?: unknown;
@@ -35,6 +35,7 @@ export interface ModelTurn {
   call_tool?: { name: string; args: Record<string, unknown> };
   invoke_args?: Record<string, unknown>;
   tool_responds?: ToolResponse;
+  fails?: ToolResponse;
 }
 
 /** A `then`-block matcher; a bare scalar means `equals`. */
@@ -77,6 +78,9 @@ function compileTrace(file: string, trace: TraceEntry[], label = 'when'): ModelT
     const res = e?.response;
     if (req === undefined || req === null) fail(file, `${at} needs "request"`);
     if (res === undefined || res === null) fail(file, `${at} needs "response"`);
+    if (turns.at(-1)?.fails) {
+      fail(file, `${at}: nothing can follow a model API failure — the agent must stop (R8)`);
+    }
 
     if (req === 'model') {
       const prev = turns.at(-1);
@@ -92,8 +96,15 @@ function compileTrace(file: string, trace: TraceEntry[], label = 'when'): ModelT
         turns.push({
           call_tool: { name: res.tool, args: res.args ?? {} },
         });
+      } else if (typeof res.status === 'number') {
+        // Only statuses the SDKs surface without retrying keep the trace
+        // deterministic: 408/429/5xx are auto-retried by common clients.
+        if (res.status < 400 || res.status >= 500 || res.status === 408 || res.status === 429) {
+          fail(file, `${at}.response.status must be a non-retryable 4xx (not 408/429) for a model API failure`);
+        }
+        turns.push({ fails: { status: res.status, body: res.body } });
       } else {
-        fail(file, `${at}.response for a model request must be a reply string or { tool, args }`);
+        fail(file, `${at}.response for a model request must be a reply string, { tool, args }, or { status }`);
       }
     } else if (typeof req === 'object' && typeof req.tool === 'string') {
       if (typeof res === 'string' || typeof res.status !== 'number') {

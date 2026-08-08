@@ -150,6 +150,17 @@ export function startMockLlm(
 
     checkCoherence(index, script, body.messages ?? [], state.violations);
 
+    if (entry.fails) {
+      // A scripted API failure is a plain JSON error even for stream
+      // requests: that is how the real endpoint rejects before streaming.
+      return respond(
+        entry.fails.status,
+        entry.fails.body ?? {
+          error: { message: 'mock LLM: scripted API failure', type: 'invalid_request_error' },
+        },
+      );
+    }
+
     let message: ChatMessage;
     let finishReason: string;
     if (entry.call_tool) {

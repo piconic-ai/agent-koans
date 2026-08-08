@@ -2,15 +2,18 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
 
 permissions: {}
 
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # the version branch, tags, and GitHub releases
+      pull-requests: write # the Version Packages PR
       # npm trusted publishing: the OIDC token replaces any npm token.
       id-token: write
     steps:
@@ -21,12 +24,10 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          # Trusted publishing needs npm >= 11.5.1; node 24 bundles it.
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
-
-      - name: Check the tag matches package.json
-        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
 
       - run: pnpm install --frozen-lockfile
 
@@ -35,7 +36,11 @@ jobs:
           pnpm typecheck
           pnpm test
 
-      # Trusted publishing needs npm >= 11.5.1; node 22 bundles npm 10.
-      - run: npm install -g npm@11
-
-      - run: npm publish
+      # With pending changesets: maintains the Version Packages PR.
+      # Without (that PR just merged): publishes, tags, and creates the
+      # GitHub release.
+      - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        with:
+          publish: pnpm changeset publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

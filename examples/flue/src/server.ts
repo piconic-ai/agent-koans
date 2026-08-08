@@ -12,7 +12,7 @@ import type { RunToolDef } from './tools.js';
 
 const config = loadConfig();
 
-// In-memory persistence; only the koan provider is registered.
+// No persistence configured: each process only needs to survive one run.
 await start({
   agents: [Assistant],
   providers: [createKoanProvider(config.model)],
@@ -32,8 +32,8 @@ function startRun(prompt: string, tools: RunToolDef[]): Run {
   runs.set(run.run_id, run);
   void (async () => {
     try {
-      // init() without an id creates a fresh conversation per run; the
-      // run's tool definitions travel as the instance's initial data.
+      // No id passed to init(): each run gets an isolated conversation,
+      // never reusing another run's state.
       const agent = init(Assistant);
       const initialData: AssistantData = { tools, toolsBaseUrl: config.tools.baseUrl };
       const receipt = await agent.dispatch({ message: prompt, initialData });

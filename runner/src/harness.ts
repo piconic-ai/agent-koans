@@ -1,8 +1,8 @@
-// Per-koan harness: start mock servers, spawn the agent under test,
-// submit the run, poll to a terminal state, then evaluate `then`.
-// Executing a koan against one agent implementation and judging it.
-// Process and mock orchestration plus pass/fail aggregation belong here;
-// what to verify is decided by the compiled koan and the mocks.
+// Runs one koan against one agent implementation: spawns the mocks,
+// starts the agent, submits the run, polls to a terminal state, then
+// judges the result against `then`. Process orchestration and pass/fail
+// aggregation belong here; what to verify is decided by the compiled
+// koan and the mocks.
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Koan, Matcher, ModelTurn } from './koan.js';
 import { startMockLlm } from './mock-llm.js';

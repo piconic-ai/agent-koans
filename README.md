@@ -67,24 +67,35 @@ FAIL  tool-reliability/003-retry-on-transient-failure
 
 ## Quickstart
 
-Your agent is an HTTP server with three endpoints; the harness starts
-it and drives it. [QUICKSTART.md](./QUICKSTART.md) shows the endpoints
-and the environment variables, then it comes down to:
+Your agent is an HTTP server; [openapi.yaml](./openapi.yaml) defines
+its three endpoints and [SPEC.md](./SPEC.md) the rules. No server yet?
+Paste this prompt into your coding agent:
 
-```sh
-AGENT_CMD="<command that starts your agent>" AGENT_CWD="<its directory>" pnpm test
+```text
+Build an HTTP server that passes the agent-koans conformance suite.
+Wire format: https://raw.githubusercontent.com/piconic-ai/agent-koans/main/openapi.yaml
+Rules: https://raw.githubusercontent.com/piconic-ai/agent-koans/main/SPEC.md
+The server reads PORT, OPENAI_BASE_URL, OPENAI_API_KEY and
+KOAN_TOOLS_URL from the environment, serves GET /health, POST /runs
+and GET /runs/{id}, and calls the model with an OpenAI-compatible
+client pointed at OPENAI_BASE_URL.
 ```
 
-Plain `pnpm test` runs the suite against everything in `examples/` —
-reference implementations of the contract, with and without an agent
-framework. Start from one of them.
+Then run the suite against the command that starts it:
+
+```sh
+npx agent-koans --agent "node dist/server.js"
+```
+
+`examples/` holds reference implementations of the contract, with and
+without an agent framework. Start from one of them, or run `pnpm test`
+in this repository to see the suite pass against all of them.
 
 ## Repository
 
 | Path        | Contents                                                    |
 | ----------- | ----------------------------------------------------------- |
 | `SPEC.md`   | The conformance contract — the real deliverable             |
-| `QUICKSTART.md` | How to connect your agent and run the suite             |
 | `openapi.yaml` | Wire format of the agent HTTP interface (OpenAPI 3.1)    |
 | `koans/`    | The tests, as declarative YAML                              |
 | `runner/`   | Mock LLM server (OpenAI-compatible), mock tool server, harness |

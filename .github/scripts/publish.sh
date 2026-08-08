@@ -17,11 +17,6 @@ if npm view "agent-koans@$version" version >/dev/null 2>&1; then
   echo "agent-koans@$version is on npm but untagged. Backfill the v$version tag by hand."
   exit 0
 fi
-if ls release-drafts/*.md >/dev/null 2>&1; then
-  echo "release-drafts/ still holds unpolished notes; refusing to publish." >&2
-  echo "Rewrite them into .changeset/*.md, delete the drafts, and merge that PR." >&2
-  exit 1
-fi
 
 npm publish
 git tag "v$version"

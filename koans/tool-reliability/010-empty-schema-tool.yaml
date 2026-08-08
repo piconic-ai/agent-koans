@@ -1,0 +1,27 @@
+name: empty-schema-tool
+description: >
+  A tool whose input_schema declares an object with no properties. The
+  agent must accept and correctly invoke it with empty arguments, not
+  reject the call as if the schema demanded something.
+
+given:
+  task: "Get the current time and report it."
+  tools:
+    get_time:
+      description: "Look up the current time"
+      input_schema:
+        type: object
+        properties: {}
+
+when:
+  - request: model
+    response: { tool: get_time, args: {} }
+  - request: { tool: get_time }
+    response: { status: 200, body: { time: "14:05" } }
+  - request: model
+    response: "The current time is 14:05."
+
+then:
+  run:
+    status: completed
+    output: { contains: "14:05" }

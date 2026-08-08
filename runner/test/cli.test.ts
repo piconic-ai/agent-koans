@@ -55,18 +55,28 @@ describe('cli', () => {
 
   it('exits 1 when a koan fails', { timeout: 120_000 }, async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-cli-'));
-    const chapter = path.join(dir, 'chapter');
-    fs.mkdirSync(chapter);
-    const source = path.join(repoRoot, 'koans/lifecycle/000-plain-completion.yaml');
-    const broken = fs
-      .readFileSync(source, 'utf8')
-      .replace(/output: .*/, 'output: { contains: "never-the-output" }');
-    expect(broken).toContain('never-the-output');
-    fs.writeFileSync(path.join(chapter, '000-broken.yaml'), broken);
+    try {
+      const chapter = path.join(dir, 'chapter');
+      fs.mkdirSync(chapter);
+      const source = path.join(repoRoot, 'koans/lifecycle/000-plain-completion.yaml');
+      const broken = fs
+        .readFileSync(source, 'utf8')
+        .replace(/output: .*/, 'output: { contains: "never-the-output" }');
+      expect(broken).toContain('never-the-output');
+      fs.writeFileSync(path.join(chapter, '000-broken.yaml'), broken);
 
-    const { code, stdout, stderr } = await runCli([...vanillaAgent, '--koans', dir]);
-    expect(code).toBe(1);
-    expect(stderr).toContain('FAIL  chapter/000-broken');
-    expect(stdout).toContain('0/1 passed');
+      const { code, stdout, stderr } = await runCli([...vanillaAgent, '--koans', dir]);
+      expect(code).toBe(1);
+      expect(stderr).toContain('FAIL  chapter/000-broken');
+      expect(stdout).toContain('0/1 passed');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('exits 2 when --koans is not a directory', async () => {
+    const { code, stderr } = await runCli([...vanillaAgent, '--koans', 'README.md']);
+    expect(code).toBe(2);
+    expect(stderr).toContain('koans directory not found');
   });
 });

@@ -55,7 +55,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const candidates = values.koans
   ? [values.koans]
   : ['koans', path.join(here, '..', '..', 'koans'), path.join(here, '..', 'koans')];
-const koansDir = candidates.find((dir) => fs.existsSync(dir));
+const isDirectory = (dir: string): boolean => {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+};
+const koansDir = candidates.find(isDirectory);
 if (koansDir === undefined) {
   usageError(`koans directory not found (tried: ${candidates.join(', ')})`);
 }

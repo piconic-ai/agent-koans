@@ -39,6 +39,8 @@ already-decided format).
 - English everywhere in the repo. SPEC.md and openapi.yaml are normative.
 - Published koans are immutable; koans and SPEC change together.
 - Every new koan must be shown falsifiable: a broken implementation (mutant) must fail it.
-- A PR that changes the published package adds a changeset
-  (`pnpm changeset`). Releases happen by merging the Version Packages
-  PR; nothing is published by hand.
+- Topic PRs carry no changesets. At release time, changesets are
+  written from what accumulated on main — one per user-visible change
+  (`pnpm changeset`) — and the Version Packages PR must consume them;
+  CI rejects a release PR that consumes none. Releases happen by
+  merging the Version Packages PR; nothing is published by hand.

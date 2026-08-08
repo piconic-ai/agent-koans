@@ -4,11 +4,11 @@
 question that tests true understanding — is a framework-agnostic
 conformance suite for AI agent implementations.
 
-When an agent fails, the cause is either the model or the code around
-it. Evals measure both at once; agent-koans isolates the code: it
-plays the model's part with a scripted mock, so a failing koan always
-means a bug in the agent implementation. Any framework, any runtime:
-satisfy the contract ([SPEC.md](./SPEC.md)) and you pass.
+When an agent fails, you cannot tell whether the model failed or your
+code did. Evals measure the two together; agent-koans isolates your
+code. A failing koan always means a bug in the agent implementation —
+never the model. Any framework, any runtime: satisfy the contract
+([SPEC.md](./SPEC.md)) and you pass.
 
 ## What is a koan
 

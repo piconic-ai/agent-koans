@@ -1,6 +1,8 @@
 # agent-koans
 
-A framework-agnostic conformance suite for AI agent implementations.
+**agent-koans** — a *koan* (公案) is a riddle used in Zen practice to
+test a student's understanding — is a framework-agnostic conformance
+suite for AI agent implementations.
 
 An agent's failure is the sum of model failure and implementation failure.
 Evals measure the sum; agent-koans isolates the latter. Each **koan** is a

@@ -1,6 +1,6 @@
 // Internal: the scripted stand-in for the OpenAI Chat Completions API,
 // and the coherence checks on what the agent sends it. Tool invocation
-// belongs to mock-tools.ts; pass/fail aggregation to harness.ts.
+// belongs to mock-tools.ts; pass/fail aggregation to runner.ts.
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Koan, ModelTurn } from './koan.js';

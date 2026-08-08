@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'vitest';
 import { discoverKoans, runKoan, type AgentConfig } from '../src/index.js';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 interface Target {
   name: string;

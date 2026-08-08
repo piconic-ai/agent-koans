@@ -7,9 +7,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const tsx = path.join(repoRoot, 'runner/node_modules/.bin/tsx');
-const cli = path.join(repoRoot, 'runner/src/cli.ts');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const tsx = path.join(repoRoot, 'node_modules/.bin/tsx');
+const cli = path.join(repoRoot, 'src/cli.ts');
 const vanillaAgent = ['--agent', 'pnpm --silent start', '--cwd', path.join(repoRoot, 'examples/vanilla-ts')];
 
 interface CliResult {

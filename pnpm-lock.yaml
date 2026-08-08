@@ -7,10 +7,23 @@ settings:
 importers:
 
   .:
+    dependencies:
+      yaml:
+        specifier: ^2.8.0
+        version: 2.9.0
     devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
       tsx:
         specifier: ^4.20.3
         version: 4.23.9
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(tsx@4.23.9)(yaml@2.9.0)
 
   examples/flue:
     dependencies:
@@ -58,24 +71,6 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
-
-  runner:
-    devDependencies:
-      '@types/node':
-        specifier: ^22.15.0
-        version: 22.20.1
-      tsx:
-        specifier: ^4.20.3
-        version: 4.23.9
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.7(@types/node@22.20.1)(tsx@4.23.9)(yaml@2.9.0)
-      yaml:
-        specifier: ^2.8.0
-        version: 2.9.0
 
 packages:
 

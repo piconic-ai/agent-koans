@@ -48,9 +48,8 @@ sequences. Browse [koans/](./koans/) — each file is self-describing.
 
 ## How to use
 
-Point the runner at the command that starts your agent. It runs every
-koan: starts the agent, plays the scripted turns, and checks the
-outcome:
+Point the runner at the command that starts your agent; it runs every
+koan:
 
 ```console
 $ npx agent-koans --agent "node dist/server.js"

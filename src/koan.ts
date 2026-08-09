@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
+import { deepEqual } from './pending.js';
 
 /** A tool definition as written in `given.tools` (JSON Schema input). */
 export interface ToolDef {
@@ -17,24 +18,50 @@ export interface ToolResponse {
   body?: unknown;
 }
 
+/**
+ * One tool-call instruction inside a model response — one entry of a
+ * `tool_calls` array. A model turn carries more than one of these when the
+ * response is written as a list (a parallel group, SPEC.md §6.1).
+ */
+export interface CallToolInstruction {
+  name: string;
+  /** The verbatim wire string served as this call's `function.arguments`. */
+  argsWire: string;
+  /**
+   * Parsed arguments, present whenever `argsWire` parses as a JSON object.
+   * Undefined for malformed args (unparseable, or parsed to a non-object
+   * like an array or a number) — fidelity is then undefined by design, so
+   * a following `request: { tool: ... }` step is a load error instead of
+   * a runtime assertion.
+   */
+  args?: Record<string, unknown>;
+  /** Declared transform from a following tool-request step's `args` (§6.3); overrides `args` for fidelity checking. */
+  invokeArgs?: Record<string, unknown>;
+  tool_responds?: ToolResponse;
+}
+
+interface RawInstruction {
+  tool?: unknown;
+  args?: unknown;
+}
+
 interface TraceEntry {
+  // A tool request's own `args` (§6.3 declared transform) is always a
+  // plain object — it names the invocation the koan expects, never a raw
+  // wire string; only a *response* instruction's `args` can be the wire
+  // string form (malformed-arguments koans, §6.1).
   request?: string | { tool?: string; args?: Record<string, unknown> };
   response?:
     | string
-    | {
-        tool?: string;
-        args?: Record<string, unknown>;
-        status?: number;
-        body?: unknown;
-      };
+    | { tool?: unknown; args?: unknown; status?: number; body?: unknown }
+    | RawInstruction[];
 }
 
 /** One compiled model turn of a trace. */
 export interface ModelTurn {
   reply?: string;
-  call_tool?: { name: string; args: Record<string, unknown> };
-  invoke_args?: Record<string, unknown>;
-  tool_responds?: ToolResponse;
+  /** This turn's tool-call instruction(s); more than one means a parallel group. */
+  call_tools?: CallToolInstruction[];
   fails?: ToolResponse;
 }
 
@@ -76,6 +103,55 @@ function fail(file: string, message: string): never {
   throw new Error(`Invalid koan ${file}: ${message}`);
 }
 
+/**
+ * Compile one `{ tool, args }` instruction's `args`. A mapping is the
+ * JSON-encoding sugar; a string is the verbatim wire string, which may or
+ * may not parse as a JSON object (malformed-arguments koans deliberately
+ * write one that does not).
+ */
+function compileArgs(file: string, at: string, raw: unknown): { argsWire: string; args?: Record<string, unknown> } {
+  if (raw === undefined) return { argsWire: '{}', args: {} };
+  if (typeof raw === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return { argsWire: raw, args: parsed as Record<string, unknown> };
+      }
+    } catch {
+      // falls through: argsWire keeps the unparseable string, args stays undefined
+    }
+    return { argsWire: raw, args: undefined };
+  }
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+    const args = raw as Record<string, unknown>;
+    return { argsWire: JSON.stringify(args), args };
+  }
+  fail(file, `${at}.args must be a mapping (JSON-encoding sugar) or a string (the verbatim wire arguments)`);
+}
+
+function compileInstruction(file: string, at: string, raw: RawInstruction): CallToolInstruction {
+  if (typeof raw?.tool !== 'string') fail(file, `${at} needs "tool"`);
+  // Checked here rather than only where the single form is compiled, so a
+  // stray key inside a parallel group's list is a load error too.
+  for (const key of Object.keys(raw)) {
+    if (key !== 'tool' && key !== 'args') {
+      fail(file, `${at} has unknown key "${key}" — a tool-call instruction carries only "tool" and "args"`);
+    }
+  }
+  const { argsWire, args } = compileArgs(file, at, raw.args);
+  return { name: raw.tool, argsWire, args };
+}
+
+// Two instructions are the same call only when their parsed args are
+// deep-equal; two malformed instructions (no parsed args) are compared by
+// their raw wire string instead, since deep equality has nothing to work
+// with. A malformed instruction is never mistaken for a parseable one.
+function sameInstruction(a: CallToolInstruction, b: CallToolInstruction): boolean {
+  if (a.name !== b.name) return false;
+  if (a.args !== undefined && b.args !== undefined) return deepEqual(a.args, b.args);
+  return a.args === undefined && b.args === undefined && a.argsWire === b.argsWire;
+}
+
 function compileTrace(file: string, trace: TraceEntry[], label = 'when'): ModelTurn[] {
   const turns: ModelTurn[] = [];
   for (const [i, e] of trace.entries()) {
@@ -90,18 +166,38 @@ function compileTrace(file: string, trace: TraceEntry[], label = 'when'): ModelT
 
     if (req === 'model') {
       const prev = turns.at(-1);
-      if (prev && !prev.call_tool) {
+      if (prev && !prev.call_tools) {
         fail(file, `${at}: a model request cannot follow a text reply (multi-turn traces are not supported yet)`);
       }
       if (typeof res === 'string') {
         turns.push({ reply: res });
+      } else if (Array.isArray(res)) {
+        // A parallel group: one assistant message, multiple tool_calls.
+        // A 1-element list is really the single form; writing it as a
+        // list would silently work but invite an inconsistent style.
+        if (res.length < 2) {
+          fail(
+            file,
+            `${at}.response is a list of ${res.length} — a parallel group needs at least two instructions; write the single "{ tool, args }" form instead`,
+          );
+        }
+        const call_tools = res.map((r, j) => compileInstruction(file, `${at}[${j}]`, r));
+        for (let a = 0; a < call_tools.length; a++) {
+          for (let b = a + 1; b < call_tools.length; b++) {
+            if (sameInstruction(call_tools[a], call_tools[b])) {
+              fail(
+                file,
+                `${at}: list members [${a}] and [${b}] both call "${call_tools[a].name}" with the same arguments — matching a following tool request against them would be ambiguous`,
+              );
+            }
+          }
+        }
+        turns.push({ call_tools });
       } else if (typeof res.tool === 'string') {
         if (res.status !== undefined) {
           fail(file, `${at}.response mixes a tool-call instruction with "status"`);
         }
-        turns.push({
-          call_tool: { name: res.tool, args: res.args ?? {} },
-        });
+        turns.push({ call_tools: [compileInstruction(file, at, res)] });
       } else if (typeof res.status === 'number') {
         // Only statuses the SDKs surface without retrying keep the trace
         // deterministic: 408/429/5xx are auto-retried by common clients.
@@ -110,26 +206,61 @@ function compileTrace(file: string, trace: TraceEntry[], label = 'when'): ModelT
         }
         turns.push({ fails: { status: res.status, body: res.body } });
       } else {
-        fail(file, `${at}.response for a model request must be a reply string, { tool, args }, or { status }`);
+        fail(
+          file,
+          `${at}.response for a model request must be a reply string, { tool, args }, a list of { tool, args }, or { status }`,
+        );
       }
     } else if (typeof req === 'object' && typeof req.tool === 'string') {
-      if (typeof res === 'string' || typeof res.status !== 'number') {
+      if (typeof res === 'string' || Array.isArray(res) || typeof res.status !== 'number') {
         fail(file, `${at}.response needs a numeric "status" for a tool request`);
       }
       const turn = turns.at(-1);
-      if (!turn?.call_tool) {
+      if (!turn?.call_tools) {
         fail(file, `${at}: a tool request must follow a model response containing a tool-call instruction`);
       }
-      if (turn.tool_responds !== undefined) {
-        fail(file, `${at}: the preceding tool-call instruction already has a tool request`);
+
+      const open = turn.call_tools.filter((m) => m.name === req.tool && m.tool_responds === undefined);
+      let member: CallToolInstruction;
+      if (open.length === 1) {
+        member = open[0];
+      } else if (open.length === 0) {
+        const named = turn.call_tools.some((m) => m.name === req.tool);
+        fail(
+          file,
+          named
+            ? `${at}: the preceding tool-call instruction for "${req.tool}" already has a tool request`
+            : `${at}.request.tool is "${req.tool}" but the preceding model response requests ${turn.call_tools.map((m) => `"${m.name}"`).join(', ')}`,
+        );
+      } else {
+        // The tool name repeats within the group: args disambiguate which
+        // instruction this step closes, since matching is unordered
+        // (SPEC.md §6.1). Duplicate name+args instructions were already
+        // rejected when the group was compiled, so at most one candidate
+        // can match.
+        if (req.args === undefined) {
+          fail(
+            file,
+            `${at}: "${req.tool}" appears more than once in the preceding group — write "args" to say which call this closes`,
+          );
+        }
+        const exact = open.filter((m) => m.args !== undefined && deepEqual(m.args, req.args));
+        if (exact.length !== 1) {
+          fail(file, `${at}: "args" does not match exactly one of the pending "${req.tool}" calls in the group`);
+        }
+        member = exact[0];
       }
-      if (turn.call_tool.name !== req.tool) {
-        fail(file, `${at}.request.tool is "${req.tool}" but the model requested "${turn.call_tool.name}"`);
+
+      if (member.args === undefined) {
+        fail(
+          file,
+          `${at}: "${req.tool}"'s arguments do not parse as a JSON object — argument fidelity is undefined, so the agent must refuse the call instead (R6); no tool request can follow it`,
+        );
       }
       // No mismatch check against the instruction's args: explicit args
       // are a declared transform (SPEC.md §6.3), not a koan bug.
-      turn.invoke_args = req.args ?? turn.call_tool.args;
-      turn.tool_responds = { status: res.status, body: res.body };
+      member.invokeArgs = req.args ?? member.args;
+      member.tool_responds = { status: res.status, body: res.body };
     } else {
       fail(file, `${at}.request must be "model" or { tool: <name> }`);
     }

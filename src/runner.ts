@@ -161,7 +161,8 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
       }
       if (pending.length > 0) {
         failures.push(
-          `tool timeline not fully consumed: ${pending.length} permitted invocation(s) never made (next: "${pending[0].name}")`,
+          `tool timeline not fully consumed: ${pending.length} permitted invocation(s) never made ` +
+            `(${pending.map((p) => `"${p.name}"`).join(', ')})`,
         );
       }
 

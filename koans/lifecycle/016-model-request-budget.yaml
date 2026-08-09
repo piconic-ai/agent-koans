@@ -1,0 +1,53 @@
+name: model-request-budget
+description: >
+  The run declares a model-request budget and the model never converges
+  within it. The agent must not exceed the budget and must end the run
+  as aborted. The tool call instructed by the last permitted response
+  may be skipped or finished — both processes stay within the budget.
+
+given:
+  task: "Get the current weather in Tokyo and report it."
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+  limits:
+    max_model_requests: 3
+
+one_of:
+  stop-before-the-last-tool:
+    - request: model
+      response: { tool: get_weather, args: { city: "Tokyo" } }
+    - request: { tool: get_weather }
+      response: { status: 200, body: { temp: 31 } }
+    - request: model
+      response: { tool: get_weather, args: { city: "Tokyo" } }
+    - request: { tool: get_weather }
+      response: { status: 200, body: { temp: 31 } }
+    - request: model
+      response: { tool: get_weather, args: { city: "Tokyo" } }
+    # budget exhausted: the result could never be reported, so the thrifty
+    # process skips the wasted invocation
+
+  finish-the-last-tool:
+    - request: model
+      response: { tool: get_weather, args: { city: "Tokyo" } }
+    - request: { tool: get_weather }
+      response: { status: 200, body: { temp: 31 } }
+    - request: model
+      response: { tool: get_weather, args: { city: "Tokyo" } }
+    - request: { tool: get_weather }
+      response: { status: 200, body: { temp: 31 } }
+    - request: model
+      response: { tool: get_weather, args: { city: "Tokyo" } }
+    - request: { tool: get_weather }
+      response: { status: 200, body: { temp: 31 } }
+    # budget exhausted: the last tool finished, but no fourth model request
+
+then:
+  run:
+    status: aborted

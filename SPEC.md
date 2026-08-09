@@ -84,7 +84,8 @@ Submits a task.
 ```
 
 `tools` MAY be empty. `input_schema` is a JSON Schema object describing the
-tool's arguments.
+tool's arguments. The body MAY also carry `limits`, per-run budgets the
+agent must honor (see R5).
 
 Response: `201` or `202` with a body containing `run_id` (string).
 
@@ -138,9 +139,18 @@ Requirements:
   call on its own. Retry decisions belong to the model: report the error
   (R3) and let the model decide. One model tool call maps to at most one
   tool server invocation.
-- **R5 — Bounded loops.** The agent MUST bound the number of model steps
-  per run and terminate the run (terminal-state guarantee) when the bound
-  is exceeded.
+- **R5 — Bounded loops.** A run MAY declare `limits.max_model_requests`:
+  the maximum number of model requests the agent may issue for that run,
+  counted as HTTP requests observed at the model endpoint. The agent MUST
+  NOT exceed a declared budget, and when the budget is exhausted before a
+  final answer it MUST end the run as `aborted`. Whether the tool calls
+  instructed by the final permitted model response are still executed is
+  implementation-defined — their results can never be reported back, so
+  executing them is permitted waste and skipping them permitted thrift;
+  koans accept both processes (§6.3). Without a declared limit the agent
+  MUST still bound the number of model requests per run; that default
+  bound's existence cannot be verified by a finite script and is not
+  tested.
 - **R8 — Model API failure.** When a model request fails with a client
   error that OpenAI-compatible SDKs surface without retrying (a 4xx other
   than 408 or 429), the agent MUST NOT re-issue the request and MUST end
@@ -214,6 +224,10 @@ then:                     # assertions on the run's outcome
 
 `given.tools` maps tool name → definition; it defaults to empty and MAY be
 omitted. The runner converts it to the wire-format list of §3.2.
+`given.limits` MAY declare the run's budgets (§3.2); it is forwarded
+verbatim in the run submission. A trace MUST NOT script more model
+requests than a declared `max_model_requests` permits — the loader
+rejects such a koan.
 
 ### 6.1 The `when` trace
 

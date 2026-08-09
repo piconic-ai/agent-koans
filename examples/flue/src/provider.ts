@@ -5,9 +5,11 @@
 // met by registering an OpenAI-compatible provider with an explicit baseUrl.
 import { createProvider } from '@earendil-works/pi-ai';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
+import { noteModelRequest } from './budget.js';
 import type { Config } from './config.js';
 
 export function createKoanProvider(model: Config['model']) {
+  const api = openAICompletionsApi();
   return createProvider({
     id: 'koan',
     name: 'agent-koans mock LLM',
@@ -31,6 +33,17 @@ export function createKoanProvider(model: Config['model']) {
         maxTokens: 8192,
       },
     ],
-    api: openAICompletionsApi(),
+    // The budget check lives on the request boundary so an over-budget
+    // request is never issued at all (SPEC.md §4 R5).
+    api: {
+      stream: (model, context, options) => {
+        noteModelRequest();
+        return api.stream(model, context, options);
+      },
+      streamSimple: (model, context, options) => {
+        noteModelRequest();
+        return api.streamSimple(model, context, options);
+      },
+    },
   });
 }

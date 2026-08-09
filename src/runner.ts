@@ -123,7 +123,8 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           task: { prompt: koan.given.task },
-            tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
+          tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
+          ...(koan.given.limits ? { limits: koan.given.limits } : {}),
         }),
       });
       if (submitRes.status !== 201 && submitRes.status !== 202) {

@@ -1,0 +1,44 @@
+name: partial-batch-failure
+description: >
+  One call of a parallel batch succeeds and the other fails. Both must be
+  closed with their own result, the failure reaching the model, and the
+  model's retry must target only the failed call.
+
+given:
+  task: "Report the current weather and local time in Tokyo."
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+    get_local_time:
+      description: "Look up the current local time for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+when:
+  - request: model
+    response:
+      - { tool: get_weather, args: { city: "Tokyo" } }
+      - { tool: get_local_time, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: { tool: get_local_time }
+    response: { status: 503, body: { error: "service_unavailable" } }
+  - request: model
+    response: { tool: get_local_time, args: { city: "Tokyo" } }
+  - request: { tool: get_local_time }
+    response: { status: 200, body: { time: "14:05" } }
+  - request: model
+    response: "It is 31°C and 14:05 in Tokyo."
+
+then:
+  run:
+    status: completed
+    output: { contains: "31" }

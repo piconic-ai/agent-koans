@@ -32,7 +32,7 @@ function runCli(args: string[], cwd: string = repoRoot): Promise<CliResult> {
 
 /** A koan file that always passes: a verbatim copy of the plain-completion koan. */
 function passingKoanYaml(): string {
-  return fs.readFileSync(path.join(repoRoot, 'koans/lifecycle/000-plain-completion.yaml'), 'utf8');
+  return fs.readFileSync(path.join(repoRoot, 'koans/000-plain-completion.yaml'), 'utf8');
 }
 
 /** A koan file that always fails: the plain-completion koan with an unreachable expected output. */
@@ -76,22 +76,20 @@ describe('cli', () => {
   });
 
   it('runs a koan against an agent and exits 0', { timeout: 120_000 }, async () => {
-    const { code, stdout } = await runCli([...vanillaAgent, '--filter', 'lifecycle/000']);
+    const { code, stdout } = await runCli([...vanillaAgent, '--filter', '000-plain-completion']);
     expect(code).toBe(0);
-    expect(stdout).toContain('ok    lifecycle/000-plain-completion');
+    expect(stdout).toContain('ok    000-plain-completion');
     expect(stdout).toContain('1/1 passed');
   });
 
   it('exits 1 when a koan fails', { timeout: 120_000 }, async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-cli-'));
     try {
-      const chapter = path.join(dir, 'chapter');
-      fs.mkdirSync(chapter);
-      fs.writeFileSync(path.join(chapter, '000-broken.yaml'), brokenKoanYaml());
+      fs.writeFileSync(path.join(dir, '000-broken.yaml'), brokenKoanYaml());
 
       const { code, stdout, stderr } = await runCli([...vanillaAgent, '--koans', dir]);
       expect(code).toBe(1);
-      expect(stderr).toContain('FAIL  chapter/000-broken');
+      expect(stderr).toContain('FAIL  000-broken');
       expect(stdout).toContain('0/1 passed');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -120,15 +118,15 @@ describe('cli custom koans and config', () => {
   it('auto-discovers agent-koans.yaml in the current directory and runs its added koans', { timeout: 120_000 }, async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-autoconfig-'));
     try {
-      const chapter = path.join(dir, 'my-koans', 'chapter');
-      fs.mkdirSync(chapter, { recursive: true });
-      fs.writeFileSync(path.join(chapter, '001-hello.yaml'), passingKoanYaml());
+      const myKoans = path.join(dir, 'my-koans');
+      fs.mkdirSync(myKoans);
+      fs.writeFileSync(path.join(myKoans, '001-hello.yaml'), passingKoanYaml());
       fs.writeFileSync(path.join(dir, 'agent-koans.yaml'), 'add:\n  - ./my-koans\n');
 
       const { code, stdout } = await runCli([...vanillaAgent, '--filter', 'hello'], dir);
       expect(code).toBe(0);
       expect(stdout).toContain('my-koans:');
-      expect(stdout).toContain('ok    my-koans/chapter/001-hello');
+      expect(stdout).toContain('ok    my-koans/001-hello');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -146,14 +144,14 @@ describe('cli custom koans and config', () => {
     async () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-skip-'));
       try {
-        const chapter = path.join(dir, 'my-koans', 'chapter');
-        fs.mkdirSync(chapter, { recursive: true });
-        fs.writeFileSync(path.join(chapter, '000-broken.yaml'), brokenKoanYaml());
-        fs.writeFileSync(path.join(chapter, '001-hello.yaml'), passingKoanYaml());
+        const myKoans = path.join(dir, 'my-koans');
+        fs.mkdirSync(myKoans);
+        fs.writeFileSync(path.join(myKoans, '000-broken.yaml'), brokenKoanYaml());
+        fs.writeFileSync(path.join(myKoans, '001-hello.yaml'), passingKoanYaml());
         const config = path.join(dir, 'my-config.yaml');
         fs.writeFileSync(
           config,
-          'add:\n  - ./my-koans\nskip:\n  my-koans/chapter/000-broken: "known broken, tracked in #123"\n',
+          'add:\n  - ./my-koans\nskip:\n  my-koans/000-broken: "known broken, tracked in #123"\n',
         );
 
         const { code, stdout } = await runCli(
@@ -161,9 +159,9 @@ describe('cli custom koans and config', () => {
           dir,
         );
         expect(code).toBe(0);
-        expect(stdout).toContain('skip  my-koans/chapter/000-broken');
+        expect(stdout).toContain('skip  my-koans/000-broken');
         expect(stdout).toContain('known broken, tracked in #123');
-        expect(stdout).toContain('ok    my-koans/chapter/001-hello');
+        expect(stdout).toContain('ok    my-koans/001-hello');
         expect(stdout).toContain('1/2 passed, 1 skipped');
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -174,7 +172,7 @@ describe('cli custom koans and config', () => {
   it('errors when skip is a bare list instead of id -> reason', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-skip-list-'));
     try {
-      fs.writeFileSync(path.join(dir, 'agent-koans.yaml'), 'skip:\n  - lifecycle/000-plain-completion\n');
+      fs.writeFileSync(path.join(dir, 'agent-koans.yaml'), 'skip:\n  - 000-plain-completion\n');
       const { code, stderr } = await runCli([...vanillaAgent], dir);
       expect(code).toBe(2);
       expect(stderr).toContain('reason');
@@ -186,7 +184,7 @@ describe('cli custom koans and config', () => {
   it('errors when a skip entry has an empty reason', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-skip-empty-'));
     try {
-      fs.writeFileSync(path.join(dir, 'agent-koans.yaml'), 'skip:\n  lifecycle/000-plain-completion: ""\n');
+      fs.writeFileSync(path.join(dir, 'agent-koans.yaml'), 'skip:\n  000-plain-completion: ""\n');
       const { code, stderr } = await runCli([...vanillaAgent], dir);
       expect(code).toBe(2);
       expect(stderr).toContain('reason');
@@ -200,11 +198,11 @@ describe('cli custom koans and config', () => {
     try {
       fs.writeFileSync(
         path.join(dir, 'agent-koans.yaml'),
-        'skip:\n  nope/999-does-not-exist: "no longer applies"\n',
+        'skip:\n  999-does-not-exist: "no longer applies"\n',
       );
       const { code, stderr } = await runCli([...vanillaAgent], dir);
       expect(code).toBe(2);
-      expect(stderr).toContain('nope/999-does-not-exist');
+      expect(stderr).toContain('999-does-not-exist');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -225,17 +223,34 @@ describe('cli custom koans and config', () => {
   it('errors when two added directories share a basename', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-dup-basename-'));
     try {
-      const chapterA = path.join(dir, 'a', 'my-koans', 'chapter');
-      const chapterB = path.join(dir, 'b', 'my-koans', 'chapter');
-      fs.mkdirSync(chapterA, { recursive: true });
-      fs.mkdirSync(chapterB, { recursive: true });
-      fs.writeFileSync(path.join(chapterA, '001-hello.yaml'), passingKoanYaml());
-      fs.writeFileSync(path.join(chapterB, '001-hello.yaml'), passingKoanYaml());
+      const myKoansA = path.join(dir, 'a', 'my-koans');
+      const myKoansB = path.join(dir, 'b', 'my-koans');
+      fs.mkdirSync(myKoansA, { recursive: true });
+      fs.mkdirSync(myKoansB, { recursive: true });
+      fs.writeFileSync(path.join(myKoansA, '001-hello.yaml'), passingKoanYaml());
+      fs.writeFileSync(path.join(myKoansB, '001-hello.yaml'), passingKoanYaml());
       fs.writeFileSync(path.join(dir, 'agent-koans.yaml'), 'add:\n  - ./a/my-koans\n  - ./b/my-koans\n');
 
       const { code, stderr } = await runCli([...vanillaAgent], dir);
       expect(code).toBe(2);
       expect(stderr).toContain('share the basename "my-koans"');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('errors, instead of silently skipping, when an `add` directory has a nested subdirectory', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-add-nested-'));
+    try {
+      const nested = path.join(dir, 'my-koans', 'billing');
+      fs.mkdirSync(nested, { recursive: true });
+      fs.writeFileSync(path.join(nested, '001-hello.yaml'), passingKoanYaml());
+      fs.writeFileSync(path.join(dir, 'agent-koans.yaml'), 'add:\n  - ./my-koans\n');
+
+      const { code, stderr } = await runCli([...vanillaAgent], dir);
+      expect(code).toBe(2);
+      expect(stderr).toContain('is a subdirectory');
+      expect(stderr).toContain(path.join('my-koans', 'billing'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -249,12 +264,12 @@ describe('cli custom koans and config', () => {
       try {
         fs.writeFileSync(
           path.join(dir, 'agent-koans.yaml'),
-          'skip:\n  lifecycle/000-plain-completion: "flaky in this environment"\n',
+          'skip:\n  000-plain-completion: "flaky in this environment"\n',
         );
 
-        const { code, stdout } = await runCli([...vanillaAgent, '--filter', 'lifecycle/000'], dir);
+        const { code, stdout } = await runCli([...vanillaAgent, '--filter', '000-plain-completion'], dir);
         expect(code).toBe(0);
-        expect(stdout).toContain('skip  lifecycle/000-plain-completion');
+        expect(stdout).toContain('skip  000-plain-completion');
         expect(stdout).toContain('flaky in this environment');
         expect(stdout).toContain('0/1 passed, 1 skipped');
       } finally {
@@ -269,9 +284,9 @@ describe('cli custom koans and config', () => {
     async () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-add-relative-'));
       try {
-        const chapter = path.join(dir, 'conf', 'my-koans', 'chapter');
-        fs.mkdirSync(chapter, { recursive: true });
-        fs.writeFileSync(path.join(chapter, '001-hello.yaml'), passingKoanYaml());
+        const myKoans = path.join(dir, 'conf', 'my-koans');
+        fs.mkdirSync(myKoans, { recursive: true });
+        fs.writeFileSync(path.join(myKoans, '001-hello.yaml'), passingKoanYaml());
         fs.writeFileSync(path.join(dir, 'conf', 'config.yaml'), 'add:\n  - ./my-koans\n');
 
         // cwd is <dir>, not <dir>/conf, and <dir> has no my-koans of its
@@ -282,7 +297,7 @@ describe('cli custom koans and config', () => {
           dir,
         );
         expect(code).toBe(0);
-        expect(stdout).toContain('ok    my-koans/chapter/001-hello');
+        expect(stdout).toContain('ok    my-koans/001-hello');
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }
@@ -310,19 +325,19 @@ describe('cli custom koans and config', () => {
       try {
         fs.writeFileSync(
           path.join(dir, 'agent-koans.yaml'),
-          'skip:\n  lifecycle/000-plain-completion: "not relevant to this run"\n',
+          'skip:\n  000-plain-completion: "not relevant to this run"\n',
         );
 
         // The stale-skip check runs against the full pre-filter set (by
         // design), so a filter that excludes the skipped koan must not
         // make the skip look stale.
         const { code, stdout, stderr } = await runCli(
-          [...vanillaAgent, '--filter', 'tool-reliability/001'],
+          [...vanillaAgent, '--filter', '001-happy-path'],
           dir,
         );
         expect(code).toBe(0);
         expect(stderr).not.toContain('matches no discovered koan');
-        expect(stdout).toContain('ok    tool-reliability/001-happy-path');
+        expect(stdout).toContain('ok    001-happy-path');
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }

@@ -51,7 +51,7 @@ const OPTIONS: Option[] = [
 
 const EXAMPLES = [
   'agent-koans --agent "node dist/server.js"',
-  'agent-koans --agent "node dist/server.js" --filter tool-reliability',
+  'agent-koans --agent "node dist/server.js" --filter arg-validation',
   'agent-koans --agent "node dist/server.js" --config ./ci/agent-koans.yaml',
 ];
 

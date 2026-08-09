@@ -18,7 +18,7 @@ runtime: satisfy the contract and you pass.
 
 A deterministic black-box test, written as YAML: a task, a scripted
 conversation, and the expected outcome. The simplest one,
-[001-happy-path.yaml](./koans/tool-reliability/001-happy-path.yaml):
+[001-happy-path.yaml](./koans/001-happy-path.yaml):
 
 ```yaml
 given:
@@ -56,9 +56,9 @@ Test whether your agent satisfies every koan:
 
 ```console
 $ npx agent-koans --agent "node dist/server.js"
-ok    lifecycle/000-plain-completion
-ok    tool-reliability/001-happy-path
-FAIL  tool-reliability/003-retry-on-transient-failure
+ok    000-plain-completion
+ok    001-happy-path
+FAIL  003-retry-on-transient-failure
       unexpected invocation of tool "get_weather": the timeline
       permits no tool call here
 ...
@@ -93,16 +93,16 @@ CLI — it is picked up automatically, or pointed at with `--config`:
 ```yaml
 skip:
   # koan id -> reason; a reason is required, so a skip never rots silently
-  tool-reliability/009-scalar-mismatch: "pi-ai coerces scalars before validation (upstream #12)"
+  009-scalar-mismatch: "pi-ai coerces scalars before validation (upstream #12)"
 add:
   - ./my-koans
 ```
 
 Added koans get ids prefixed by their directory's basename (e.g.
-`my-koans/billing/001-refund-idempotency`), so they can never collide
-with the bundled suite, and the summary reports them separately — a
-conformance claim against the published suite always stays distinct
-from your own koans.
+`my-koans/001-refund-idempotency`), so they can never collide with the
+bundled suite, and the summary reports them separately — a conformance
+claim against the published suite always stays distinct from your own
+koans.
 
 ## Repository
 

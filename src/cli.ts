@@ -100,7 +100,12 @@ interface Group {
 const groups: Group[] = [];
 const allIds = new Set<string>();
 
-const bundled = discoverKoans(koansDir);
+let bundled: DiscoveredKoan[];
+try {
+  bundled = discoverKoans(koansDir);
+} catch (e) {
+  usageError((e as Error).message);
+}
 for (const { id } of bundled) allIds.add(id);
 groups.push({ name: '', koans: bundled });
 
@@ -117,7 +122,12 @@ for (const dir of config.add) {
   }
   seenBasenames.add(basename);
 
-  const discovered = discoverKoans(dir).map((k) => ({ ...k, id: `${basename}/${k.id}` }));
+  let discovered: DiscoveredKoan[];
+  try {
+    discovered = discoverKoans(dir).map((k) => ({ ...k, id: `${basename}/${k.id}` }));
+  } catch (e) {
+    usageError((e as Error).message);
+  }
   if (discovered.length === 0) usageError(`${configPath}: no koans in ${dir}`);
   for (const { id } of discovered) {
     if (allIds.has(id)) usageError(`koan id "${id}" collides with an already discovered koan`);

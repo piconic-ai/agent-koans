@@ -27,7 +27,8 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function getFreePort(): Promise<number> {
+/** Find a free loopback port to start an agent on. */
+export async function getFreePort(): Promise<number> {
   const { createServer } = await import('node:net');
   return new Promise((resolve, reject) => {
     const srv = createServer();

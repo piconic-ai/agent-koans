@@ -107,8 +107,10 @@ describe('cli', () => {
   it('diagnoses a broken --agent before running any koan', { timeout: 60_000 }, async () => {
     const { code, stdout, stderr } = await runCli(['--agent', 'node no-such-server.js']);
     expect(code).toBe(2);
-    expect(stderr).toContain('preflight failed');
+    expect(stderr).toContain('--agent "node no-such-server.js" did not start a working agent');
     expect(stderr).toContain('Cannot find module');
+    // The internal mechanism's name is not the user's vocabulary.
+    expect(stderr).not.toContain('preflight');
     expect(stdout).not.toContain('ok    ');
     expect(stderr).not.toContain('FAIL  ');
   });

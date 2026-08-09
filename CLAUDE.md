@@ -42,7 +42,10 @@ already-decided format).
 - One changeset (`pnpm changeset`) per user-visible change, written as
   final copy — it becomes the CHANGELOG entry verbatim. In a stack it
   rides the first or last PR; the stack's other PRs carry none.
-  Invisible changes (docs, tooling, refactors) need none. While
-  changesets exist on main, the changesets action keeps a release PR
-  open; merging it publishes to npm, tags vX.Y.Z, and creates the
-  GitHub release. Nothing is released by hand.
+  Invisible changes (docs, tooling, refactors) need none. CI requires
+  a changeset on any PR touching src/, koans/, SPEC.md, openapi.yaml,
+  or package.json; the skip-changeset label is the deliberate opt-out
+  for stack-intermediate PRs and invisible changes. While changesets
+  exist on main, the changesets action keeps a release PR open;
+  merging it publishes to npm, tags vX.Y.Z, and creates the GitHub
+  release. Nothing is released by hand.

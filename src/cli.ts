@@ -149,8 +149,7 @@ if (problem !== null) {
   console.error(`--agent "${values.agent}" did not start a working agent.`);
   console.error(problem.split('\n').map((line) => `  ${line}`).join('\n'));
   console.error('');
-  console.error('--agent must start an HTTP server that reads PORT from the');
-  console.error('environment and answers GET /health with 200 (openapi.yaml).');
+  console.error('See openapi.yaml for the HTTP interface --agent must implement.');
   process.exit(2);
 }
 

@@ -71,6 +71,29 @@ paths:
         "404":
           description: Unknown `run_id`.
 
+  /runs/{run_id}/abort:
+    post:
+      operationId: abortRun
+      summary: Request cancellation of a run
+      description: >
+        A run still in progress MUST then reach the terminal state
+        `aborted` in finite time. A run that has already reached a
+        terminal state MUST keep it — a late abort never rewrites a
+        committed result. Repeated aborts are idempotent (SPEC.md §3).
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Abort accepted.
+        "200":
+          description: Abort accepted. Equivalent to 202.
+        "404":
+          description: Unknown `run_id`.
+
 components:
   schemas:
     RunRequest:

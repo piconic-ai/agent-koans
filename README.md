@@ -66,7 +66,7 @@ FAIL  003-retry-on-transient-failure
 ```
 
 To run the suite, your agent needs to be an HTTP server:
-[openapi.yaml](./openapi.yaml) defines the three endpoints and
+[openapi.yaml](./openapi.yaml) defines the four endpoints and
 [SPEC.md](./SPEC.md) the rules. No server yet? Paste this prompt into
 your coding agent:
 
@@ -75,9 +75,9 @@ Build an HTTP server that passes the agent-koans conformance suite.
 Wire format: https://raw.githubusercontent.com/piconic-ai/agent-koans/main/openapi.yaml
 Rules: https://raw.githubusercontent.com/piconic-ai/agent-koans/main/SPEC.md
 The server reads PORT, OPENAI_BASE_URL, OPENAI_API_KEY and
-KOAN_TOOLS_URL from the environment, serves GET /health, POST /runs
-and GET /runs/{id}, and calls the model with an OpenAI-compatible
-client pointed at OPENAI_BASE_URL.
+KOAN_TOOLS_URL from the environment, serves GET /health, POST /runs,
+GET /runs/{id} and POST /runs/{id}/abort, and calls the model with an
+OpenAI-compatible client pointed at OPENAI_BASE_URL.
 ```
 
 `examples/` holds reference implementations of the contract, with and

@@ -1,0 +1,17 @@
+name: late-abort
+description: >
+  An abort that arrives after the run has settled must not rewrite the
+  committed result.
+
+given:
+  task: "Say hello."
+
+when:
+  - request: model
+    response: "Hello!"
+  - abort
+
+then:
+  run:
+    status: completed
+    output: { contains: "Hello" }

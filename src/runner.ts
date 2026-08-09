@@ -136,7 +136,30 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
         throw new Error('POST /runs response is missing "run_id"');
       }
 
+      const abortKind = script.at(-1)?.abort;
       const deadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
+
+      if (abortKind === 'live') {
+        // Fire the abort exactly when the trace says the caller does: as
+        // soon as every step before it has been observed on the wire. A
+        // request that then races ahead of the abort landing is parked by
+        // the mock (mock-llm.ts), not rejected here — so whichever one
+        // wins, the run has nothing left to do but settle aborted.
+        while (!(llm.state.requests.length >= script.length && pending.length === 0)) {
+          if (Date.now() > deadline) {
+            throw new Error(
+              `abort trace's pre-abort steps were not fully observed within ${agent.runTimeoutMs ?? 15_000}ms: ` +
+                `${llm.state.requests.length}/${script.length} model requests served, ${pending.length} tool call(s) still unresolved`,
+            );
+          }
+          await sleep(100);
+        }
+        const abortRes = await fetch(`${base}/runs/${runId}/abort`, { method: 'POST' });
+        if (abortRes.status !== 202 && abortRes.status !== 200) {
+          throw new Error(`POST /runs/${runId}/abort returned ${abortRes.status}, expected 202 or 200`);
+        }
+      }
+
       let run: { status?: string; output?: string; error?: string } = {};
       for (;;) {
         const res = await fetch(`${base}/runs/${runId}`);
@@ -149,6 +172,19 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
           );
         }
         await sleep(100);
+      }
+
+      if (abortKind === 'late') {
+        // The run already settled on its own; a late abort must be a
+        // no-op, so `then` is judged against the state after it, not the
+        // pre-abort state read above.
+        const abortRes = await fetch(`${base}/runs/${runId}/abort`, { method: 'POST' });
+        if (abortRes.status !== 202 && abortRes.status !== 200) {
+          throw new Error(`POST /runs/${runId}/abort returned ${abortRes.status}, expected 202 or 200`);
+        }
+        const res = await fetch(`${base}/runs/${runId}`);
+        if (!res.ok) throw new Error(`GET /runs/${runId} returned ${res.status}`);
+        run = (await res.json()) as typeof run;
       }
 
       failures.push(...llm.state.violations, ...tools.state.violations);

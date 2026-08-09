@@ -71,11 +71,19 @@ function validateArgs(args: Record<string, unknown>, schema: ToolDef['input_sche
 
 export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) {
   const runs = new Map<string, Run>();
+  // One AbortController per in-flight run, so abortRun can cancel exactly
+  // that run's outstanding fetch without touching any other run sharing
+  // this process.
+  const controllers = new Map<string, AbortController>();
 
   function startRun(prompt: string, tools: ToolDef[], limits?: RunLimits): Run {
     const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
     runs.set(run.run_id, run);
-    void executeRun(run, prompt, tools, limits);
+    const controller = new AbortController();
+    controllers.set(run.run_id, controller);
+    void executeRun(run, prompt, tools, limits, controller.signal).finally(() => {
+      controllers.delete(run.run_id);
+    });
     return run;
   }
 
@@ -83,13 +91,40 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
     return runs.get(runId);
   }
 
-  async function executeRun(run: Run, prompt: string, tools: ToolDef[], limits?: RunLimits): Promise<void> {
+  /**
+   * Request cancellation of a run (SPEC.md §3 abort guarantee). Returns
+   * `false` when `runId` is unknown, so the caller can answer 404;
+   * otherwise always `true`, including for a run already in a terminal
+   * state — the abort is then a no-op, since a committed result must
+   * never be rewritten.
+   */
+  function abortRun(runId: string): boolean {
+    const run = runs.get(runId);
+    if (!run) return false;
+    if (run.status === 'running') {
+      // Set before firing the signal: the in-flight fetch's rejection
+      // races this assignment otherwise, and the catch below must see
+      // "aborted" already committed rather than overwrite it as failed.
+      run.status = 'aborted';
+      run.error = 'aborted by caller';
+      controllers.get(runId)?.abort();
+    }
+    return true;
+  }
+
+  async function executeRun(
+    run: Run,
+    prompt: string,
+    tools: ToolDef[],
+    limits: RunLimits | undefined,
+    signal: AbortSignal,
+  ): Promise<void> {
     try {
       const budget = Math.min(MAX_STEPS, limits?.max_model_requests ?? MAX_STEPS);
       const messages: ChatMessage[] = [{ role: 'user', content: prompt }];
 
       for (let request = 1; request <= budget; request++) {
-        const message = await callModel(messages, tools);
+        const message = await callModel(messages, tools, signal);
 
         if (message.tool_calls && message.tool_calls.length > 0) {
           // Thrifty on the last permitted request: a result obtained now
@@ -97,7 +132,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
           if (request === budget) break;
           messages.push(message);
           for (const call of message.tool_calls) {
-            const content = await executeToolCall(call, tools);
+            const content = await executeToolCall(call, tools, signal);
             messages.push({ role: 'tool', tool_call_id: call.id, content });
           }
           continue;
@@ -111,13 +146,17 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
       run.status = 'aborted';
       run.error = `model-request budget exhausted (${budget})`;
     } catch (err) {
-      // Terminal-state guarantee: errors end the run, they never strand it.
+      // Terminal-state guarantee: errors end the run, they never strand
+      // it. A cancellation already committed "aborted" in abortRun before
+      // firing the signal that made this fetch reject — that commitment
+      // must win, not the AbortError this catch would otherwise report.
+      if (run.status === 'aborted') return;
       run.status = 'failed';
       run.error = err instanceof Error ? err.message : String(err);
     }
   }
 
-  async function executeToolCall(call: ToolCall, tools: ToolDef[]): Promise<string> {
+  async function executeToolCall(call: ToolCall, tools: ToolDef[], signal: AbortSignal): Promise<string> {
     const def = tools.find((t) => t.name === call.function.name);
     if (!def) {
       return `Error: unknown tool "${call.function.name}"`;
@@ -139,6 +178,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(args),
+      signal,
     });
     const body = await res.text();
     if (!res.ok) {
@@ -147,7 +187,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
     return body;
   }
 
-  async function callModel(messages: ChatMessage[], tools: ToolDef[]): Promise<ChatMessage> {
+  async function callModel(messages: ChatMessage[], tools: ToolDef[], signal: AbortSignal): Promise<ChatMessage> {
     const res = await fetch(`${config.model.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -166,6 +206,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
             }
           : {}),
       }),
+      signal,
     });
     if (!res.ok) {
       throw new Error(`model call failed with status ${res.status}: ${await res.text()}`);
@@ -174,5 +215,5 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
     return data.choices[0].message;
   }
 
-  return { startRun, getRun };
+  return { startRun, getRun, abortRun };
 }

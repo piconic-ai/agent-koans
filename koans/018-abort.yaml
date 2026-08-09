@@ -1,0 +1,26 @@
+name: abort
+description: >
+  The caller aborts a run in progress. The agent must stop asking the
+  world for anything and settle the run as aborted.
+
+given:
+  task: "Get the current weather in Tokyo and report it."
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - abort
+
+then:
+  run:
+    status: aborted

@@ -57,12 +57,23 @@ interface TraceEntry {
     | RawInstruction[];
 }
 
+// A trace step is normally a { request, response } exchange; the bare
+// string "abort" is the one exception (SPEC.md §6.1).
+type RawTraceStep = 'abort' | TraceEntry;
+
 /** One compiled model turn of a trace. */
 export interface ModelTurn {
   reply?: string;
   /** This turn's tool-call instruction(s); more than one means a parallel group. */
   call_tools?: CallToolInstruction[];
   fails?: ToolResponse;
+  /**
+   * Set when this is the trace's last turn and it is followed by the
+   * `abort` step (SPEC.md §6.1): `'live'` when this turn is a tool-call
+   * instruction (the run is still in progress when the caller aborts),
+   * `'late'` when it is a text reply (the run had already settled).
+   */
+  abort?: 'live' | 'late';
 }
 
 /** A `then`-block matcher; a bare scalar means `equals`. */
@@ -152,17 +163,34 @@ function sameInstruction(a: CallToolInstruction, b: CallToolInstruction): boolea
   return a.args === undefined && b.args === undefined && a.argsWire === b.argsWire;
 }
 
-function compileTrace(file: string, trace: TraceEntry[], label = 'when'): ModelTurn[] {
+function compileTrace(file: string, trace: RawTraceStep[], label = 'when'): ModelTurn[] {
   const turns: ModelTurn[] = [];
-  for (const [i, e] of trace.entries()) {
+  for (const [i, raw] of trace.entries()) {
     const at = `${label}[${i}]`;
+    if (turns.at(-1)?.fails) {
+      fail(file, `${at}: nothing can follow a model API failure — the agent must stop (R8)`);
+    }
+    // Checked the same way as the R8 rule above: once the previous turn
+    // carries an abort marker, any further entry — including a second
+    // "abort" — is past the trace's end (SPEC.md §6.1).
+    if (turns.at(-1)?.abort) {
+      fail(file, `${at}: nothing can follow "abort" — it must be the trace's last step`);
+    }
+
+    if (raw === 'abort') {
+      const last = turns.at(-1);
+      if (!last) {
+        fail(file, `${at}: "abort" needs at least one exchange before it in the trace`);
+      }
+      last.abort = last.call_tools ? 'live' : 'late';
+      continue;
+    }
+
+    const e = raw;
     const req = e?.request;
     const res = e?.response;
     if (req === undefined || req === null) fail(file, `${at} needs "request"`);
     if (res === undefined || res === null) fail(file, `${at} needs "response"`);
-    if (turns.at(-1)?.fails) {
-      fail(file, `${at}: nothing can follow a model API failure — the agent must stop (R8)`);
-    }
 
     if (req === 'model') {
       const prev = turns.at(-1);
@@ -312,7 +340,7 @@ export function loadKoan(file: string): Koan {
     if (!Array.isArray(raw.when) || raw.when.length === 0) {
       fail(file, '"when" must be a non-empty list of trace steps');
     }
-    traces = { '': compileTrace(file, raw.when as TraceEntry[]) };
+    traces = { '': compileTrace(file, raw.when as RawTraceStep[]) };
   } else {
     const oneOf = raw.one_of as Record<string, unknown>;
     if (typeof oneOf !== 'object' || oneOf === null || Array.isArray(oneOf)) {
@@ -327,7 +355,7 @@ export function loadKoan(file: string): Koan {
       if (!Array.isArray(trace) || trace.length === 0) {
         fail(file, `"one_of.${variant}" must be a non-empty list of trace steps`);
       }
-      traces[variant] = compileTrace(file, trace as TraceEntry[], `one_of.${variant}`);
+      traces[variant] = compileTrace(file, trace as RawTraceStep[], `one_of.${variant}`);
     }
   }
 

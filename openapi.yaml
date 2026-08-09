@@ -89,6 +89,17 @@ components:
           default: []
           items:
             $ref: "#/components/schemas/ToolDef"
+        limits:
+          type: object
+          description: Optional per-run budgets the agent must honor (SPEC.md §4 R5).
+          properties:
+            max_model_requests:
+              type: integer
+              minimum: 1
+              description: >-
+                Maximum number of model requests the agent may issue for
+                this run. Exhausting the budget before a final answer must
+                end the run as `aborted`.
 
     ToolDef:
       type: object

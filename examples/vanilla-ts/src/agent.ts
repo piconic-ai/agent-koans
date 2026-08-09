@@ -44,6 +44,10 @@ interface ToolCall {
   function: { name: string; arguments: string };
 }
 
+export interface RunLimits {
+  max_model_requests?: number;
+}
+
 const MAX_STEPS = 16;
 
 function jsonType(value: unknown): string {
@@ -68,10 +72,10 @@ function validateArgs(args: Record<string, unknown>, schema: ToolDef['input_sche
 export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) {
   const runs = new Map<string, Run>();
 
-  function startRun(prompt: string, tools: ToolDef[]): Run {
+  function startRun(prompt: string, tools: ToolDef[], limits?: RunLimits): Run {
     const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
     runs.set(run.run_id, run);
-    void executeRun(run, prompt, tools);
+    void executeRun(run, prompt, tools, limits);
     return run;
   }
 
@@ -79,14 +83,18 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
     return runs.get(runId);
   }
 
-  async function executeRun(run: Run, prompt: string, tools: ToolDef[]): Promise<void> {
+  async function executeRun(run: Run, prompt: string, tools: ToolDef[], limits?: RunLimits): Promise<void> {
     try {
+      const budget = Math.min(MAX_STEPS, limits?.max_model_requests ?? MAX_STEPS);
       const messages: ChatMessage[] = [{ role: 'user', content: prompt }];
 
-      for (let step = 0; step < MAX_STEPS; step++) {
+      for (let request = 1; request <= budget; request++) {
         const message = await callModel(messages, tools);
 
         if (message.tool_calls && message.tool_calls.length > 0) {
+          // Thrifty on the last permitted request: a result obtained now
+          // could never be reported back, so the invocation is skipped.
+          if (request === budget) break;
           messages.push(message);
           for (const call of message.tool_calls) {
             const content = await executeToolCall(call, tools);
@@ -101,7 +109,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig }) 
       }
 
       run.status = 'aborted';
-      run.error = `exceeded ${MAX_STEPS} model steps`;
+      run.error = `model-request budget exhausted (${budget})`;
     } catch (err) {
       // Terminal-state guarantee: errors end the run, they never strand it.
       run.status = 'failed';

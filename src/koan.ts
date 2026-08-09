@@ -45,6 +45,11 @@ export type Matcher =
   | boolean
   | { equals?: unknown; contains?: string; matches?: string };
 
+/** Optional per-run budgets, forwarded verbatim to the run submission. */
+export interface RunLimits {
+  max_model_requests?: number;
+}
+
 /** A compiled koan: shared `given`/`then` plus one or more trace variants. */
 export interface Koan {
   name: string;
@@ -52,6 +57,7 @@ export interface Koan {
   given: {
     task: string;
     tools: Record<string, ToolDef>;
+    limits?: RunLimits;
   };
   traces: Record<string, ModelTurn[]>;
   then: {
@@ -137,7 +143,7 @@ export function loadKoan(file: string): Koan {
   const raw = parse(fs.readFileSync(file, 'utf8')) as {
     name?: unknown;
     description?: string;
-    given?: { task?: unknown; tools?: unknown };
+    given?: { task?: unknown; tools?: unknown; limits?: unknown };
     when?: unknown;
     one_of?: unknown;
     then?: Koan['then'];
@@ -148,6 +154,22 @@ export function loadKoan(file: string): Koan {
   const tools = (raw.given.tools ?? {}) as Record<string, ToolDef>;
   if (typeof tools !== 'object' || Array.isArray(tools)) {
     fail(file, '"given.tools" must be a mapping of tool name to definition');
+  }
+
+  let limits: RunLimits | undefined;
+  if (raw.given.limits !== undefined) {
+    const rawLimits = raw.given.limits as Record<string, unknown>;
+    if (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits)) {
+      fail(file, '"given.limits" must be a mapping');
+    }
+    for (const key of Object.keys(rawLimits)) {
+      if (key !== 'max_model_requests') fail(file, `"given.limits" has unknown key "${key}"`);
+    }
+    const max = rawLimits.max_model_requests;
+    if (!Number.isInteger(max) || (max as number) < 1) {
+      fail(file, '"given.limits.max_model_requests" must be a positive integer');
+    }
+    limits = { max_model_requests: max as number };
   }
 
   if ((raw.when === undefined) === (raw.one_of === undefined)) {
@@ -178,10 +200,19 @@ export function loadKoan(file: string): Koan {
     }
   }
 
+  if (limits?.max_model_requests !== undefined) {
+    for (const [variant, turns] of Object.entries(traces)) {
+      if (turns.length > limits.max_model_requests) {
+        const at = variant ? `one_of.${variant}` : 'when';
+        fail(file, `${at} scripts ${turns.length} model requests, more than given.limits.max_model_requests (${limits.max_model_requests}) permits`);
+      }
+    }
+  }
+
   return {
     name: raw.name,
     description: raw.description,
-    given: { task: raw.given.task, tools },
+    given: { task: raw.given.task, tools, limits },
     traces,
     then: raw.then ?? {},
   };

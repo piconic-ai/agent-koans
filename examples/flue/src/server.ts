@@ -6,9 +6,14 @@ import { Hono } from 'hono';
 import { AgentRunError, init } from '@flue/runtime';
 import { start } from '@flue/runtime/node';
 import { Assistant, type AssistantData } from './agents/assistant.js';
+import { armBudget, budgetTripped } from './budget.js';
 import { loadConfig } from './config.js';
 import { createKoanProvider } from './provider.js';
 import type { RunToolDef } from './tools.js';
+
+interface RunLimits {
+  max_model_requests?: number;
+}
 
 const config = loadConfig();
 
@@ -27,9 +32,10 @@ interface Run {
 
 const runs = new Map<string, Run>();
 
-function startRun(prompt: string, tools: RunToolDef[]): Run {
+function startRun(prompt: string, tools: RunToolDef[], limits?: RunLimits): Run {
   const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
   runs.set(run.run_id, run);
+  armBudget(limits?.max_model_requests);
   void (async () => {
     try {
       // No id passed to init(): each run gets an isolated conversation,
@@ -42,7 +48,12 @@ function startRun(prompt: string, tools: RunToolDef[]): Run {
       run.output = reply.text;
     } catch (err) {
       // Terminal-state guarantee: errors end the run, they never strand it.
-      run.status = err instanceof AgentRunError ? err.outcome : 'failed';
+      // A budget stop is this agent giving up, not an error: aborted.
+      run.status = budgetTripped()
+        ? 'aborted'
+        : err instanceof AgentRunError
+          ? err.outcome
+          : 'failed';
       run.error = err instanceof Error ? err.message : String(err);
     }
   })();
@@ -55,14 +66,14 @@ app.get('/health', (c) => c.json({ status: 'ok' }));
 
 app.post('/runs', async (c) => {
   const body = await c.req
-    .json<{ task?: { prompt?: string }; tools?: RunToolDef[] }>()
+    .json<{ task?: { prompt?: string }; tools?: RunToolDef[]; limits?: RunLimits }>()
     .catch(() => null);
   const prompt = body?.task?.prompt;
   if (typeof prompt !== 'string') {
     return c.json({ error: 'task.prompt is required' }, 400);
   }
   // The run executes asynchronously; the caller polls GET /runs/{id}.
-  const run = startRun(prompt, body?.tools ?? []);
+  const run = startRun(prompt, body?.tools ?? [], body?.limits);
   return c.json({ run_id: run.run_id }, 202);
 });
 

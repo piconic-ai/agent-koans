@@ -1,0 +1,32 @@
+name: malformed-arguments
+description: >
+  The model emits a tool call whose arguments are not valid JSON. The
+  call must never reach the tool server; reported back, the model
+  corrects itself.
+
+given:
+  task: "Get the current weather in Tokyo and report it."
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+when:
+  - request: model
+    response: { tool: get_weather, args: '{"city": "Tok' }
+  # no tool request here: unparseable arguments must never reach the tool server
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: model
+    response: "The weather in Tokyo is 31°C."
+
+then:
+  run:
+    status: completed
+    output: { contains: "31" }

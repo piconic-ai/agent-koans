@@ -177,7 +177,8 @@ made available to the model as the tool result content.
   validate the arguments against the tool's `input_schema` — at minimum
   `required` properties and primitive types of declared properties. If
   validation fails, the tool server MUST NOT be called; report the failure
-  to the model per R3.
+  to the model per R3. Tool-call arguments that do not parse as a JSON
+  object MUST NOT reach the tool server either; report per R3.
 - **R7 — Unknown tools.** A model tool call naming a tool that was not in
   the run's `tools` MUST NOT reach the tool server; report per R3.
 
@@ -243,14 +244,19 @@ scripted response. Requests take two forms:
   written to declare the expected invocation arguments when the trace
   legitimately transforms them (see §6.3); omitted, argument fidelity
   applies — the invocation must carry the instruction's args verbatim.
+  When the preceding response is a parallel group (below), a tool request
+  is matched against the group's instructions by tool name, and by `args`
+  when the name repeats within the group, not by the position it is
+  written in.
 
 Responses discriminate by form:
 
-| Form                     | Meaning                                    |
-| ------------------------ | ------------------------------------------ |
-| bare string              | The model's text reply                     |
-| `{ tool: <name>, args }` | The model's tool-call instruction          |
-| `{ status, body }`       | The called party's HTTP response           |
+| Form                      | Meaning                                              |
+| ------------------------- | ----------------------------------------------------- |
+| bare string               | The model's text reply                                |
+| `{ tool: <name>, args }`  | The model's tool-call instruction                     |
+| list of `{ tool, args }`  | A parallel group: one assistant message, multiple tool_calls |
+| `{ status, body }`        | The called party's HTTP response                      |
 
 A `{ status }` response to `request: model` scripts a **model API
 failure**. Its `status` MUST be a 4xx other than 408 or 429: those two
@@ -259,6 +265,35 @@ nondeterministic — 401 is the canonical choice. `body` MAY be omitted;
 the mock then serves an OpenAI-style error envelope, since its content
 is not part of the contract (R8). Such a step MUST be the last one:
 after a non-retryable API failure the agent contacts no one.
+
+A tool-call instruction's `args` is normally a mapping — JSON-encoding
+sugar for the wire `function.arguments` string, which the mock builds by
+`JSON.stringify`-ing it. `args` MAY instead be a string: the verbatim
+wire string the mock serves as `function.arguments`, unencoded. This is
+how a koan scripts malformed arguments. If the string parses as a JSON
+object, argument fidelity applies to the parsed object, exactly as for
+the mapping form. If it does not parse as a JSON object — unparseable,
+or parsed to a non-object like an array or a number — a following
+`request: { tool: ... }` step is a load error: argument fidelity is
+undefined for arguments that do not parse as a JSON object, so the agent
+MUST refuse the call instead (R6). The refusal path is the existing one:
+an instruction with no following tool request.
+
+`response` on a `request: model` step MAY also be a list of
+`{ tool, args }` instructions instead of one: a single assistant message
+carrying multiple `tool_calls` (a **parallel group**). A 1-element list
+is a load error — write the single form. Two list members naming the
+same tool with deep-equal args are a load error too, since a following
+tool request could not tell them apart. The `request: { tool: ... }`
+steps that close a group are matched against it unordered, as stated
+above; nothing in the YAML spells out the unorderedness, it is derived
+from the group having more than one member. A group member with no
+matching tool-request step follows the ordinary absence rule (below): it
+MUST NOT be invoked. The agent MAY execute a group's invocations
+sequentially or concurrently, in any order — the contract is
+completeness (every member closed, R2) and exactly-once delivery per
+member (R4), not concurrency, so an implementation that serializes a
+parallel group conforms exactly as well as one that runs it concurrently.
 
 **Conversation coherence.** For every model request, what the incoming
 conversation must show is fully determined by the trace before it:
@@ -337,7 +372,7 @@ against that variant's script, and the implementation conforms if at
 least one run passes. A single run exhibits exactly one of the processes
 — hence `one_of`. Composition order is fixed: `one_of` composes whole
 traces (OR, outside); the structure inside a trace is reserved for the
-interaction shape itself (e.g. future concurrent conversation logs).
+interaction shape itself (e.g. the parallel tool-call group of §6.1).
 
 ## 7. Versioning
 

@@ -19,6 +19,20 @@ interface MockTools {
   close(): Promise<void>;
 }
 
+// Matches an incoming invocation against the pending set by name — and by
+// args when the name repeats, which only happens inside one parallel
+// group, since a group with two same-name-same-args members is already a
+// load error (koan.ts). FIFO order is deliberately not asserted: SPEC.md
+// §6.1 lets the agent execute a group's invocations in any order,
+// sequentially or concurrently, so the contract is completeness, not
+// arrival order. Everything else about the queue — one entry consumed per
+// invocation, extras and unknowns rejected — stays as strict as before.
+function takeMatch(pending: PendingInvocation[], name: string, args: unknown): PendingInvocation | undefined {
+  const exact = pending.findIndex((p) => p.name === name && deepEqual(p.args, args));
+  const idx = exact !== -1 ? exact : pending.findIndex((p) => p.name === name);
+  return idx === -1 ? undefined : pending.splice(idx, 1)[0];
+}
+
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -55,18 +69,14 @@ export function startMockTools(pending: PendingInvocation[]): Promise<MockTools>
 
     state.calls.push({ name, args });
 
-    const expected = pending.shift();
+    const expected = takeMatch(pending, name, args);
     if (!expected) {
       state.violations.push(
-        `unexpected invocation of tool "${name}": the timeline permits no tool call here`,
+        pending.length === 0
+          ? `unexpected invocation of tool "${name}": the timeline permits no tool call here`
+          : `unexpected invocation of tool "${name}": the timeline permits only ${pending.map((p) => `"${p.name}"`).join(', ')} here`,
       );
       return respond(500, { error: 'mock tools: no invocation permitted' });
-    }
-    if (expected.name !== name) {
-      state.violations.push(
-        `expected invocation of tool "${expected.name}" but got "${name}"`,
-      );
-      return respond(500, { error: `mock tools: expected "${expected.name}"` });
     }
     if (!deepEqual(args, expected.args)) {
       state.violations.push(

@@ -108,7 +108,20 @@ Response: `201` or `202` with a body containing `run_id` (string).
 finite time — regardless of tool failures, model misbehavior, or internal
 errors. A run that stays `running` past the runner timeout fails the koan.
 
+**Abort guarantee.** A run still in progress MUST then reach the terminal
+state `aborted` in finite time. A run that has already reached a terminal
+state MUST keep it: a late abort never rewrites a committed result.
+Repeated aborts are idempotent.
+
 Unknown `run_id` SHOULD return `404`.
+
+### 3.4 `POST /runs/{run_id}/abort`
+
+Requests cancellation of a run.
+
+Response: `202` (`200` also acceptable) with any body. Unknown `run_id`
+SHOULD return `404`. See the abort guarantee above for what the run's
+state must do afterward, and §6.1 for how a koan trace scripts an abort.
 
 ## 4. Model interaction
 
@@ -322,6 +335,25 @@ fails the koan. Three further rules fall out of the trace itself, so
   following `request: { tool: ... }` step asserts the tool server MUST
   NOT be invoked for that call (e.g. the arguments are scripted to fail
   validation, R6).
+
+A trace MAY end with the bare list item `abort` (a YAML string, not a
+`request`/`response` mapping). It MUST be the trace's last step —
+anything after it is a load error — and it MUST follow at least one
+exchange: `abort` alone, with nothing before it, is a load error too. Its
+meaning is derived from what precedes it, the same shape-derived style as
+the rest of this format: preceded by a tool exchange or a tool-call
+instruction (the run is still in progress) it is a **live abort** — the
+caller cancels mid-run, and `then` asserts `status: aborted`; preceded by
+a model text reply (the final answer already delivered) it is a **late
+abort** — the caller cancels after the run has settled, and `then`
+asserts the committed result is unchanged. For a live abort, the runner
+fires `POST /runs/{run_id}/abort` (§3.4) as soon as every step before it
+has been observed; from that point the world stops answering — a further
+model request racing the abort is parked (held open, never answered, and
+never scored as an overrun), so the agent is left with nothing to do but
+settle the run `aborted`. For a late abort, the runner waits for the
+run's terminal state first, then fires the abort, then re-reads the run
+so `then` judges the state after it.
 
 ### 6.2 `then` matchers
 

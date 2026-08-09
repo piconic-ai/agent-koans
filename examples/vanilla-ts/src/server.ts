@@ -32,6 +32,12 @@ app.get('/runs/:id', (c) => {
   return c.json(run);
 });
 
+app.post('/runs/:id/abort', (c) => {
+  const known = agent.abortRun(c.req.param('id'));
+  if (!known) return c.json({ error: 'run not found' }, 404);
+  return c.json({}, 202);
+});
+
 serve({ fetch: app.fetch, port: config.port }, () => {
   console.log(`vanilla-ts agent listening on :${config.port}`);
 });

@@ -145,6 +145,10 @@ export function startMockLlm(
   const state: MockLlm['state'] = { requests: [], violations: [] };
   const issuedToolCallIds = new Set<string>();
   const givenToolNames = Object.keys(koan.given.tools);
+  // A live abort means the runner cancels the run right after this
+  // script is fully served; a request beyond it is the agent racing that
+  // cancellation, not a bug, so it must not be scored as an overrun.
+  const liveAbort = script.at(-1)?.abort === 'live';
 
   const server = http.createServer(async (req, res) => {
     const respond = (status: number, body: unknown) => {
@@ -169,6 +173,14 @@ export function startMockLlm(
     const entry = script[index];
 
     if (!entry) {
+      if (liveAbort) {
+        // The world stops answering once the pre-abort script is served:
+        // hold the connection open rather than reject it. This request is
+        // either racing the caller's abort or arriving after it already
+        // landed — both converge on the run having nothing left to wait
+        // for but its own abort settling (SPEC.md §6.1).
+        return;
+      }
       state.violations.push(
         `model was called ${state.requests.length} times but the script has only ${script.length} entries`,
       );

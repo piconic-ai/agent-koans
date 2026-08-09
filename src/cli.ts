@@ -146,11 +146,11 @@ if (totalToRun === 0) {
 // failure per koan teaches nothing, the diagnosis names the problem.
 const problem = await preflight({ command: values.agent, cwd: values.cwd });
 if (problem !== null) {
-  console.error(`--agent "${values.agent}" did not start a working agent — no koan was run.`);
+  console.error(`--agent "${values.agent}" did not start a working agent.`);
   console.error(problem.split('\n').map((line) => `  ${line}`).join('\n'));
   console.error('');
   console.error('--agent must start an HTTP server that reads PORT from the');
-  console.error('environment and answers GET /health with 200 (SPEC.md §2–3).');
+  console.error('environment and answers GET /health with 200 (openapi.yaml).');
   process.exit(2);
 }
 

@@ -19,6 +19,7 @@ import { runKoan } from './runner.js';
 import { discoverKoans, type DiscoveredKoan } from './koan.js';
 import { loadConfig } from './config.js';
 import { renderHelp } from './help.js';
+import { preflight } from './preflight.js';
 
 // Each print site colorizes for its own stream: --help writes to stdout,
 // a usage error reprints the same screen to stderr, and piping one but
@@ -139,6 +140,18 @@ if (filter !== undefined) {
 const totalToRun = groups.reduce((n, g) => n + g.koans.length, 0);
 if (totalToRun === 0) {
   usageError(filter === undefined ? `no koans in ${koansDir}` : `no koan id contains "${filter}"`);
+}
+
+// Diagnose a broken --agent before the suite: one identical startup
+// failure per koan teaches nothing, the diagnosis names the problem.
+const problem = await preflight({ command: values.agent, cwd: values.cwd });
+if (problem !== null) {
+  console.error('preflight failed — no koan was run.');
+  console.error(problem.split('\n').map((line) => `  ${line}`).join('\n'));
+  console.error('');
+  console.error('--agent must start an HTTP server that reads PORT from the');
+  console.error('environment and answers GET /health with 200 (SPEC.md §2–3).');
+  process.exit(2);
 }
 
 let totalFailed = 0;

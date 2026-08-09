@@ -103,6 +103,15 @@ describe('cli', () => {
     expect(code).toBe(2);
     expect(stderr).toContain('koans directory not found');
   });
+
+  it('diagnoses a broken --agent before running any koan', { timeout: 60_000 }, async () => {
+    const { code, stdout, stderr } = await runCli(['--agent', 'node no-such-server.js']);
+    expect(code).toBe(2);
+    expect(stderr).toContain('preflight failed');
+    expect(stderr).toContain('Cannot find module');
+    expect(stdout).not.toContain('ok    ');
+    expect(stderr).not.toContain('FAIL  ');
+  });
 });
 
 describe('cli custom koans and config', () => {

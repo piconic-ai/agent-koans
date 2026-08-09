@@ -1,0 +1,45 @@
+name: Changeset check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions: {}
+
+jobs:
+  check:
+    # The release PR consumes changesets by design. The skip-changeset
+    # label is the deliberate opt-out: a stack's intermediate PRs (the
+    # changeset rides one PR per user-visible change) and changes with
+    # nothing to tell users.
+    if: github.head_ref != 'changeset-release/main' && !contains(github.event.pull_request.labels.*.name, 'skip-changeset')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Release-relevant changes carry a changeset
+        run: |
+          git fetch origin "$GITHUB_BASE_REF"
+          relevant=$(git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" \
+            | grep -E '^(src/|koans/|SPEC\.md$|openapi\.yaml$|package\.json$)' || true)
+          if [ -z "$relevant" ]; then
+            echo "No release-relevant files changed; no changeset needed."
+            exit 0
+          fi
+          added=$(git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF}...HEAD" -- '.changeset/*.md')
+          if [ -z "$added" ]; then
+            echo "This PR changes release-relevant files but carries no changeset:" >&2
+            echo "$relevant" >&2
+            echo "" >&2
+            echo "Add one with: pnpm changeset (final copy — it becomes the" >&2
+            echo "CHANGELOG entry verbatim). If the changeset rides another PR" >&2
+            echo "of this stack, or the change is invisible to users, apply" >&2
+            echo "the skip-changeset label instead." >&2
+            exit 1
+          fi
+          echo "Changesets:"
+          echo "$added"

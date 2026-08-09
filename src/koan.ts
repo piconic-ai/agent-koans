@@ -352,11 +352,20 @@ export function loadKoan(file: string): Koan {
 /** Load every koan file directly in a directory, sorted by id. */
 export function discoverKoans(dir: string): DiscoveredKoan[] {
   const found: DiscoveredKoan[] = [];
-  for (const file of fs.readdirSync(dir).sort()) {
-    if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
-    const full = path.join(dir, file);
+  const entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      // A silently-ignored subdirectory would mean koans inside it never
+      // run again — the worst failure mode for a conformance suite. Fail
+      // loud instead of shrinking the suite quietly.
+      throw new Error(
+        `${path.join(dir, entry.name)} is a subdirectory — koans must sit directly in ${dir}, nesting is not supported`,
+      );
+    }
+    if (!entry.name.endsWith('.yaml') && !entry.name.endsWith('.yml')) continue;
+    const full = path.join(dir, entry.name);
     found.push({
-      id: file.replace(/\.ya?ml$/, ''),
+      id: entry.name.replace(/\.ya?ml$/, ''),
       file: full,
       koan: loadKoan(full),
     });

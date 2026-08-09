@@ -239,6 +239,23 @@ describe('cli custom koans and config', () => {
     }
   });
 
+  it('errors, instead of silently skipping, when an `add` directory has a nested subdirectory', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-add-nested-'));
+    try {
+      const nested = path.join(dir, 'my-koans', 'billing');
+      fs.mkdirSync(nested, { recursive: true });
+      fs.writeFileSync(path.join(nested, '001-hello.yaml'), passingKoanYaml());
+      fs.writeFileSync(path.join(dir, 'agent-koans.yaml'), 'add:\n  - ./my-koans\n');
+
+      const { code, stderr } = await runCli([...vanillaAgent], dir);
+      expect(code).toBe(2);
+      expect(stderr).toContain('is a subdirectory');
+      expect(stderr).toContain(path.join('my-koans', 'billing'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it(
     'skips a bundled koan via config, with no `add` involved',
     { timeout: 120_000 },

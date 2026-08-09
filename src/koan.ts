@@ -92,7 +92,7 @@ export interface Koan {
   };
 }
 
-/** A koan found on disk, addressed by its `<chapter>/<file>` id. */
+/** A koan found on disk, addressed by its filename (without extension) as id. */
 export interface DiscoveredKoan {
   id: string;
   file: string;
@@ -349,21 +349,17 @@ export function loadKoan(file: string): Koan {
   };
 }
 
-/** Load every koan under a chapter directory tree, sorted by id. */
+/** Load every koan file directly in a directory, sorted by id. */
 export function discoverKoans(dir: string): DiscoveredKoan[] {
   const found: DiscoveredKoan[] = [];
-  for (const chapter of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!chapter.isDirectory()) continue;
-    const chapterDir = path.join(dir, chapter.name);
-    for (const file of fs.readdirSync(chapterDir).sort()) {
-      if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
-      const full = path.join(chapterDir, file);
-      found.push({
-        id: `${chapter.name}/${file.replace(/\.ya?ml$/, '')}`,
-        file: full,
-        koan: loadKoan(full),
-      });
-    }
+  for (const file of fs.readdirSync(dir).sort()) {
+    if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
+    const full = path.join(dir, file);
+    found.push({
+      id: file.replace(/\.ya?ml$/, ''),
+      file: full,
+      koan: loadKoan(full),
+    });
   }
   return found.sort((a, b) => a.id.localeCompare(b.id));
 }

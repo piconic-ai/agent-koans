@@ -10,7 +10,7 @@ It does not measure model capability; that is the job of evals.
 
 An implementation conforms when it passes every koan in a released suite
 version. Conformance claims MUST cite the suite version (e.g. "conforms to
-agent-koans 1.x / tool-reliability").
+agent-koans 1.x").
 
 The key words MUST, MUST NOT, SHOULD, and MAY are to be interpreted as
 described in RFC 2119.
@@ -380,7 +380,7 @@ The suite is versioned as a whole (semver):
 
 - **major** — incompatible SPEC changes, or changes to the meaning of an
   existing koan
-- **minor** — new koans or chapters; existing koans unchanged
+- **minor** — new koans; existing koans unchanged
 - **patch** — fixes that do not affect any pass/fail outcome
 
 Published koans are immutable: to change a koan's contract line, add a new

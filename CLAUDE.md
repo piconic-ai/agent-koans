@@ -44,8 +44,15 @@ already-decided format).
   rides the first or last PR; the stack's other PRs carry none.
   Invisible changes (docs, tooling, refactors) need none. CI requires
   a changeset on any PR touching src/, koans/, SPEC.md, openapi.yaml,
-  or package.json; the skip-changeset label is the deliberate opt-out
-  for stack-intermediate PRs and invisible changes. While changesets
-  exist on main, the changesets action keeps a release PR open;
-  merging it publishes to npm, tags vX.Y.Z, and creates the GitHub
-  release. Nothing is released by hand.
+  or package.json; the skip-changeset label is the deliberate opt-out.
+  While changesets exist on main, the changesets action keeps a
+  release PR open; merging it publishes to npm, tags vX.Y.Z, and
+  creates the GitHub release. Nothing is released by hand.
+- skip-changeset marks a decision, not an escape. Use it only when the
+  stack's one changeset rides another PR, or when a gated path changed
+  with nothing users could notice: refactors, comment or JSDoc edits,
+  devDependency and tooling edits in package.json. If users would
+  notice, write the changeset instead of labeling.
+- Commits keep the human maintainer as git author. An AI assistant
+  that helped writing a commit is credited with a Co-Authored-By
+  trailer at the end of the commit message — never as the author.

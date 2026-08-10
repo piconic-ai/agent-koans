@@ -163,9 +163,12 @@ is a tool failure.
   Retry behavior for 408, 429, and 5xx is client-dependent and
   deliberately unspecified — no koan scripts those.
 - **R9 — Argument fidelity.** The arguments you send to the tool server
-  MUST be the model's arguments, unchanged. You are a tool call's
-  transport, not its editor: no coercion, no defaulting, no dropping of
-  fields the schema did not mention.
+  MUST be the ones the model produced: no defaulting, and no dropping of
+  fields the tool's schema did not declare. You are a tool call's
+  transport, not its editor. Where changing an argument is an accepted
+  practice rather than a defect — coercing a scalar to its declared type,
+  say — a koan scripts that route explicitly alongside the strict one
+  (§5); nothing a koan did not script may be edited on the way through.
 - **R10 — Parallel tool calls.** When one model response carries several
   tool calls, you MUST execute every one of them exactly once, and close
   every one before your next model request. Order and concurrency are

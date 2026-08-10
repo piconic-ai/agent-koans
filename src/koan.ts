@@ -20,7 +20,7 @@ import type {
   Trace as ParsedTrace,
   Turn as ParsedTurn,
 } from './koan-spec.js';
-import { parseKoanFile } from './parse.js';
+import { isProblem, parseKoanFile } from './parse.js';
 
 /** A tool definition as written in `given.tools` (JSON Schema input). */
 export interface ToolDef {
@@ -398,7 +398,7 @@ function compileKoan(parsed: KoanFile): Koan {
 export function loadKoan(file: string): Koan {
   const raw: unknown = parse(fs.readFileSync(file, 'utf8'));
   const parsed = parseKoanFile(raw);
-  if (typeof parsed === 'string') throw new Error(`Invalid koan ${file}: ${parsed}`);
+  if (isProblem(parsed)) throw new Error(`Invalid koan ${file}: ${parsed.message}`);
   return compileKoan(parsed);
 }
 

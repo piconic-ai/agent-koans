@@ -1,6 +1,15 @@
 // Reading a koan file: a YAML value → the types of koan-spec.ts, or the
 // first problem as a message. Two jobs live here and stay apart.
 //
+// Failure is a tagged value (`Problem`, `{ kind: 'problem', message }`),
+// not a bare string: several parsers below succeed with a string (a
+// model's text reply, a tool call's wire-format args), and `typeof x ===
+// 'string'` cannot tell that success apart from every other parser's
+// failure. Tagging the failure instead means `isProblem` is the one check
+// every call site needs, and a future parser whose success value is
+// itself a string stays unambiguous by construction rather than by
+// convention.
+//
 // `parse*` functions recognize shapes and tag them — the rules a single
 // node's own subtree can decide, including a node's immediate neighbors
 // within the SAME list (`abort` must be last, a model request cannot
@@ -52,8 +61,17 @@ interface Ctx<T = unknown> {
   koan: KoanFile;
 }
 
-/** A problem, as the message a reader sees, or nothing. */
-type Problem = string | undefined;
+/** A problem found while reading a file — the message its author will see. */
+export type Problem = { kind: 'problem'; message: string };
+
+/** Either a parsed value, or the first problem found. */
+export type Parsed<T> = T | Problem;
+
+const problem = (message: string): Problem => ({ kind: 'problem', message });
+
+/** Narrows a `Parsed<T>` to its failure case. */
+export const isProblem = (x: unknown): x is Problem =>
+  typeof x === 'object' && x !== null && (x as { kind?: unknown }).kind === 'problem';
 
 function into<U>(ctx: Ctx, key: string, node: U): Ctx<U> {
   return { ...ctx, node, at: `${ctx.at}${key}` };
@@ -69,14 +87,14 @@ function isMapping(x: unknown): x is Record<string, unknown> {
 
 /**
  * Reads a value already parsed from YAML into a koan file, or returns the
- * first problem found as a message. Never throws.
+ * first problem found. Never throws.
  */
-export function parseKoanFile(raw: unknown): KoanFile | string {
-  if (!isMapping(raw)) return 'not a YAML mapping';
-  if (typeof raw.name !== 'string') return 'missing "name"';
+export function parseKoanFile(raw: unknown): Parsed<KoanFile> {
+  if (!isMapping(raw)) return problem('not a YAML mapping');
+  if (typeof raw.name !== 'string') return problem('missing "name"');
 
   const given = parseGiven(raw.given);
-  if (typeof given === 'string') return given;
+  if (isProblem(given)) return given;
 
   const koan: KoanFile = {
     name: raw.name,
@@ -87,12 +105,12 @@ export function parseKoanFile(raw: unknown): KoanFile | string {
   const ctx: Ctx<KoanFile> = { node: koan, at: '', koan };
 
   const body = parseBody(ctx, raw);
-  if (typeof body === 'string') return body;
+  if (isProblem(body)) return body;
   koan.body = body;
 
   for (const constraint of constraints) {
-    const problem = constraint(koan);
-    if (problem !== undefined) return problem;
+    const found = constraint(koan);
+    if (found !== undefined) return found;
   }
   return koan;
 }
@@ -100,27 +118,27 @@ export function parseKoanFile(raw: unknown): KoanFile | string {
 // `given` is agent setup only (tools/files/limits) — never the prompt
 // (SPEC.md §6). Optional throughout: a koan with no tools, files, or
 // limits needs no `given` block, or an empty one, at all.
-function parseGiven(rawGiven: unknown): Given | string {
+function parseGiven(rawGiven: unknown): Parsed<Given> {
   const given = rawGiven ?? {};
-  if (typeof given !== 'object' || Array.isArray(given)) return '"given" must be a mapping';
+  if (typeof given !== 'object' || Array.isArray(given)) return problem('"given" must be a mapping');
   const g = given as Record<string, unknown>;
-  if (g.task !== undefined) return '"given.task" was replaced by a top-level "prompt" field';
+  if (g.task !== undefined) return problem('"given.task" was replaced by a top-level "prompt" field');
 
   const tools = g.tools ?? {};
   if (typeof tools !== 'object' || Array.isArray(tools)) {
-    return '"given.tools" must be a mapping of tool name to definition';
+    return problem('"given.tools" must be a mapping of tool name to definition');
   }
 
   let files: Record<string, string> | undefined;
   if (g.files !== undefined) {
     const rawFiles = g.files;
     if (typeof rawFiles !== 'object' || rawFiles === null || Array.isArray(rawFiles)) {
-      return '"given.files" must be a mapping of relative path to file content';
+      return problem('"given.files" must be a mapping of relative path to file content');
     }
     for (const [p, content] of Object.entries(rawFiles as Record<string, unknown>)) {
-      if (typeof content !== 'string') return `given.files["${p}"] must be a string (the file's content)`;
+      if (typeof content !== 'string') return problem(`given.files["${p}"] must be a string (the file's content)`);
       if (p.length === 0 || p.startsWith('/') || p.split('/').includes('..')) {
-        return `given.files["${p}"] must be a relative path inside the workspace (no leading "/", no "..")`;
+        return problem(`given.files["${p}"] must be a relative path inside the workspace (no leading "/", no "..")`);
       }
     }
     files = rawFiles as Record<string, string>;
@@ -130,14 +148,14 @@ function parseGiven(rawGiven: unknown): Given | string {
   if (g.limits !== undefined) {
     const rawLimits = g.limits;
     if (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits)) {
-      return '"given.limits" must be a mapping';
+      return problem('"given.limits" must be a mapping');
     }
     for (const key of Object.keys(rawLimits as Record<string, unknown>)) {
-      if (key !== 'max_model_requests') return `"given.limits" has unknown key "${key}"`;
+      if (key !== 'max_model_requests') return problem(`"given.limits" has unknown key "${key}"`);
     }
     const max = (rawLimits as Record<string, unknown>).max_model_requests;
     if (!Number.isInteger(max) || (max as number) < 1) {
-      return '"given.limits.max_model_requests" must be a positive integer';
+      return problem('"given.limits.max_model_requests" must be a positive integer');
     }
     limits = { max_model_requests: max as number };
   }
@@ -149,54 +167,56 @@ function parseGiven(rawGiven: unknown): Given | string {
 // (SPEC.md §6.5); a `when`/`one_of` koan carries a top-level `prompt` and
 // exactly one of the two trace forms. Dispatches on which raw keys are
 // present, then hands off to the matching parser.
-function parseBody(ctx: Ctx<KoanFile>, raw: Record<string, unknown>): Body | string {
+function parseBody(ctx: Ctx<KoanFile>, raw: Record<string, unknown>): Parsed<Body> {
   if (raw.turns !== undefined) {
     if (raw.prompt !== undefined) {
-      return '"prompt" cannot be combined with "turns" — the first turn\'s prompt is the initial one';
+      return problem('"prompt" cannot be combined with "turns" — the first turn\'s prompt is the initial one');
     }
     if (raw.when !== undefined || raw.one_of !== undefined) {
-      return '"turns" cannot be combined with "when" or "one_of"';
+      return problem('"turns" cannot be combined with "when" or "one_of"');
     }
     if (raw.then !== undefined) {
-      return '"then" cannot be combined with "turns" — write it on the last turn instead';
+      return problem('"then" cannot be combined with "turns" — write it on the last turn instead');
     }
     return parseTurnsBody(ctx, raw.turns);
   }
   if ((raw.when === undefined) === (raw.one_of === undefined)) {
-    return 'a koan needs exactly one of "when" / "one_of" / "turns"';
+    return problem('a koan needs exactly one of "when" / "one_of" / "turns"');
   }
-  if (typeof raw.prompt !== 'string') return 'missing "prompt"';
+  if (typeof raw.prompt !== 'string') return problem('missing "prompt"');
   // Routing attributes a request to a conversation by which opening its
   // first user message contains (SPEC.md §6.4); an empty (or all-
   // whitespace) opening is contained in every string, so it would match
   // every request and collapse routing onto the first conversation.
-  if (raw.prompt.trim().length === 0) return '"prompt" must be non-empty';
+  if (raw.prompt.trim().length === 0) return problem('"prompt" must be non-empty');
   const prompt = raw.prompt;
 
   if (raw.when !== undefined) {
-    if (!Array.isArray(raw.when) || raw.when.length === 0) return '"when" must be a non-empty list of trace steps';
+    if (!Array.isArray(raw.when) || raw.when.length === 0) return problem('"when" must be a non-empty list of trace steps');
     const trace = parseTrace(into(ctx, 'when', raw.when), false, false);
-    if (typeof trace === 'string') return trace;
+    if (isProblem(trace)) return trace;
     const then = parseJudgment(into(ctx, 'then', raw.then));
-    if (typeof then === 'string') return then;
+    if (isProblem(then)) return then;
     return { kind: 'single', prompt, trace, then };
   }
 
   const rawOneOf = raw.one_of;
   if (typeof rawOneOf !== 'object' || rawOneOf === null || Array.isArray(rawOneOf)) {
-    return '"one_of" must be a mapping of variant name to trace';
+    return problem('"one_of" must be a mapping of variant name to trace');
   }
   const entries = Object.entries(rawOneOf as Record<string, unknown>);
-  if (entries.length < 2) return '"one_of" needs at least two variants — use "when" for a single trace';
+  if (entries.length < 2) return problem('"one_of" needs at least two variants — use "when" for a single trace');
   const variants: Record<string, Trace> = {};
   for (const [variant, rawTrace] of entries) {
-    if (!Array.isArray(rawTrace) || rawTrace.length === 0) return `"one_of.${variant}" must be a non-empty list of trace steps`;
+    if (!Array.isArray(rawTrace) || rawTrace.length === 0) {
+      return problem(`"one_of.${variant}" must be a non-empty list of trace steps`);
+    }
     const trace = parseTrace(into(ctx, `one_of.${variant}`, rawTrace), false, false);
-    if (typeof trace === 'string') return trace;
+    if (isProblem(trace)) return trace;
     variants[variant] = trace;
   }
   const then = parseJudgment(into(ctx, 'then', raw.then));
-  if (typeof then === 'string') return then;
+  if (isProblem(then)) return then;
   return { kind: 'variants', prompt, variants, then };
 }
 
@@ -204,9 +224,9 @@ function parseBody(ctx: Ctx<KoanFile>, raw: Record<string, unknown>): Body | str
 // turn's own fields (prompt, unknown keys, its `then`) validate before any
 // turn's `when` is parsed, so a shape error in turn 0's `then` is reported
 // even when turn 1's `when` is merely empty.
-function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Body | string {
-  if (!Array.isArray(rawTurns) || rawTurns.length === 0) return '"turns" must be a non-empty list of turn entries';
-  if (rawTurns.length < 2) return '"turns" needs at least two entries — a 1-turn koan is just "when"';
+function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
+  if (!Array.isArray(rawTurns) || rawTurns.length === 0) return problem('"turns" must be a non-empty list of turn entries');
+  if (rawTurns.length < 2) return problem('"turns" needs at least two entries — a 1-turn koan is just "when"');
 
   const prompts: string[] = [];
   const thens: Judgment[] = [];
@@ -216,16 +236,16 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Body | string {
     // §6.4) the same way a plain koan's does, and a later turn's is what
     // a turn-boundary request must be shown to carry (§6.5).
     if (typeof rt.prompt !== 'string' || rt.prompt.trim().length === 0) {
-      return `turns[${i}] needs a non-empty "prompt"`;
+      return problem(`turns[${i}] needs a non-empty "prompt"`);
     }
     for (const key of Object.keys(rt)) {
       if (key !== 'prompt' && key !== 'when' && key !== 'then') {
-        return `turns[${i}] has unknown key "${key}" — a turn entry carries only "prompt", "when", and "then"`;
+        return problem(`turns[${i}] has unknown key "${key}" — a turn entry carries only "prompt", "when", and "then"`);
       }
     }
     const then =
       rt.then !== undefined ? parseJudgment(into(ctx, `turns[${i}].then`, rt.then)) : ({ status: 'completed' } as Judgment);
-    if (typeof then === 'string') return then;
+    if (isProblem(then)) return then;
     prompts.push(rt.prompt);
     thens.push(then);
   }
@@ -233,16 +253,20 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Body | string {
   const traces: Trace[] = [];
   for (let i = 0; i < rawTurns.length; i++) {
     const rawWhen = (rawTurns[i] as Record<string, unknown>).when;
-    if (!Array.isArray(rawWhen) || rawWhen.length === 0) return `turns[${i}].when must be a non-empty list of trace steps`;
+    if (!Array.isArray(rawWhen) || rawWhen.length === 0) {
+      return problem(`turns[${i}].when must be a non-empty list of trace steps`);
+    }
     const trace = parseTrace(into(ctx, `turns[${i}].when`, rawWhen), true, false);
-    if (typeof trace === 'string') return trace;
+    if (isProblem(trace)) return trace;
     if (i < rawTurns.length - 1) {
       const last = trace.steps[trace.steps.length - 1];
       // An intermediate turn can only be judged "completed" by ending in
       // a plain reply — the one seam where a later turn's first request
       // is allowed to continue the same conversation (SPEC.md §6.5).
       if (last.kind !== 'model' || last.response.kind !== 'reply') {
-        return `turns[${i}].when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one (SPEC.md §6.5)`;
+        return problem(
+          `turns[${i}].when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one (SPEC.md §6.5)`,
+        );
       }
     }
     traces.push(trace);
@@ -252,16 +276,18 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Body | string {
   return { kind: 'turns', turns: turns as [Turn, Turn, ...Turn[]] };
 }
 
-function parseJudgment(ctx: Ctx<unknown>): Judgment | string {
+function parseJudgment(ctx: Ctx<unknown>): Parsed<Judgment> {
   if (ctx.node === undefined) return {};
-  if (typeof ctx.node !== 'object' || ctx.node === null || Array.isArray(ctx.node)) return `${ctx.at} must be a mapping`;
+  if (typeof ctx.node !== 'object' || ctx.node === null || Array.isArray(ctx.node)) {
+    return problem(`${ctx.at} must be a mapping`);
+  }
   const j = ctx.node as Record<string, unknown>;
   for (const key of Object.keys(j)) {
     if (key !== 'status' && key !== 'output') {
-      return `${ctx.at} has unknown key "${key}" — a judgment carries only "status" and "output"`;
+      return problem(`${ctx.at} has unknown key "${key}" — a judgment carries only "status" and "output"`);
     }
   }
-  if (j.status !== undefined && typeof j.status !== 'string') return `${ctx.at}.status must be a string`;
+  if (j.status !== undefined && typeof j.status !== 'string') return problem(`${ctx.at}.status must be a string`);
   return { status: j.status as string | undefined, output: j.output as Matcher | undefined };
 }
 
@@ -280,7 +306,7 @@ function abortKindOf(trace: Trace): AbortKind {
  * array sits, for the two rules that read that context (`abort` inside a
  * `turns` koan or a subagent block).
  */
-function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): Trace | string {
+function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): Parsed<Trace> {
   const { node, at } = ctx;
   // Unquoted, unlike the callers above: they already reject a missing or
   // empty `when` before calling this, quoting the YAML key itself
@@ -288,7 +314,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): T
   // pre-check is the subagent-block recursion below, where `at` is
   // already a full path (e.g. "when[0].when"), not a bare key.
   if (!Array.isArray(node) || node.length === 0) {
-    return `${at} must be a non-empty list of trace steps`;
+    return problem(`${at} must be a non-empty list of trace steps`);
   }
 
   const written = [...node];
@@ -296,16 +322,16 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): T
   const abortAt = written.findIndex((s) => s === 'abort');
   if (abortAt !== -1) {
     if (abortAt !== written.length - 1) {
-      return `${at}[${abortAt + 1}]: nothing can follow "abort" — it must be the trace's last step`;
+      return problem(`${at}[${abortAt + 1}]: nothing can follow "abort" — it must be the trace's last step`);
     }
     if (inTurns) {
-      return `${at}[${abortAt}]: "abort" cannot appear inside a "turns" koan — turn-level cancellation is not supported yet`;
+      return problem(`${at}[${abortAt}]: "abort" cannot appear inside a "turns" koan — turn-level cancellation is not supported yet`);
     }
     if (inSubagent) {
-      return `${at}[${abortAt}]: "abort" cannot appear inside a subagent block — only the caller's own run can be aborted`;
+      return problem(`${at}[${abortAt}]: "abort" cannot appear inside a subagent block — only the caller's own run can be aborted`);
     }
     if (abortAt === 0) {
-      return `${at}[0]: "abort" needs at least one exchange before it in the trace`;
+      return problem(`${at}[0]: "abort" needs at least one exchange before it in the trace`);
     }
     written.pop();
     abort = true;
@@ -321,17 +347,17 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): T
       const block = item as Record<string, unknown>;
       for (const key of Object.keys(block)) {
         if (key !== 'subagent' && key !== 'when') {
-          return `${at_i} has unknown key "${key}" — a subagent block carries only "subagent" and "when"`;
+          return problem(`${at_i} has unknown key "${key}" — a subagent block carries only "subagent" and "when"`);
         }
       }
       if (typeof block.subagent !== 'string' || block.subagent.length === 0) {
-        return `${at_i}.subagent must be a non-empty delegate name`;
+        return problem(`${at_i}.subagent must be a non-empty delegate name`);
       }
       const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), false, true);
-      if (typeof childTrace === 'string') return childTrace;
+      if (isProblem(childTrace)) return childTrace;
       const childLast = childTrace.steps[childTrace.steps.length - 1];
       if (childLast.kind !== 'model' || childLast.response.kind !== 'reply') {
-        return `${at_i}: a subagent block must end with the child's final text reply — it is what returns to the parent`;
+        return problem(`${at_i}: a subagent block must end with the child's final text reply — it is what returns to the parent`);
       }
       steps.push({ kind: 'subagent', name: block.subagent, trace: childTrace });
       continue;
@@ -340,8 +366,8 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): T
     const entry = item as { request?: unknown; response?: unknown } | null;
     const req = entry?.request;
     const res = entry?.response;
-    if (req === undefined || req === null) return `${at_i} needs "request"`;
-    if (res === undefined || res === null) return `${at_i} needs "response"`;
+    if (req === undefined || req === null) return problem(`${at_i} needs "request"`);
+    if (res === undefined || res === null) return problem(`${at_i} needs "response"`);
 
     if (req === 'model') {
       // A reply ends a conversation's trace — nothing legitimately
@@ -351,10 +377,10 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): T
       // no such restriction of its own, so this check is model-request-
       // only, same as the shape it mirrors.
       if (prev?.kind === 'model' && prev.response.kind === 'reply') {
-        return `${at_i}: a model request cannot follow a text reply here — only a later turn's first request may (SPEC.md §6.5)`;
+        return problem(`${at_i}: a model request cannot follow a text reply here — only a later turn's first request may (SPEC.md §6.5)`);
       }
       const response = parseModelResponse(into(ctx, `[${i}]`, res), inSubagent);
-      if (typeof response === 'string') return response;
+      if (isProblem(response)) return response;
       steps.push({ kind: 'model', response });
     } else if (typeof req === 'object' && req !== null && typeof (req as Record<string, unknown>).tool === 'string') {
       const reqTool = (req as Record<string, unknown>).tool as string;
@@ -363,12 +389,12 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): T
       // instruction it closes.
       const reqArgs = (req as Record<string, unknown>).args as ParsedArgs | undefined;
       if (typeof res === 'string' || Array.isArray(res) || typeof (res as Record<string, unknown>).status !== 'number') {
-        return `${at_i}.response needs a numeric "status" for a tool request`;
+        return problem(`${at_i}.response needs a numeric "status" for a tool request`);
       }
       const r = res as { status: number; body?: unknown };
       steps.push({ kind: 'tool', tool: reqTool, args: reqArgs, response: { status: r.status, body: r.body } });
     } else {
-      return `${at_i}.request must be "model" or { tool: <name> }`;
+      return problem(`${at_i}.request must be "model" or { tool: <name> }`);
     }
   }
 
@@ -384,7 +410,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): T
  * response sits: a model API failure ends the whole run, so it cannot be
  * scripted inside a subagent's own conversation.
  */
-function parseModelResponse(ctx: Ctx<unknown>, inSubagent: boolean): ModelResponse | string {
+function parseModelResponse(ctx: Ctx<unknown>, inSubagent: boolean): Parsed<ModelResponse> {
   const { node, at } = ctx;
   if (typeof node === 'string') return { kind: 'reply', text: node };
 
@@ -392,19 +418,23 @@ function parseModelResponse(ctx: Ctx<unknown>, inSubagent: boolean): ModelRespon
     // A 1-element list is really the single form; writing it as a list
     // would silently work but invite an inconsistent style.
     if (node.length < 2) {
-      return `${at}.response is a list of ${node.length} — a parallel group needs at least two instructions; write the single "{ tool, args }" form instead`;
+      return problem(
+        `${at}.response is a list of ${node.length} — a parallel group needs at least two instructions; write the single "{ tool, args }" form instead`,
+      );
     }
     const instructions: Instruction[] = [];
     for (let j = 0; j < node.length; j++) {
       const parsed = parseInstruction(into(ctx, `[${j}]`, node[j]));
-      if (typeof parsed === 'string') return parsed;
+      if (isProblem(parsed)) return parsed;
       instructions.push(parsed);
     }
     const calls = instructions.filter(isCall);
     for (let a = 0; a < calls.length; a++) {
       for (let b = a + 1; b < calls.length; b++) {
         if (sameInstruction(calls[a], calls[b])) {
-          return `${at}: list members [${a}] and [${b}] both call "${calls[a].tool}" with the same arguments — matching a following tool request against them would be ambiguous`;
+          return problem(
+            `${at}: list members [${a}] and [${b}] both call "${calls[a].tool}" with the same arguments — matching a following tool request against them would be ambiguous`,
+          );
         }
       }
     }
@@ -412,7 +442,9 @@ function parseModelResponse(ctx: Ctx<unknown>, inSubagent: boolean): ModelRespon
     for (let a = 0; a < delegations.length; a++) {
       for (let b = a + 1; b < delegations.length; b++) {
         if (delegations[a].subagent === delegations[b].subagent) {
-          return `${at}: two delegations to "${delegations[a].subagent}" in one turn — a subagent name may be delegated to at most once per trace`;
+          return problem(
+            `${at}: two delegations to "${delegations[a].subagent}" in one turn — a subagent name may be delegated to at most once per trace`,
+          );
         }
       }
     }
@@ -421,31 +453,33 @@ function parseModelResponse(ctx: Ctx<unknown>, inSubagent: boolean): ModelRespon
 
   if (isMapping(node) && typeof node.subagent === 'string') {
     if (node.status !== undefined || node.tool !== undefined) {
-      return `${at}.response mixes a delegation instruction with other response forms`;
+      return problem(`${at}.response mixes a delegation instruction with other response forms`);
     }
     const d = parseDelegateInstruction(ctx);
-    if (typeof d === 'string') return d;
+    if (isProblem(d)) return d;
     return { kind: 'instructions', instructions: [d] };
   }
   if (isMapping(node) && typeof node.tool === 'string') {
-    if (node.status !== undefined) return `${at}.response mixes a tool-call instruction with "status"`;
+    if (node.status !== undefined) return problem(`${at}.response mixes a tool-call instruction with "status"`);
     const c = parseCallInstruction(ctx);
-    if (typeof c === 'string') return c;
+    if (isProblem(c)) return c;
     return { kind: 'instructions', instructions: [c] };
   }
   if (isMapping(node) && typeof node.status === 'number') {
     if (inSubagent) {
-      return `${at}: a model API failure cannot appear inside a subagent block — it ends the whole run (R8)`;
+      return problem(`${at}: a model API failure cannot appear inside a subagent block — it ends the whole run (R8)`);
     }
     const { status } = node;
     // Only statuses the SDKs surface without retrying keep the trace
     // deterministic: 408/429/5xx are auto-retried by common clients.
     if (status < 400 || status >= 500 || status === 408 || status === 429) {
-      return `${at}.response.status must be a non-retryable 4xx (not 408/429) for a model API failure`;
+      return problem(`${at}.response.status must be a non-retryable 4xx (not 408/429) for a model API failure`);
     }
     return { kind: 'api-failure', status, body: node.body };
   }
-  return `${at}.response for a model request must be a reply string, { tool, args }, { subagent, prompt }, a list of instructions, or { status }`;
+  return problem(
+    `${at}.response for a model request must be a reply string, { tool, args }, { subagent, prompt }, a list of instructions, or { status }`,
+  );
 }
 
 // One member of a parallel group: dispatch is by key presence, not by its
@@ -453,7 +487,7 @@ function parseModelResponse(ctx: Ctx<unknown>, inSubagent: boolean): ModelRespon
 // member with a non-string `subagent` still reports the delegation
 // instruction's own message (below) rather than the response-level
 // fallback, because a group has no fallback shape of its own to fall to.
-function parseInstruction(ctx: Ctx<unknown>): Instruction | string {
+function parseInstruction(ctx: Ctx<unknown>): Parsed<Instruction> {
   if (isMapping(ctx.node) && 'subagent' in ctx.node) return parseDelegateInstruction(ctx);
   return parseCallInstruction(ctx);
 }
@@ -462,16 +496,16 @@ function parseInstruction(ctx: Ctx<unknown>): Instruction | string {
  * A `{ tool, args }` instruction — the single response form, or one
  * member of a parallel group.
  */
-function parseCallInstruction(ctx: Ctx<unknown>): Instruction | string {
+function parseCallInstruction(ctx: Ctx<unknown>): Parsed<Instruction> {
   const { node, at } = ctx;
-  if (!isMapping(node) || typeof node.tool !== 'string') return `${at} needs "tool"`;
+  if (!isMapping(node) || typeof node.tool !== 'string') return problem(`${at} needs "tool"`);
   for (const key of Object.keys(node)) {
     if (key !== 'tool' && key !== 'args') {
-      return `${at} has unknown key "${key}" — a tool-call instruction carries only "tool" and "args"`;
+      return problem(`${at} has unknown key "${key}" — a tool-call instruction carries only "tool" and "args"`);
     }
   }
   const args = parseArgs(into(ctx, '.args', node.args));
-  if (typeof args === 'string') return args;
+  if (isProblem(args)) return args;
   return { kind: 'call', tool: node.tool, args };
 }
 
@@ -481,7 +515,7 @@ function parseCallInstruction(ctx: Ctx<unknown>): Instruction | string {
  * about a following tool request reads the value instead of parsing the
  * string a second time (koan-spec.ts's header).
  */
-function parseArgs(ctx: Ctx<unknown>): Args | string {
+function parseArgs(ctx: Ctx<unknown>): Parsed<Args> {
   const { node, at } = ctx;
   if (node === undefined) return { kind: 'mapping', value: {} };
   if (typeof node === 'string') {
@@ -494,24 +528,24 @@ function parseArgs(ctx: Ctx<unknown>): Args | string {
     return { kind: 'wire', text: node };
   }
   if (isMapping(node)) return { kind: 'mapping', value: node };
-  return `${at} must be a mapping (JSON-encoding sugar) or a string (the verbatim wire arguments)`;
+  return problem(`${at} must be a mapping (JSON-encoding sugar) or a string (the verbatim wire arguments)`);
 }
 
-function parseDelegateInstruction(ctx: Ctx<unknown>): Instruction | string {
+function parseDelegateInstruction(ctx: Ctx<unknown>): Parsed<Instruction> {
   const { node, at } = ctx;
   if (!isMapping(node) || typeof node.subagent !== 'string' || node.subagent.length === 0) {
-    return `${at} needs a non-empty "subagent" (the delegate's name)`;
+    return problem(`${at} needs a non-empty "subagent" (the delegate's name)`);
   }
   for (const key of Object.keys(node)) {
     if (key !== 'subagent' && key !== 'prompt') {
-      return `${at} has unknown key "${key}" — a delegation instruction carries only "subagent" and "prompt"`;
+      return problem(`${at} has unknown key "${key}" — a delegation instruction carries only "subagent" and "prompt"`);
     }
   }
   // Trim-empty counts as empty: routing matches by `.includes`, and an
   // all-whitespace briefing risks the same routing collapse an empty one
   // guarantees (SPEC.md §6.4).
   if (typeof node.prompt !== 'string' || node.prompt.trim().length === 0) {
-    return `${at} needs a non-empty "prompt" (the briefing)`;
+    return problem(`${at} needs a non-empty "prompt" (the briefing)`);
   }
   return { kind: 'delegate', subagent: node.subagent, prompt: node.prompt };
 }
@@ -549,7 +583,7 @@ function sameInstruction(a: Extract<Instruction, { kind: 'call' }>, b: Extract<I
 // cannot be added without naming it.
 // ---------------------------------------------------------------------------
 
-type Constraint = (koan: KoanFile) => Problem;
+type Constraint = (koan: KoanFile) => Problem | undefined;
 
 const constraints: Constraint[] = [
   everyDelegationHasABlock,
@@ -598,33 +632,35 @@ function scriptedTraces(koan: KoanFile): ScriptedTrace[] {
 }
 
 /** Unlike a tool call, a delegation has no round trip a koan may omit: it must be answered. */
-function everyDelegationHasABlock(koan: KoanFile): Problem {
+function everyDelegationHasABlock(koan: KoanFile): Problem | undefined {
   for (const { steps, at } of scriptedTraces(koan)) {
-    const problem = checkDelegationsResolved(steps, at);
-    if (problem) return problem;
+    const found = checkDelegationsResolved(steps, at);
+    if (found) return found;
   }
   return undefined;
 }
 
-function checkDelegationsResolved(steps: Step[], at: string): Problem {
+function checkDelegationsResolved(steps: Step[], at: string): Problem | undefined {
   let unresolved: Array<{ subagent: string; prompt: string }> = [];
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const at_i = `${at}[${i}]`;
     if (step.kind === 'model') {
-      if (unresolved.length > 0) return unresolvedDelegationMessage(at_i, unresolved);
+      if (unresolved.length > 0) return problem(unresolvedDelegationMessage(at_i, unresolved));
       unresolved = step.response.kind === 'instructions' ? step.response.instructions.filter(isDelegate) : [];
     } else if (step.kind === 'subagent') {
       const di = unresolved.findIndex((d) => d.subagent === step.name);
       if (di === -1) {
-        return `${at_i}: subagent block "${step.name}" has no matching pending delegation — the preceding model response must include { subagent: "${step.name}", prompt: ... }`;
+        return problem(
+          `${at_i}: subagent block "${step.name}" has no matching pending delegation — the preceding model response must include { subagent: "${step.name}", prompt: ... }`,
+        );
       }
       unresolved.splice(di, 1);
-      const problem = checkDelegationsResolved(step.trace.steps, `${at_i}.when`);
-      if (problem) return problem;
+      const found = checkDelegationsResolved(step.trace.steps, `${at_i}.when`);
+      if (found) return found;
     }
   }
-  if (unresolved.length > 0) return unresolvedDelegationMessage(`${at}[${steps.length}]`, unresolved);
+  if (unresolved.length > 0) return problem(unresolvedDelegationMessage(`${at}[${steps.length}]`, unresolved));
   return undefined;
 }
 
@@ -639,17 +675,17 @@ function unresolvedDelegationMessage(at: string, unresolved: Array<{ subagent: s
  * never parsed as an object, so a matched call with no parsed value is
  * rejected here too — establishing that requires the same match.
  */
-function everyToolRequestMatchesAnOpenCall(koan: KoanFile): Problem {
+function everyToolRequestMatchesAnOpenCall(koan: KoanFile): Problem | undefined {
   for (const { steps, at } of scriptedTraces(koan)) {
-    const problem = checkToolMatching(steps, at);
-    if (problem) return problem;
+    const found = checkToolMatching(steps, at);
+    if (found) return found;
   }
   return undefined;
 }
 
 type CallInstruction = Extract<Instruction, { kind: 'call' }>;
 
-function checkToolMatching(steps: Step[], at: string): Problem {
+function checkToolMatching(steps: Step[], at: string): Problem | undefined {
   let pending: CallInstruction[] | undefined;
   let closed = new Set<CallInstruction>();
   for (let i = 0; i < steps.length; i++) {
@@ -663,13 +699,13 @@ function checkToolMatching(steps: Step[], at: string): Problem {
     if (step.kind === 'subagent') {
       pending = undefined;
       closed = new Set();
-      const problem = checkToolMatching(step.trace.steps, `${at_i}.when`);
-      if (problem) return problem;
+      const found = checkToolMatching(step.trace.steps, `${at_i}.when`);
+      if (found) return found;
       continue;
     }
 
     if (pending === undefined) {
-      return `${at_i}: a tool request must follow a model response containing a tool-call instruction`;
+      return problem(`${at_i}: a tool request must follow a model response containing a tool-call instruction`);
     }
     const open = pending.filter((c) => c.tool === step.tool && !closed.has(c));
     let member: CallInstruction;
@@ -677,24 +713,28 @@ function checkToolMatching(steps: Step[], at: string): Problem {
       member = open[0];
     } else if (open.length === 0) {
       const named = pending.some((c) => c.tool === step.tool);
-      if (named) return `${at_i}: the preceding tool-call instruction for "${step.tool}" already has a tool request`;
-      return `${at_i}.request.tool is "${step.tool}" but the preceding model response requests ${pending.map((c) => `"${c.tool}"`).join(', ')}`;
+      if (named) return problem(`${at_i}: the preceding tool-call instruction for "${step.tool}" already has a tool request`);
+      return problem(
+        `${at_i}.request.tool is "${step.tool}" but the preceding model response requests ${pending.map((c) => `"${c.tool}"`).join(', ')}`,
+      );
     } else {
       if (step.args === undefined) {
-        return `${at_i}: "${step.tool}" appears more than once in the preceding group — write "args" to say which call this closes`;
+        return problem(`${at_i}: "${step.tool}" appears more than once in the preceding group — write "args" to say which call this closes`);
       }
       const exact = open.filter((c) => {
         const v = argsValueOf(c.args);
         return v !== undefined && deepEqual(v, step.args);
       });
       if (exact.length !== 1) {
-        return `${at_i}: "args" does not match exactly one of the pending "${step.tool}" calls in the group`;
+        return problem(`${at_i}: "args" does not match exactly one of the pending "${step.tool}" calls in the group`);
       }
       member = exact[0];
     }
     closed.add(member);
     if (argsValueOf(member.args) === undefined) {
-      return `${at_i}: "${step.tool}"'s arguments do not parse as a JSON object — argument fidelity is undefined, so the agent must refuse the call instead (R6); no tool request can follow it`;
+      return problem(
+        `${at_i}: "${step.tool}"'s arguments do not parse as a JSON object — argument fidelity is undefined, so the agent must refuse the call instead (R6); no tool request can follow it`,
+      );
     }
   }
   return undefined;
@@ -708,13 +748,13 @@ function checkToolMatching(steps: Step[], at: string): Problem {
  * (koan-spec.ts's header), so seeing whether anything comes after needs a
  * fresh pass over the finished trace.
  */
-function apiFailureEndsTheTrace(koan: KoanFile): Problem {
+function apiFailureEndsTheTrace(koan: KoanFile): Problem | undefined {
   for (const { steps, at, abort } of scriptedTraces(koan)) {
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
       const isLast = i === steps.length - 1;
       if (step.kind === 'model' && step.response.kind === 'api-failure' && (!isLast || abort !== undefined)) {
-        return `${at}[${i + 1}]: nothing can follow a model API failure — the agent must stop (R8)`;
+        return problem(`${at}[${i + 1}]: nothing can follow a model API failure — the agent must stop (R8)`);
       }
     }
   }
@@ -724,25 +764,25 @@ function apiFailureEndsTheTrace(koan: KoanFile): Problem {
 // A subagent name may be delegated to at most once per trace: there is no
 // such thing yet as a second delegation resuming an existing conversation
 // (SPEC.md §6.4). Depth-first, in trace order.
-function eachSubagentIsDelegatedToOnce(koan: KoanFile): Problem {
+function eachSubagentIsDelegatedToOnce(koan: KoanFile): Problem | undefined {
   for (const { steps, at } of scriptedTraces(koan)) {
-    const problem = checkNamesUnique(steps, at, new Set());
-    if (problem) return problem;
+    const found = checkNamesUnique(steps, at, new Set());
+    if (found) return found;
   }
   return undefined;
 }
 
-function checkNamesUnique(steps: Step[], at: string, seen: Set<string>): Problem {
+function checkNamesUnique(steps: Step[], at: string, seen: Set<string>): Problem | undefined {
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     if (step.kind !== 'subagent') continue;
     const at_i = `${at}[${i}]`;
     if (seen.has(step.name)) {
-      return `${at_i}: subagent "${step.name}" already has a conversation in this trace — a subagent conversation cannot be continued yet`;
+      return problem(`${at_i}: subagent "${step.name}" already has a conversation in this trace — a subagent conversation cannot be continued yet`);
     }
     seen.add(step.name);
-    const problem = checkNamesUnique(step.trace.steps, `${at_i}.when`, seen);
-    if (problem) return problem;
+    const found = checkNamesUnique(step.trace.steps, `${at_i}.when`, seen);
+    if (found) return found;
   }
   return undefined;
 }
@@ -752,14 +792,16 @@ function checkNamesUnique(steps: Step[], at: string, seen: Set<string>): Problem
 // first user message contains (SPEC.md §6.4), and `contains` — chosen to
 // tolerate a framework lightly wrapping the briefing — can only route
 // unambiguously when no opening is a substring of another.
-function openingsAreDistinct(koan: KoanFile): Problem {
+function openingsAreDistinct(koan: KoanFile): Problem | undefined {
   for (const { steps, at, opening } of scriptedTraces(koan)) {
     const openings = [opening];
     collectBriefings(steps, openings);
     for (let a = 0; a < openings.length; a++) {
       for (let b = a + 1; b < openings.length; b++) {
         if (openings[a].text.includes(openings[b].text) || openings[b].text.includes(openings[a].text)) {
-          return `${at}: ${openings[a].label} and ${openings[b].label} are not distinct — no briefing may equal or contain another briefing or the prompt, since requests are attributed to conversations by their opening`;
+          return problem(
+            `${at}: ${openings[a].label} and ${openings[b].label} are not distinct — no briefing may equal or contain another briefing or the prompt, since requests are attributed to conversations by their opening`,
+          );
         }
       }
     }
@@ -783,13 +825,13 @@ function collectBriefings(steps: Step[], out: Array<{ label: string; text: strin
 
 // Subagent conversations count too: R5 counts HTTP requests at the model
 // endpoint, and a delegate's requests arrive there as well.
-function theTraceFitsTheModelRequestBudget(koan: KoanFile): Problem {
+function theTraceFitsTheModelRequestBudget(koan: KoanFile): Problem | undefined {
   const maxRequests = koan.given.limits?.max_model_requests;
   if (maxRequests === undefined) return undefined;
   for (const { steps, at } of scriptedTraces(koan)) {
     const total = countModelRequests(steps);
     if (total > maxRequests) {
-      return `${at} scripts ${total} model requests, more than given.limits.max_model_requests (${maxRequests}) permits`;
+      return problem(`${at} scripts ${total} model requests, more than given.limits.max_model_requests (${maxRequests}) permits`);
     }
   }
   return undefined;

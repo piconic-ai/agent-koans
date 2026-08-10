@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
-import { parseKoanFile } from '../src/parse.js';
+import { isProblem, parseKoanFile } from '../src/parse.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -20,7 +20,7 @@ describe('parseKoanFile: bundled koans', () => {
     it(`${name} is a valid koan file`, () => {
       const raw = parseYaml(fs.readFileSync(path.join(dir, name), 'utf8'));
       const result = parseKoanFile(raw);
-      expect(typeof result === 'string' ? result : undefined).toBeUndefined();
+      expect(isProblem(result) ? result.message : undefined).toBeUndefined();
     });
   }
 });
@@ -379,5 +379,5 @@ const rows: Row[] = [
 
 it.each(rows)('rejects: $rule', ({ yaml, message }) => {
   const result = parseKoanFile(parseYaml(yaml));
-  expect(result).toBe(message);
+  expect(isProblem(result) ? result.message : undefined).toBe(message);
 });

@@ -46,12 +46,17 @@ The runner launches the agent process with these environment variables:
 | ----------------- | -------------------------------------------------------------- |
 | `PORT`            | Port the agent MUST listen on                                  |
 | `OPENAI_BASE_URL` | Base URL of the mock LLM server (includes the `/v1` prefix)    |
-| `OPENAI_API_KEY`  | Dummy credential; MUST be sent but is not validated            |
+| `OPENAI_API_KEY`  | Dummy credential, for clients that require one to start        |
 | `KOAN_TOOLS_URL`  | Base URL of the mock tool server                               |
 | `KOAN_WORKSPACE`  | Filesystem path to the run's workspace directory                |
 
 The agent MUST direct all model calls to `OPENAI_BASE_URL` and all tool
 executions to `KOAN_TOOLS_URL`.
+
+`OPENAI_API_KEY` is set because OpenAI-compatible clients commonly refuse
+to construct without a key, not because the mock wants one: it never
+authenticates a request, so whether the agent forwards the value, sends
+something else, or omits the header entirely has no bearing on any koan.
 
 `KOAN_WORKSPACE` is always set, to a directory that always exists, even
 for a run whose koan declares no files. The runner materializes a koan's

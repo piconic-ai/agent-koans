@@ -246,6 +246,13 @@ made available to the model as the tool result content.
 
 ## 6. Koan file format
 
+The koan file's exhaustive shape and its load-time constraints are
+defined normatively in [src/format.ts](./src/format.ts). This section
+gives the overview and the verification semantics a validator cannot
+express: conversation coherence, trace consumption, argument fidelity,
+the information flows of §6.4, and the meanings a step's position alone
+derives (live/late abort, unordered parallel groups).
+
 Koans are declarative YAML files using a given / when / then structure.
 The `when` block is the run's **expected wire log**: an ordered sequence
 of request/response exchanges observed at the two mock servers. Only the
@@ -286,17 +293,15 @@ then:                     # assertions on the run's outcome
 ```
 
 `given` carries agent setup only — never the prompt (§6.2 explains why
-`then` reads the same way). `given.tools` maps tool name → definition; it
-defaults to empty and MAY be omitted. The runner converts it to the
-wire-format list of §3.2. `given.files` MAY map relative path to file
-content; the runner materializes it into `KOAN_WORKSPACE` (§2) before
-starting the agent — this is how a koan hands the agent context it must
-find on disk instead of over the wire (§6.1 internal reads, §6.4 subagent
-conversations). `given.limits` MAY declare the run's budgets (§3.2); it
-is forwarded verbatim in the run submission. A trace MUST NOT script more
-model requests than a declared `max_model_requests` permits — the loader
-rejects such a koan; a subagent conversation's requests count toward the
-same budget as the main conversation's (§6.4).
+`then` reads the same way). `given.tools` is converted to the
+wire-format list of §3.2. `given.files` materializes into
+`KOAN_WORKSPACE` (§2) before starting the agent — this is how a koan
+hands the agent context it must find on disk instead of over the wire
+(§6.1 internal reads, §6.4 subagent conversations). `given.limits` is
+forwarded verbatim in the run submission (§3.2). A trace MUST NOT script
+more model requests than a declared `max_model_requests` permits — the
+loader rejects such a koan; a subagent conversation's requests count
+toward the same budget as the main conversation's (§6.4).
 
 The top-level `prompt` is the run's initial prompt — what `POST /runs`
 submits (§3.2). It is REQUIRED for a `when`/`one_of` koan; a `turns:`
@@ -452,9 +457,8 @@ as a new `then` key or a general-purpose query language.
 
 Some contracts are outcome-level: more than one process legitimately
 reaches the user's expected result. Such a koan replaces its top-level
-`when` with `one_of`, a mapping of variant name → trace, where each trace
-has exactly the shape of `when`. `given` and `then` stay single and
-shared — the variants may differ only in process, by construction.
+`when` with `one_of`. `given` and `then` stay single and shared — the
+variants may differ only in process, by construction.
 
 ```yaml
 one_of:

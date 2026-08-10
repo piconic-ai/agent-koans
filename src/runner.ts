@@ -24,7 +24,7 @@ export interface AgentConfig {
   /** Milliseconds to wait for a terminal run state. Default 15000. */
   runTimeoutMs?: number;
   /**
-   * The implementation's delegation wire vocabulary (SPEC.md §6.4),
+   * The implementation's delegation wire vocabulary,
    * usually loaded from its `agent-koans.yaml`. Absent means the neutral
    * default: a `subagent` tool with `name`/`prompt` arguments.
    */
@@ -45,7 +45,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 // Waits for one terminal state, from its own fresh deadline: a `turns:`
-// koan (SPEC.md §6.5) calls this once per turn, and a later turn must not
+// koan calls this once per turn, and a later turn must not
 // be charged for time an earlier one already spent waiting.
 async function pollToTerminal(base: string, runId: string, runTimeoutMs: number): Promise<RunState> {
   const deadline = Date.now() + runTimeoutMs;
@@ -112,7 +112,7 @@ function match(label: string, actual: unknown, matcher: Matcher): string | null 
 
 // Judges one run's outcome against one `then` block — the top-level one
 // for a `when`/`one_of` koan, or one turn's own for a `turns:` koan
-// (SPEC.md §6.5): both are the same flat `{ status, output }` shape.
+//: both are the same flat `{ status, output }` shape.
 function judge(then: Judgment, run: RunState): string[] {
   const failures: string[] = [];
   if (then.status !== undefined && run.status !== then.status) {
@@ -187,7 +187,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
 
       await waitForHealth(base, agent.startupTimeoutMs ?? 10_000, child);
 
-      // A `turns:` koan (SPEC.md §6.5) submits its first turn's prompt the
+      // A `turns:` koan submits its first turn's prompt the
       // same way any koan submits its top-level `prompt`; later turns go
       // to POST /runs/{id}/prompts instead.
       const firstPrompt = koan.turns ? koan.turns[0].prompt : (koan.prompt as string);
@@ -241,7 +241,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       let run = await pollToTerminal(base, runId, agent.runTimeoutMs ?? 15_000);
 
       // Every turn but the last is judged here, against its own `then`
-      // (SPEC.md §6.5); the last turn's judgment happens below, together
+      //; the last turn's judgment happens below, together
       // with the plain `when`/`one_of` koan's, once the run has fully
       // settled (including any late abort). A turn that did not land
       // `completed` leaves nothing meaningful to continue, so the runner

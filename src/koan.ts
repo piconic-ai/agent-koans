@@ -37,7 +37,7 @@ export interface ToolResponse {
 /**
  * One tool-call instruction inside a model response — one entry of a
  * `tool_calls` array. A model turn carries more than one of these when the
- * response is written as a list (a parallel group, SPEC.md §6.1).
+ * response is written as a list (a parallel group).
  */
 export interface CallToolInstruction {
   name: string;
@@ -51,13 +51,13 @@ export interface CallToolInstruction {
    * a runtime assertion.
    */
   args?: Record<string, unknown>;
-  /** Declared transform from a following tool-request step's `args` (§6.3); overrides `args` for fidelity checking. */
+  /** Declared transform from a following tool-request step's `args`; overrides `args` for fidelity checking. */
   invokeArgs?: Record<string, unknown>;
   tool_responds?: ToolResponse;
   /**
    * Content of the `given.files` entry named by `args.path`, set when this
    * instruction has no following tool request: an internal read the agent
-   * executes with a tool of its own (SPEC.md §5 R7). The next model
+   * executes with a tool of its own (SPEC.md R7). The next model
    * request of the same conversation must carry this content.
    */
   readsFile?: string;
@@ -65,7 +65,7 @@ export interface CallToolInstruction {
 
 /**
  * One delegation instruction inside a model response — the model hands a
- * briefing to a named subagent (SPEC.md §6.4).
+ * briefing to a named subagent.
  */
 export interface DelegationInstruction {
   /** The delegate's name, as declared to the run. */
@@ -81,12 +81,12 @@ export interface ModelTurn {
   reply?: string;
   /** This turn's tool-call instruction(s); more than one means a parallel group. */
   call_tools?: CallToolInstruction[];
-  /** This turn's delegation instruction(s), each scripted by a following subagent block (SPEC.md §6.4). */
+  /** This turn's delegation instruction(s), each scripted by a following subagent block. */
   delegations?: DelegationInstruction[];
   fails?: ToolResponse;
   /**
    * Set when this is the trace's last turn and it is followed by the
-   * `abort` step (SPEC.md §6.1): `'live'` when this turn is a tool-call
+   * `abort` step: `'live'` when this turn is a tool-call
    * instruction (the run is still in progress when the caller aborts),
    * `'late'` when it is a text reply (the run had already settled).
    */
@@ -95,7 +95,7 @@ export interface ModelTurn {
 
 /**
  * Where turn 2+ of a `turns:` koan's main conversation starts, and the
- * prompt that opens it (SPEC.md §6.5).
+ * prompt that opens it.
  */
 export interface TurnBoundary {
   /** Index into the conversation's `turns` where this turn's exchanges begin. */
@@ -104,7 +104,7 @@ export interface TurnBoundary {
   prompt: string;
 }
 
-/** One scripted conversation of a trace: the main one, or a subagent's (SPEC.md §6.4). */
+/** One scripted conversation of a trace: the main one, or a subagent's. */
 export interface Conversation {
   /** `''` for the main conversation, the subagent's name otherwise. */
   name: string;
@@ -113,7 +113,7 @@ export interface Conversation {
   turns: ModelTurn[];
   /** The opening user message: the top-level `prompt` (or a `turns:` koan's first turn) for the main conversation, the delegation's briefing otherwise. */
   briefing: string;
-  /** Boundaries for turn 2 onward of a `turns:` koan (SPEC.md §6.5); absent otherwise — turn 1 is `briefing`, at index 0. Only ever set on the main conversation. */
+  /** Boundaries for turn 2 onward of a `turns:` koan; absent otherwise — turn 1 is `briefing`, at index 0. Only ever set on the main conversation. */
   followUps?: TurnBoundary[];
 }
 
@@ -135,13 +135,13 @@ export interface RunLimits {
   max_model_requests?: number;
 }
 
-/** A koan's judgment on a run's outcome (top-level, or one turn's, SPEC.md §6.2/§6.5). */
+/** A koan's judgment on a run's outcome (top-level, or one turn's). */
 export interface Judgment {
   status?: string;
   output?: Matcher;
 }
 
-/** One turn of a `turns:` koan: its prompt, and its own judgment (SPEC.md §6.5). */
+/** One turn of a `turns:` koan: its prompt, and its own judgment. */
 export interface TurnSpec {
   prompt: string;
   /** This turn's judgment; defaults to `{ status: 'completed' }` when the turn omits its own `then`. */
@@ -152,19 +152,19 @@ export interface TurnSpec {
 export interface Koan {
   name: string;
   description?: string;
-  /** Agent setup only — never the prompt (SPEC.md §6). */
+  /** Agent setup only — never the prompt. */
   given: {
     tools: Record<string, ToolDef>;
     /** Relative path → content, materialized into `KOAN_WORKSPACE` before the run (SPEC.md §2). */
     files?: Record<string, string>;
     limits?: RunLimits;
   };
-  /** The run's initial prompt (top-level `prompt:`); undefined for a `turns:` koan (SPEC.md §6.5). */
+  /** The run's initial prompt (top-level `prompt:`); undefined for a `turns:` koan. */
   prompt?: string;
-  /** The ordered turns of a `turns:` koan (SPEC.md §6.5); undefined for a `when`/`one_of` koan. */
+  /** The ordered turns of a `turns:` koan; undefined for a `when`/`one_of` koan. */
   turns?: TurnSpec[];
   traces: Record<string, Trace>;
-  /** Empty (unused) for a `turns:` koan — each turn carries its own judgment instead (SPEC.md §6.5). */
+  /** Empty (unused) for a `turns:` koan — each turn carries its own judgment instead. */
   then: Judgment;
 }
 
@@ -251,7 +251,7 @@ function matchOpenCall(openCalls: OpenCall[], tool: string, args: ParsedArgs | u
 /**
  * Compiles one conversation's steps into `conv.turns`, appending (so a
  * `turns:` koan's later turns extend the same conversation, SPEC.md
- * §6.5), and recursively compiles any subagent block into a fresh
+ * koan-spec.ts), and recursively compiles any subagent block into a fresh
  * Conversation appended to `conversations` — the main one first, then
  * subagents in first-appearance order.
  */
@@ -280,7 +280,7 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
         compileSteps(step.trace.steps, child, conversations);
         // A subagent block always closes a delegation from this same
         // conversation's own turns (parse.ts's pairing) — the child's
-        // final reply is what returns to the parent (SPEC.md §6.4).
+        // final reply is what returns to the parent.
         delegationBySubagent.get(step.name)!.final = child.turns.at(-1)!.reply!;
         openCalls = [];
         break;
@@ -313,7 +313,7 @@ function compileJudgment(then: ParsedJudgment | undefined): Judgment {
 }
 
 /**
- * Compiles a `turns:` koan (SPEC.md §6.5) into one Trace: a single main
+ * Compiles a `turns:` koan into one Trace: a single main
  * conversation whose turn boundaries are recorded in `followUps`, plus
  * any subagent conversations delegated to from inside a turn. Turn 1's
  * prompt becomes the conversation's `briefing` (what `POST /runs`
@@ -337,7 +337,7 @@ function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): { 
 }
 
 // An instruction that names a `given.files` entry and has no tool request
-// is an internal read (SPEC.md §5 R7): the runner must see the file's
+// is an internal read (SPEC.md R7): the runner must see the file's
 // content flow into the conversation's next model request. Marked after
 // the trace compiles, since `tool_responds` is only known then.
 function markInternalReads(trace: Trace, files: Record<string, string>): void {

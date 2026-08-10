@@ -413,7 +413,7 @@ const rows: Row[] = [
           - request: model
             response: { tool: x, args: {} }
     `),
-    message: `turns[0].when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one (SPEC.md §6.5)`,
+    message: `turns[0].when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one`,
   },
   {
     rule: 'every delegation is answered by a "subagent" block',
@@ -569,7 +569,7 @@ const rows: Row[] = [
         - request: model
           response: again
     `),
-    message: `when[1]: a model request cannot follow a text reply here — only a later turn's first request may (SPEC.md §6.5)`,
+    message: `when[1]: a model request cannot follow a text reply here — only a later turn's first request may`,
   },
   {
     rule: 'a tool request needs a numeric "status"',

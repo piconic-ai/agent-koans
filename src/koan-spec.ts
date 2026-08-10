@@ -1,10 +1,9 @@
-// What a koan file is. These types are the format's normative definition:
-// SPEC.md §6 links here for the shape and keeps only what a type cannot
-// state — the verification semantics a running trace decides (conversation
-// coherence, trace consumption, argument fidelity, the information flows of
-// §6.4). Reading a file into these types belongs to parse.ts; compiling
-// them into the runner's own trace form belongs to koan.ts. Nothing here
-// executes: every export is a type.
+// What a koan file is. These types are the format's normative definition —
+// SPEC.md links here rather than restating them, and states instead what
+// the agent under test must do (its rules R1–R11). Reading a file into
+// these types belongs to parse.ts; compiling them into the runner's own
+// trace form belongs to koan.ts. Nothing here executes: every export is a
+// type.
 //
 // The shapes are chosen so that a violation is unrepresentable wherever a
 // type can say it. `abort` sits beside a trace's steps rather than among
@@ -34,7 +33,7 @@ export interface KoanFile {
   body: Body;
 }
 
-/** Agent setup only — never the prompt (SPEC.md §6). */
+/** Agent setup only — never the prompt. */
 export interface Given {
   /** Tool name → definition. Empty when the koan declares none. */
   tools: Record<string, ToolDef>;
@@ -53,7 +52,7 @@ export type Body =
   | { kind: 'variants'; prompt: string; variants: Record<string, Trace>; then?: Judgment }
   | { kind: 'turns'; turns: [Turn, Turn, ...Turn[]] };
 
-/** One turn of a `turns` koan — a small koan of its own (§6.5). */
+/** One turn of a `turns` koan — a small koan of its own. */
 export interface Turn {
   prompt: string;
   trace: Trace;
@@ -64,7 +63,7 @@ export interface Turn {
 /**
  * One conversation's expected wire log. `abort` is not a step: it may only
  * end a trace, so it is a property of the trace, and its kind is derived
- * from what it follows rather than written (§6.1).
+ * from what it follows rather than written.
  */
 export interface Trace {
   steps: [Step, ...Step[]];
@@ -110,7 +109,7 @@ export type Instruction =
  * the verbatim `function.arguments` string a koan writes to script a
  * malformed call. A wire string that happens to parse as a JSON object
  * carries the result, and that is exactly what decides whether a tool
- * request may follow (§6.1) — so the rule reads off the value instead of
+ * request may follow — so the rule reads off the value instead of
  * re-parsing it.
  */
 export type Args =
@@ -126,7 +125,7 @@ export interface ToolResponse {
   body?: unknown;
 }
 
-/** `then`: the run's outcome after the trace settles (§6.2). */
+/** `then`: the run's outcome after the trace settles. */
 export interface Judgment {
   status?: string;
   output?: Matcher;

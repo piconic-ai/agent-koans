@@ -14,7 +14,7 @@ import { parse } from 'yaml';
 
 /**
  * How the mock LLM emits a delegation instruction on the wire (SPEC.md
- * §6.4). The mock plays the model, so it must speak the framework's own
+ * koan-spec.ts). The mock plays the model, so it must speak the framework's own
  * delegation vocabulary — there is no adapter between mock and framework.
  */
 export interface DelegationVocabulary {

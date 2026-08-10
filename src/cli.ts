@@ -9,7 +9,7 @@
 // --config, --help) control how THIS invocation runs. What the suite
 // consists of — which koans are skipped, which directories are added —
 // lives only in agent-koans.yaml (config.ts): a skip must carry a reason
-// (SPEC.md §7), and a flag can't enforce that the way a checked-in file
+// (SPEC.md §6), and a flag can't enforce that the way a checked-in file
 // can, so there is no CLI equivalent for skip or add.
 import fs from 'node:fs';
 import path from 'node:path';

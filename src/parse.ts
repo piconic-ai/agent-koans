@@ -116,7 +116,7 @@ export function parseKoanFile(raw: unknown): Parsed<KoanFile> {
 }
 
 // `given` is agent setup only (tools/files/limits) — never the prompt
-// (SPEC.md §6). Optional throughout: a koan with no tools, files, or
+//. Optional throughout: a koan with no tools, files, or
 // limits needs no `given` block, or an empty one, at all.
 function parseGiven(rawGiven: unknown): Parsed<Given> {
   const given = rawGiven ?? {};
@@ -164,7 +164,7 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
 }
 
 // A `turns:` koan replaces the top-level `prompt` and `when`/`one_of`
-// (SPEC.md §6.5); a `when`/`one_of` koan carries a top-level `prompt` and
+//; a `when`/`one_of` koan carries a top-level `prompt` and
 // exactly one of the two trace forms. Dispatches on which raw keys are
 // present, then hands off to the matching parser.
 function parseBody(ctx: Ctx<KoanFile>, raw: Record<string, unknown>): Parsed<Body> {
@@ -185,7 +185,7 @@ function parseBody(ctx: Ctx<KoanFile>, raw: Record<string, unknown>): Parsed<Bod
   }
   if (typeof raw.prompt !== 'string') return problem('missing "prompt"');
   // Routing attributes a request to a conversation by which opening its
-  // first user message contains (SPEC.md §6.4); an empty (or all-
+  // first user message contains; an empty (or all-
   // whitespace) opening is contained in every string, so it would match
   // every request and collapse routing onto the first conversation.
   if (raw.prompt.trim().length === 0) return problem('"prompt" must be non-empty');
@@ -233,8 +233,8 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
   for (let i = 0; i < rawTurns.length; i++) {
     const rt = (rawTurns[i] ?? {}) as Record<string, unknown>;
     // Trim-empty counts as empty: turn 1's prompt routes the run (SPEC.md
-    // §6.4) the same way a plain koan's does, and a later turn's is what
-    // a turn-boundary request must be shown to carry (§6.5).
+    // koan-spec.ts) the same way a plain koan's does, and a later turn's is what
+    // a turn-boundary request must be shown to carry.
     if (typeof rt.prompt !== 'string' || rt.prompt.trim().length === 0) {
       return problem(`turns[${i}] needs a non-empty "prompt"`);
     }
@@ -262,10 +262,10 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
       const last = trace.steps[trace.steps.length - 1];
       // An intermediate turn can only be judged "completed" by ending in
       // a plain reply — the one seam where a later turn's first request
-      // is allowed to continue the same conversation (SPEC.md §6.5).
+      // is allowed to continue the same conversation.
       if (last.kind !== 'model' || last.response.kind !== 'reply') {
         return problem(
-          `turns[${i}].when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one (SPEC.md §6.5)`,
+          `turns[${i}].when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one`,
         );
       }
     }
@@ -372,12 +372,12 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     if (req === 'model') {
       // A reply ends a conversation's trace — nothing legitimately
       // follows it with another model request here. A later turn's own
-      // array starts fresh (SPEC.md §6.5), so this never fires for a
+      // array starts fresh, so this never fires for a
       // turn's own opening request; a tool or subagent-block entry has
       // no such restriction of its own, so this check is model-request-
       // only, same as the shape it mirrors.
       if (prev?.kind === 'model' && prev.response.kind === 'reply') {
-        return problem(`${at_i}: a model request cannot follow a text reply here — only a later turn's first request may (SPEC.md §6.5)`);
+        return problem(`${at_i}: a model request cannot follow a text reply here — only a later turn's first request may`);
       }
       const response = parseModelResponse(into(ctx, `[${i}]`, res), inSubagent);
       if (isProblem(response)) return response;
@@ -385,7 +385,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     } else if (typeof req === 'object' && req !== null && typeof (req as Record<string, unknown>).tool === 'string') {
       const reqTool = (req as Record<string, unknown>).tool as string;
       // No shape check on the request's own args: it is a declared
-      // transform (SPEC.md §6.3), not re-validated against the
+      // transform, not re-validated against the
       // instruction it closes.
       const reqArgs = (req as Record<string, unknown>).args as ParsedArgs | undefined;
       if (typeof res === 'string' || Array.isArray(res) || typeof (res as Record<string, unknown>).status !== 'number') {
@@ -404,7 +404,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
 }
 
 /**
- * A model response, discriminated by its written form (§6.1): a bare
+ * A model response, discriminated by its written form: a bare
  * string replies, a mapping instructs or fails, a list is a parallel
  * group. `inSubagent` gates the one rule that depends on where this
  * response sits: a model API failure ends the whole run, so it cannot be
@@ -543,7 +543,7 @@ function parseDelegateInstruction(ctx: Ctx<unknown>): Parsed<Instruction> {
   }
   // Trim-empty counts as empty: routing matches by `.includes`, and an
   // all-whitespace briefing risks the same routing collapse an empty one
-  // guarantees (SPEC.md §6.4).
+  // guarantees.
   if (typeof node.prompt !== 'string' || node.prompt.trim().length === 0) {
     return problem(`${at} needs a non-empty "prompt" (the briefing)`);
   }
@@ -607,7 +607,7 @@ interface ScriptedTrace {
   abort?: AbortKind;
 }
 
-// `turns:` scripts one continuous conversation (SPEC.md §6.5): each turn's
+// `turns:` scripts one continuous conversation: each turn's
 // own trace holds only that turn's own steps (koan.ts appends them in
 // order when compiling), so the rules below that read a whole
 // conversation — delegation resolution, tool-request matching, budget,
@@ -763,7 +763,7 @@ function apiFailureEndsTheTrace(koan: KoanFile): Problem | undefined {
 
 // A subagent name may be delegated to at most once per trace: there is no
 // such thing yet as a second delegation resuming an existing conversation
-// (SPEC.md §6.4). Depth-first, in trace order.
+//. Depth-first, in trace order.
 function eachSubagentIsDelegatedToOnce(koan: KoanFile): Problem | undefined {
   for (const { steps, at } of scriptedTraces(koan)) {
     const found = checkNamesUnique(steps, at, new Set());
@@ -789,7 +789,7 @@ function checkNamesUnique(steps: Step[], at: string, seen: Set<string>): Problem
 
 // Openings must be mutually non-containing, not merely distinct: the mock
 // attributes each incoming request to a conversation by which opening its
-// first user message contains (SPEC.md §6.4), and `contains` — chosen to
+// first user message contains, and `contains` — chosen to
 // tolerate a framework lightly wrapping the briefing — can only route
 // unambiguously when no opening is a substring of another.
 function openingsAreDistinct(koan: KoanFile): Problem | undefined {

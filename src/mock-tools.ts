@@ -23,7 +23,7 @@ interface MockTools {
 // args when the name repeats, which only happens inside one parallel
 // group, since a group with two same-name-same-args members is already a
 // load error (koan.ts). FIFO order is deliberately not asserted: SPEC.md
-// §6.1 lets the agent execute a group's invocations in any order,
+// koan-spec.ts lets the agent execute a group's invocations in any order,
 // sequentially or concurrently, so the contract is completeness, not
 // arrival order. Everything else about the queue — one entry consumed per
 // invocation, extras and unknowns rejected — stays as strict as before.

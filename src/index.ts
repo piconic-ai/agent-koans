@@ -6,6 +6,7 @@ export type {
   Conversation,
   DelegationInstruction,
   DiscoveredKoan,
+  Judgment,
   Koan,
   Matcher,
   ModelTurn,
@@ -13,6 +14,8 @@ export type {
   ToolDef,
   ToolResponse,
   Trace,
+  TurnBoundary,
+  TurnSpec,
 } from './koan.js';
 export { runKoan } from './runner.js';
 export type { AgentConfig } from './runner.js';

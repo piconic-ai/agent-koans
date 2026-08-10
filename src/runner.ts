@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { DelegationVocabulary } from './config.js';
-import type { Koan, Matcher, Trace } from './koan.js';
+import type { Judgment, Koan, Matcher, Trace } from './koan.js';
 import { startMockLlm } from './mock-llm.js';
 import { startMockTools } from './mock-tools.js';
 import type { PendingInvocation } from './pending.js';
@@ -33,8 +33,32 @@ export interface AgentConfig {
 
 const TERMINAL_STATES = new Set(['completed', 'failed', 'aborted']);
 
+/** The run state as returned by `GET /runs/{run_id}` — only the fields this module reads. */
+interface RunState {
+  status?: string;
+  output?: string;
+  error?: string;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// Waits for one terminal state, from its own fresh deadline: a `turns:`
+// koan (SPEC.md §6.5) calls this once per turn, and a later turn must not
+// be charged for time an earlier one already spent waiting.
+async function pollToTerminal(base: string, runId: string, runTimeoutMs: number): Promise<RunState> {
+  const deadline = Date.now() + runTimeoutMs;
+  for (;;) {
+    const res = await fetch(`${base}/runs/${runId}`);
+    if (!res.ok) throw new Error(`GET /runs/${runId} returned ${res.status}`);
+    const run = (await res.json()) as RunState;
+    if (TERMINAL_STATES.has(String(run.status))) return run;
+    if (Date.now() > deadline) {
+      throw new Error(`terminal-state guarantee violated: run still "${run.status}" after ${runTimeoutMs}ms`);
+    }
+    await sleep(100);
+  }
 }
 
 /** Find a free loopback port to start an agent on. */
@@ -84,6 +108,21 @@ function match(label: string, actual: unknown, matcher: Matcher): string | null 
     return `${label}: unknown matcher ${JSON.stringify(matcher)}`;
   }
   return actual === matcher ? null : `${label}: expected ${JSON.stringify(matcher)}, got ${JSON.stringify(actual)}`;
+}
+
+// Judges one run's outcome against one `then` block — the top-level one
+// for a `when`/`one_of` koan, or one turn's own for a `turns:` koan
+// (SPEC.md §6.5): both are the same flat `{ status, output }` shape.
+function judge(then: Judgment, run: RunState): string[] {
+  const failures: string[] = [];
+  if (then.status !== undefined && run.status !== then.status) {
+    failures.push(`run.status: expected "${then.status}", got "${run.status}"${run.error ? ` (error: ${run.error})` : ''}`);
+  }
+  if (then.output !== undefined) {
+    const failure = match('run.output', run.output, then.output);
+    if (failure) failures.push(failure);
+  }
+  return failures;
 }
 
 /**
@@ -148,11 +187,16 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
 
       await waitForHealth(base, agent.startupTimeoutMs ?? 10_000, child);
 
+      // A `turns:` koan (SPEC.md §6.5) submits its first turn's prompt the
+      // same way any koan submits its top-level `prompt`; later turns go
+      // to POST /runs/{id}/prompts instead.
+      const firstPrompt = koan.turns ? koan.turns[0].prompt : (koan.prompt as string);
+
       const submitRes = await fetch(`${base}/runs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          task: { prompt: koan.given.task },
+          prompt: firstPrompt,
           tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
           ...(subagentNames.length > 0 ? { subagents: subagentNames.map((name) => ({ name })) } : {}),
           ...(koan.given.limits ? { limits: koan.given.limits } : {}),
@@ -166,6 +210,10 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         throw new Error('POST /runs response is missing "run_id"');
       }
 
+      // A `turns:` koan never scripts `abort` (koan.ts rejects it), so
+      // abortKind is always undefined for one — this whole branch is
+      // unreached and the run-timeout deadline below serves only the
+      // live-abort wait.
       const abortKind = trace.conversations[0].turns.at(-1)?.abort;
       const deadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
 
@@ -190,18 +238,39 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         }
       }
 
-      let run: { status?: string; output?: string; error?: string } = {};
-      for (;;) {
-        const res = await fetch(`${base}/runs/${runId}`);
-        if (!res.ok) throw new Error(`GET /runs/${runId} returned ${res.status}`);
-        run = (await res.json()) as typeof run;
-        if (TERMINAL_STATES.has(String(run.status))) break;
-        if (Date.now() > deadline) {
-          throw new Error(
-            `terminal-state guarantee violated: run still "${run.status}" after ${agent.runTimeoutMs ?? 15_000}ms`,
-          );
+      let run = await pollToTerminal(base, runId, agent.runTimeoutMs ?? 15_000);
+
+      // Every turn but the last is judged here, against its own `then`
+      // (SPEC.md §6.5); the last turn's judgment happens below, together
+      // with the plain `when`/`one_of` koan's, once the run has fully
+      // settled (including any late abort). A turn that did not land
+      // `completed` leaves nothing meaningful to continue, so the runner
+      // stops sending further prompts right there — `stoppedEarly` records
+      // this, so the last turn's judgment below is skipped: that turn
+      // never ran, and judging it would report a failure about the wrong
+      // turn's expectations against the state the one that actually
+      // stopped left behind.
+      let stoppedEarly = false;
+      if (koan.turns) {
+        for (let t = 0; t < koan.turns.length - 1; t++) {
+          failures.push(...judge(koan.turns[t].then, run));
+          if (run.status !== 'completed') {
+            stoppedEarly = true;
+            failures.push(
+              `turn ${t + 1} of ${koan.turns.length} did not complete; the remaining prompts were not sent`,
+            );
+            break;
+          }
+          const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ prompt: koan.turns[t + 1].prompt }),
+          });
+          if (promptRes.status !== 202 && promptRes.status !== 200) {
+            throw new Error(`POST /runs/${runId}/prompts returned ${promptRes.status}, expected 202 or 200`);
+          }
+          run = await pollToTerminal(base, runId, agent.runTimeoutMs ?? 15_000);
         }
-        await sleep(100);
       }
 
       if (abortKind === 'late') {
@@ -236,14 +305,13 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         );
       }
 
-      if (koan.then.run?.status !== undefined && run.status !== koan.then.run.status) {
-        failures.push(
-          `run.status: expected "${koan.then.run.status}", got "${run.status}"${run.error ? ` (error: ${run.error})` : ''}`,
-        );
-      }
-      if (koan.then.run?.output !== undefined) {
-        const failure = match('run.output', run.output, koan.then.run.output);
-        if (failure) failures.push(failure);
+      // The last turn's judgment (or the only one, for a plain `when`/
+      // `one_of` koan) — against the fully-settled state, late abort
+      // included. Skipped when an earlier turn already stopped the run
+      // (`stoppedEarly`): that turn's own judgment above, plus the
+      // underrun failures, already cover the koan's failure.
+      if (!stoppedEarly) {
+        failures.push(...judge(koan.turns ? koan.turns[koan.turns.length - 1].then : koan.then, run));
       }
     } catch (err) {
       failures.push(err instanceof Error ? err.message : String(err));

@@ -6,7 +6,7 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { DEFAULT_DELEGATION, type DelegationVocabulary } from './config.js';
-import type { Conversation, Koan, ModelTurn, Trace } from './koan.js';
+import type { Conversation, Koan, ModelTurn, Trace, TurnBoundary } from './koan.js';
 import type { PendingInvocation } from './pending.js';
 
 interface ChatMessage {
@@ -115,7 +115,12 @@ interface ConversationScript {
 // parent/child/sibling cases, or omit a value kind (file contents, most
 // notably) from one of them by oversight.
 function buildForbidden(trace: Trace): Map<string, ConversationScript['forbidden']> {
-  const openings = (conv: Conversation): string[] => [conv.briefing];
+  // Every user turn's prompt, not just the first: a `turns:` koan's main
+  // conversation (SPEC.md §6.5) opens more than one (conv.followUps).
+  const openings = (conv: Conversation): string[] => [
+    conv.briefing,
+    ...(conv.followUps?.map((f) => f.prompt) ?? []),
+  ];
   const replies = (conv: Conversation): string[] =>
     conv.turns.map((t) => t.reply).filter((r): r is string => r !== undefined);
   const toolScalars = (conv: Conversation): string[] =>
@@ -260,6 +265,54 @@ function checkConversationStart(
   }
 }
 
+// Everything a `turns:` koan's conversation (SPEC.md §6.5) scripted
+// before `uptoIndex`: every earlier turn's opening prompt, replies, tool
+// response scalars, internal reads, and delegation finals — what a later
+// turn's first request must still carry, the same positive-flow style as
+// a subagent's final reply crossing into its parent (SPEC.md §6.4).
+function turnValues(conv: Conversation, uptoIndex: number): string[] {
+  const values: string[] = [conv.briefing];
+  for (const f of conv.followUps ?? []) {
+    if (f.start < uptoIndex) values.push(f.prompt);
+  }
+  for (const turn of conv.turns.slice(0, uptoIndex)) {
+    if (turn.reply !== undefined) values.push(turn.reply);
+    for (const member of turn.call_tools ?? []) {
+      if (member.tool_responds) values.push(...scalarLeaves(member.tool_responds.body));
+      if (member.readsFile !== undefined) values.push(member.readsFile);
+    }
+    for (const d of turn.delegations ?? []) values.push(d.final);
+  }
+  return values;
+}
+
+// The request that opens turn 2+ of a `turns:` koan (SPEC.md §6.5): it
+// must carry the new turn's prompt, plus everything scripted into every
+// earlier turn — the run-level counterpart of a subagent's continuation
+// history, before that was cut back to one delegation per name (§6.4).
+function checkTurnBoundary(
+  conv: Conversation,
+  boundary: TurnBoundary,
+  requestNo: number,
+  messages: ChatMessage[],
+  violations: string[],
+): void {
+  if (messages[messages.length - 1]?.role === 'tool') {
+    violations.push(`request #${requestNo} opens a new turn of ${label(conv)}, but its last message is a tool message`);
+  }
+  const text = requestText(messages);
+  if (!text.includes(boundary.prompt)) {
+    violations.push(`request #${requestNo}: the new turn's prompt is missing from the request (SPEC.md §6.5)`);
+  }
+  for (const value of turnValues(conv, boundary.start)) {
+    if (!text.includes(value)) {
+      violations.push(
+        `request #${requestNo}: a follow-up must carry the earlier turns' history — ${JSON.stringify(value)} is missing (SPEC.md §6.5)`,
+      );
+    }
+  }
+}
+
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -375,8 +428,11 @@ export function startMockLlm(
       }
     }
 
+    const followUp = conv.followUps?.find((f) => f.start === index);
     if (index === 0) {
       checkConversationStart(conv, requestNo, messages, state.violations);
+    } else if (followUp) {
+      checkTurnBoundary(conv, followUp, requestNo, messages, state.violations);
     } else {
       checkCoherence(conv, index, requestNo, messages, state.violations);
     }

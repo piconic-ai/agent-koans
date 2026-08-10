@@ -6,9 +6,10 @@ description: >
   reach the child's next model request.
 
 given:
-  task: "Summarize the incident. The details are in report.md."
   files:
     report.md: "2026-08-09 03:12 UTC: checkout returned 503 for 4 minutes. Incident code INC-4407."
+
+prompt: "Summarize the incident. The details are in report.md."
 
 when:
   - request: model
@@ -25,6 +26,5 @@ when:
     response: "Summary ready: incident INC-4407."
 
 then:
-  run:
-    status: completed
-    output: { contains: "INC-4407" }
+  status: completed
+  output: { contains: "INC-4407" }

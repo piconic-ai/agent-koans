@@ -112,6 +112,76 @@ describe('cli', () => {
     expect(stdout).not.toContain('ok    ');
     expect(stderr).not.toContain('FAIL  ');
   });
+
+  it(
+    "a turns koan whose first turn does not complete is reported against that turn, not the last turn's expectations",
+    { timeout: 60_000 },
+    async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-turn-diag-'));
+      try {
+        // A deliberately non-conforming agent, answering GET /health (so
+        // preflight passes) but settling every run "failed" regardless of
+        // what was submitted. This is the only way to make an
+        // intermediate turn fail to complete: a well-formed koan trace
+        // cannot script that on its own, since every turn but the last
+        // must show a completing reply (koan.ts's own load-time rule) —
+        // a real, conforming agent given such a trace always completes it.
+        fs.writeFileSync(
+          path.join(dir, 'broken-agent.js'),
+          `const http = require('node:http');
+http.createServer((req, res) => {
+  if (req.url === '/health') { res.writeHead(200); return res.end(); }
+  if (req.method === 'POST' && req.url === '/runs') {
+    res.writeHead(202, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ run_id: 'r1' }));
+  }
+  if (req.method === 'GET' && req.url === '/runs/r1') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ run_id: 'r1', status: 'failed', error: 'always fails' }));
+  }
+  res.writeHead(404);
+  res.end();
+}).listen(process.env.PORT);
+`,
+        );
+
+        fs.writeFileSync(
+          path.join(dir, '000-two-turns.yaml'),
+          `name: two-turns
+given:
+  tools: {}
+turns:
+  - prompt: "First turn."
+    when:
+      - request: model
+        response: "first done"
+    then:
+      status: completed
+  - prompt: "Second turn."
+    when:
+      - request: model
+        response: "second done, unique-marker-xyz"
+    then:
+      status: completed
+      output: { contains: "unique-marker-xyz" }
+`,
+        );
+
+        const { code, stderr } = await runCli(
+          ['--agent', `node ${path.join(dir, 'broken-agent.js')}`, '--koans', dir],
+          dir,
+        );
+        expect(code).toBe(1);
+        expect(stderr).toContain('turn 1 of 2 did not complete');
+        // The bug this regresses: the last turn's judgment ran anyway,
+        // against turn 1's stale "failed" state, reporting a mismatch
+        // about turn 2's output — a turn that never actually ran.
+        expect(stderr).not.toContain('unique-marker-xyz');
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe('cli custom koans and config', () => {

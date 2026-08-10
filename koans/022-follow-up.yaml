@@ -1,0 +1,38 @@
+name: follow-up
+description: >
+  A follow-up prompt to the same conversation. The agent must carry
+  the earlier exchange into the next turn.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+turns:
+  - prompt: "What is the weather in Tokyo?"
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Tokyo" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 31 } }
+      - request: model
+        response: "Tokyo is 31°C."
+    then:
+      status: completed
+      output: { contains: "31" }
+  - prompt: "What about Osaka?"
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Osaka" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 33 } }
+      - request: model
+        response: "Osaka is 33°C, warmer than Tokyo."
+    then:
+      status: completed
+      output: { contains: "33" }

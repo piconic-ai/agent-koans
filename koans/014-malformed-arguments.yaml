@@ -5,7 +5,6 @@ description: >
   corrects itself.
 
 given:
-  task: "Get the current weather in Tokyo and report it."
   tools:
     get_weather:
       description: "Look up current weather for a city"
@@ -14,6 +13,8 @@ given:
         properties:
           city: { type: string }
         required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
 
 when:
   - request: model
@@ -27,6 +28,5 @@ when:
     response: "The weather in Tokyo is 31°C."
 
 then:
-  run:
-    status: completed
-    output: { contains: "31" }
+  status: completed
+  output: { contains: "31" }

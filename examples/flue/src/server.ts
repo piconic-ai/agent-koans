@@ -32,28 +32,20 @@ interface Run {
 }
 
 const runs = new Map<string, Run>();
-// The per-run agent handle, kept only while the run is in flight — the
-// abort endpoint needs it to call the handle's own abort(); a run that
-// already settled has nothing left to cancel (SPEC.md §3 abort guarantee).
+// The per-run agent handle, kept for the run's whole process lifetime —
+// not just while a turn is in flight. The abort endpoint needs it to call
+// the handle's own abort(); a follow-up prompt (SPEC.md §3.5) needs it to
+// dispatch into the SAME durable conversation instead of a fresh one.
 const handles = new Map<string, AgentInstanceHandle>();
 
-function startRun(prompt: string, tools: RunToolDef[], subagents: RunSubagentDef[], limits?: RunLimits): Run {
-  const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
-  runs.set(run.run_id, run);
-  armBudget(limits?.max_model_requests);
-  // No id passed to init(): each run gets an isolated conversation, never
-  // reusing another run's state.
-  const agent = init(Assistant);
-  handles.set(run.run_id, agent);
+// Runs (or re-runs, for a follow-up) one turn: dispatches `prompt` to
+// `agent` and settles `run` from the reply. `initialData` is passed only
+// on the turn that creates the instance — Flue itself ignores it on any
+// later dispatch to an existing one, so this is just for clarity here.
+function runTurn(run: Run, agent: AgentInstanceHandle, prompt: string, initialData?: AssistantData): void {
   void (async () => {
     try {
-      const initialData: AssistantData = {
-        tools,
-        toolsBaseUrl: config.tools.baseUrl,
-        subagents,
-        workspaceDir: config.workspace.dir,
-      };
-      const receipt = await agent.dispatch({ message: prompt, initialData });
+      const receipt = await agent.dispatch(initialData ? { message: prompt, initialData } : prompt);
       const reply = await agent.read(receipt);
       run.status = 'completed';
       run.output = reply.text;
@@ -68,19 +60,54 @@ function startRun(prompt: string, tools: RunToolDef[], subagents: RunSubagentDef
           ? err.outcome
           : 'failed';
       run.error = err instanceof Error ? err.message : String(err);
-    } finally {
-      handles.delete(run.run_id);
     }
   })();
+}
+
+function startRun(prompt: string, tools: RunToolDef[], subagents: RunSubagentDef[], limits?: RunLimits): Run {
+  const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
+  runs.set(run.run_id, run);
+  armBudget(limits?.max_model_requests);
+  // No id passed to init(): each run gets an isolated conversation, never
+  // reusing another run's state.
+  const agent = init(Assistant);
+  handles.set(run.run_id, agent);
+  const initialData: AssistantData = {
+    tools,
+    toolsBaseUrl: config.tools.baseUrl,
+    subagents,
+    workspaceDir: config.workspace.dir,
+  };
+  runTurn(run, agent, prompt, initialData);
   return run;
 }
 
 /**
+ * Deliver a follow-up prompt to an existing run's conversation (SPEC.md
+ * §3.5): the same handle, so Flue continues the same durable instance
+ * rather than starting a fresh one. Returns `false` when `runId` is
+ * unknown, so the caller can answer 404. Re-opens a run already in a
+ * terminal state: `running` again until this turn itself settles. The
+ * budget armed at `startRun` is run-wide (SPEC.md §4 R5), not re-armed
+ * here, so it keeps counting down across turns.
+ */
+function sendPrompt(runId: string, prompt: string): boolean {
+  const run = runs.get(runId);
+  const agent = handles.get(runId);
+  if (!run || !agent) return false;
+  run.status = 'running';
+  run.output = undefined;
+  run.error = undefined;
+  runTurn(run, agent, prompt);
+  return true;
+}
+
+/**
  * Request cancellation of a run (SPEC.md §3 abort guarantee). Returns
- * `false` when `runId` is unknown, so the caller can answer 404. A run
- * already in a terminal state has no handle left in `handles` — the
- * abort is then a no-op, since a committed result must never be
- * rewritten.
+ * `false` when `runId` is unknown, so the caller can answer 404. Calling
+ * abort() on an instance with no live turn in flight has nothing to
+ * reject — the settled `run.status` a prior turn already committed is
+ * unaffected, so a late abort stays a no-op the way it must.
  */
 async function abortRun(runId: string): Promise<boolean> {
   const run = runs.get(runId);
@@ -96,15 +123,15 @@ app.get('/health', (c) => c.json({ status: 'ok' }));
 app.post('/runs', async (c) => {
   const body = await c.req
     .json<{
-      task?: { prompt?: string };
+      prompt?: string;
       tools?: RunToolDef[];
       subagents?: RunSubagentDef[];
       limits?: RunLimits;
     }>()
     .catch(() => null);
-  const prompt = body?.task?.prompt;
+  const prompt = body?.prompt;
   if (typeof prompt !== 'string') {
-    return c.json({ error: 'task.prompt is required' }, 400);
+    return c.json({ error: 'prompt is required' }, 400);
   }
   // The run executes asynchronously; the caller polls GET /runs/{id}.
   const run = startRun(prompt, body?.tools ?? [], body?.subagents ?? [], body?.limits);
@@ -115,6 +142,17 @@ app.get('/runs/:id', (c) => {
   const run = runs.get(c.req.param('id'));
   if (!run) return c.json({ error: 'run not found' }, 404);
   return c.json(run);
+});
+
+app.post('/runs/:id/prompts', async (c) => {
+  const body = await c.req.json<{ prompt?: string }>().catch(() => null);
+  const prompt = body?.prompt;
+  if (typeof prompt !== 'string') {
+    return c.json({ error: 'prompt is required' }, 400);
+  }
+  const known = sendPrompt(c.req.param('id'), prompt);
+  if (!known) return c.json({ error: 'run not found' }, 404);
+  return c.json({}, 202);
 });
 
 app.post('/runs/:id/abort', async (c) => {

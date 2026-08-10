@@ -103,6 +103,17 @@ export interface ModelTurn {
   abort?: 'live' | 'late';
 }
 
+/**
+ * Where turn 2+ of a `turns:` koan's main conversation starts, and the
+ * prompt that opens it (SPEC.md §6.5).
+ */
+export interface TurnBoundary {
+  /** Index into the conversation's `turns` where this turn's exchanges begin. */
+  start: number;
+  /** The user's prompt that opens this turn. */
+  prompt: string;
+}
+
 /** One scripted conversation of a trace: the main one, or a subagent's (SPEC.md §6.4). */
 export interface Conversation {
   /** `''` for the main conversation, the subagent's name otherwise. */
@@ -110,8 +121,10 @@ export interface Conversation {
   /** The delegating conversation's name; undefined for the main conversation. */
   parent?: string;
   turns: ModelTurn[];
-  /** The opening user message: `given.task` for the main conversation, the delegation's briefing otherwise. */
+  /** The opening user message: the top-level `prompt` (or a `turns:` koan's first turn) for the main conversation, the delegation's briefing otherwise. */
   briefing: string;
+  /** Boundaries for turn 2 onward of a `turns:` koan (SPEC.md §6.5); absent otherwise — turn 1 is `briefing`, at index 0. Only ever set on the main conversation. */
+  followUps?: TurnBoundary[];
 }
 
 /** One compiled trace variant: the main conversation plus any subagent conversations. */
@@ -132,21 +145,37 @@ export interface RunLimits {
   max_model_requests?: number;
 }
 
+/** A koan's judgment on a run's outcome (top-level, or one turn's, SPEC.md §6.2/§6.5). */
+export interface Judgment {
+  status?: string;
+  output?: Matcher;
+}
+
+/** One turn of a `turns:` koan: its prompt, and its own judgment (SPEC.md §6.5). */
+export interface TurnSpec {
+  prompt: string;
+  /** This turn's judgment; defaults to `{ status: 'completed' }` when the turn omits its own `then`. */
+  then: Judgment;
+}
+
 /** A compiled koan: shared `given`/`then` plus one or more trace variants. */
 export interface Koan {
   name: string;
   description?: string;
+  /** Agent setup only — never the prompt (SPEC.md §6). */
   given: {
-    task: string;
     tools: Record<string, ToolDef>;
     /** Relative path → content, materialized into `KOAN_WORKSPACE` before the run (SPEC.md §2). */
     files?: Record<string, string>;
     limits?: RunLimits;
   };
+  /** The run's initial prompt (top-level `prompt:`); undefined for a `turns:` koan (SPEC.md §6.5). */
+  prompt?: string;
+  /** The ordered turns of a `turns:` koan (SPEC.md §6.5); undefined for a `when`/`one_of` koan. */
+  turns?: TurnSpec[];
   traces: Record<string, Trace>;
-  then: {
-    run?: { status?: string; output?: Matcher };
-  };
+  /** Empty (unused) for a `turns:` koan — each turn carries its own judgment instead (SPEC.md §6.5). */
+  then: Judgment;
 }
 
 /** A koan found on disk, addressed by its filename (without extension) as id. */
@@ -235,13 +264,22 @@ interface CompileCtx {
   conversations: Map<string, Conversation>;
 }
 
-// Compiles one conversation's whole trace — the main one's `when`, or one
-// subagent block's `when`. Always starts from an empty `conv.turns`: a
-// subagent name may be delegated to at most once per trace (below), so
-// this never resumes a conversation that already has turns.
-function compileConversation(ctx: CompileCtx, label: string, trace: RawTraceStep[], conv: Conversation): void {
+// Compiles one conversation's whole trace — the main one's `when`, one
+// subagent block's `when`, or (via `turnBoundary`) one turn's `when` of a
+// `turns:` koan, appended to the same main conversation as earlier turns
+// (SPEC.md §6.5). `callStart` is where THIS call's own exchanges begin:
+// always 0 for a subagent block (a fresh conversation every time, §6.4),
+// but possibly non-zero for a turns koan's second call onward.
+function compileConversation(
+  ctx: CompileCtx,
+  label: string,
+  trace: RawTraceStep[],
+  conv: Conversation,
+  turnBoundary = false,
+): void {
   const file = ctx.file;
   const turns = conv.turns;
+  const callStart = turns.length;
   // The latest turn's delegations still waiting for their subagent block.
   let unresolved: DelegationInstruction[] = [];
 
@@ -268,6 +306,9 @@ function compileConversation(ctx: CompileCtx, label: string, trace: RawTraceStep
 
     if (raw === 'abort') {
       requireResolved(at);
+      if (turnBoundary) {
+        fail(file, `${at}: "abort" cannot appear inside a "turns" koan — turn-level cancellation is not supported yet`);
+      }
       if (conv.name !== '') {
         fail(file, `${at}: "abort" cannot appear inside a subagent block — only the caller's own run can be aborted`);
       }
@@ -326,10 +367,13 @@ function compileConversation(ctx: CompileCtx, label: string, trace: RawTraceStep
       requireResolved(at);
       const prev = turns.at(-1);
       // A reply ends this conversation's trace — nothing legitimately
-      // follows it within the same `when` (multi-turn traces are not
-      // supported yet).
-      if (prev && !prev.call_tools && !prev.delegations) {
-        fail(file, `${at}: a model request cannot follow a text reply (multi-turn traces are not supported yet)`);
+      // follows it within the same `when`, except right here, at the one
+      // seam a `turns:` koan opens: the first entry of a later turn's
+      // `when`, continuing the same conversation a fresh user message
+      // just reopened (SPEC.md §6.5).
+      const opensTurn = turnBoundary && turns.length === callStart;
+      if (prev && !opensTurn && !prev.call_tools && !prev.delegations) {
+        fail(file, `${at}: a model request cannot follow a text reply here — only a later turn's first request may (SPEC.md §6.5)`);
       }
       if (typeof res === 'string') {
         turns.push({ reply: res });
@@ -461,24 +505,104 @@ function compileConversation(ctx: CompileCtx, label: string, trace: RawTraceStep
     }
   }
   requireResolved(`${label}[${trace.length}]`);
-  if (turns.length === 0) fail(file, `"${label}" compiled to an empty timeline`);
+  if (turns.length === callStart) fail(file, `"${label}" compiled to an empty timeline`);
 }
 
-function compileTrace(file: string, trace: RawTraceStep[], task: string, label = 'when'): Trace {
+function compileTrace(file: string, trace: RawTraceStep[], prompt: string, label = 'when'): Trace {
   const ctx: CompileCtx = { file, conversations: new Map() };
-  const main: Conversation = { name: '', turns: [], briefing: task };
+  const main: Conversation = { name: '', turns: [], briefing: prompt };
   ctx.conversations.set('', main);
   compileConversation(ctx, label, trace, main);
   return { conversations: [...ctx.conversations.values()] };
+}
+
+interface RawTurn {
+  prompt?: unknown;
+  when?: unknown;
+  then?: unknown;
+}
+
+function compileJudgment(file: string, at: string, raw: unknown): Judgment {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    fail(file, `${at} must be a mapping`);
+  }
+  const j = raw as { status?: unknown; output?: unknown };
+  for (const key of Object.keys(j)) {
+    if (key !== 'status' && key !== 'output') {
+      fail(file, `${at} has unknown key "${key}" — a judgment carries only "status" and "output"`);
+    }
+  }
+  if (j.status !== undefined && typeof j.status !== 'string') fail(file, `${at}.status must be a string`);
+  return { status: j.status as string | undefined, output: j.output as Matcher | undefined };
+}
+
+/**
+ * Compiles a `turns:` koan (SPEC.md §6.5) into one Trace: a single main
+ * conversation whose turn boundaries are recorded in `followUps`, plus
+ * any subagent conversations delegated to from inside a turn. Turn 1's
+ * prompt becomes the conversation's `briefing` (what `POST /runs`
+ * submits); turn 2 onward each append a `followUps` boundary and their
+ * own `when` to the same conversation.
+ */
+function compileTurns(file: string, rawTurns: RawTurn[]): { trace: Trace; turns: TurnSpec[] } {
+  if (rawTurns.length < 2) {
+    fail(file, '"turns" needs at least two entries — a 1-turn koan is just "when"');
+  }
+  const turns: TurnSpec[] = [];
+  for (const [i, rt] of rawTurns.entries()) {
+    // Trim-empty counts as empty: turn 1's prompt routes the run (SPEC.md
+    // §6.4) the same way a plain koan's does, and a later turn's is what
+    // a turn-boundary request must be shown to carry (§6.5) — an
+    // all-whitespace one would make that check vacuous.
+    if (typeof rt?.prompt !== 'string' || rt.prompt.trim().length === 0) {
+      fail(file, `turns[${i}] needs a non-empty "prompt"`);
+    }
+    for (const key of Object.keys(rt)) {
+      if (key !== 'prompt' && key !== 'when' && key !== 'then') {
+        fail(file, `turns[${i}] has unknown key "${key}" — a turn entry carries only "prompt", "when", and "then"`);
+      }
+    }
+    // Every turn is judged, whether the koan writes its own `then` or not
+    // — an intermediate turn defaults to requiring "completed" (SPEC.md
+    // §6.5), and this is the only place that default is applied.
+    const then = rt.then !== undefined ? compileJudgment(file, `turns[${i}].then`, rt.then) : { status: 'completed' };
+    turns.push({ prompt: rt.prompt, then });
+  }
+
+  const ctx: CompileCtx = { file, conversations: new Map() };
+  const followUps: TurnBoundary[] = [];
+  const main: Conversation = { name: '', turns: [], briefing: turns[0].prompt, followUps };
+  ctx.conversations.set('', main);
+
+  for (const [i, rt] of rawTurns.entries()) {
+    if (!Array.isArray(rt.when) || rt.when.length === 0) {
+      fail(file, `turns[${i}].when must be a non-empty list of trace steps`);
+    }
+    if (i > 0) followUps.push({ start: main.turns.length, prompt: turns[i].prompt });
+    compileConversation(ctx, `turns[${i}].when`, rt.when as RawTraceStep[], main, true);
+    if (i < rawTurns.length - 1 && main.turns.at(-1)?.reply === undefined) {
+      fail(
+        file,
+        `turns[${i}].when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one (SPEC.md §6.5)`,
+      );
+    }
+  }
+
+  return { trace: { conversations: [...ctx.conversations.values()] }, turns };
 }
 
 // Openings must be mutually non-containing, not merely distinct: the mock
 // attributes each incoming request to a conversation by which opening its
 // first user message contains (SPEC.md §6.4), and `contains` — chosen to
 // tolerate a framework lightly wrapping the briefing — can only route
-// unambiguously when no opening is a substring of another.
-function checkOpeningsDistinct(file: string, at: string, trace: Trace, task: string): void {
-  const openings: Array<{ label: string; text: string }> = [{ label: 'given.task', text: task }];
+// unambiguously when no opening is a substring of another. Only turn 1's
+// prompt enters this check for a `turns:` koan (`openingLabel`, below):
+// turn 2 onward never change which conversation a request routes to
+// (SPEC.md §6.5), so they carry no routing ambiguity to guard against.
+function checkOpeningsDistinct(file: string, at: string, trace: Trace, openingLabel: string): void {
+  const openings: Array<{ label: string; text: string }> = [
+    { label: openingLabel, text: trace.conversations[0].briefing },
+  ];
   for (const conv of trace.conversations) {
     if (conv.name === '') continue;
     openings.push({ label: `the briefing of subagent "${conv.name}"`, text: conv.briefing });
@@ -488,7 +612,7 @@ function checkOpeningsDistinct(file: string, at: string, trace: Trace, task: str
       if (openings[a].text.includes(openings[b].text) || openings[b].text.includes(openings[a].text)) {
         fail(
           file,
-          `${at}: ${openings[a].label} and ${openings[b].label} are not distinct — no briefing may equal or contain another briefing or the task, since requests are attributed to conversations by their opening`,
+          `${at}: ${openings[a].label} and ${openings[b].label} are not distinct — no briefing may equal or contain another briefing or the prompt, since requests are attributed to conversations by their opening`,
         );
       }
     }
@@ -517,26 +641,58 @@ export function loadKoan(file: string): Koan {
     name?: unknown;
     description?: string;
     given?: { task?: unknown; tools?: unknown; files?: unknown; limits?: unknown };
+    prompt?: unknown;
     when?: unknown;
     one_of?: unknown;
-    then?: Koan['then'];
+    turns?: unknown;
+    then?: unknown;
   };
   if (!raw || typeof raw !== 'object') fail(file, 'not a YAML mapping');
   if (typeof raw.name !== 'string') fail(file, 'missing "name"');
-  if (typeof raw.given?.task !== 'string') fail(file, 'missing "given.task"');
-  // Routing attributes a request to a conversation by which opening its
-  // first user message contains (SPEC.md §6.4); an empty (or all-
-  // whitespace) opening is contained in every string, so it would match
-  // every request and collapse routing onto the first conversation.
-  if (raw.given.task.trim().length === 0) fail(file, '"given.task" must be non-empty');
-  const tools = (raw.given.tools ?? {}) as Record<string, ToolDef>;
+
+  // `given` is agent setup only (tools/files/limits) — never the prompt
+  // (SPEC.md §6). Optional: a koan with no tools, files, or limits needs
+  // no `given` block at all.
+  const given = (raw.given ?? {}) as { task?: unknown; tools?: unknown; files?: unknown; limits?: unknown };
+  if (typeof given !== 'object' || given === null || Array.isArray(given)) {
+    fail(file, '"given" must be a mapping');
+  }
+  if (given.task !== undefined) {
+    fail(file, '"given.task" was replaced by a top-level "prompt" field');
+  }
+
+  // A `turns:` koan replaces the top-level `prompt` and `when`/`one_of`
+  // (SPEC.md §6.5): its first turn's prompt is the initial one, and each
+  // turn carries its own `then`, so a top-level one would be a second,
+  // conflicting judgment.
+  const hasTurns = raw.turns !== undefined;
+  if (hasTurns) {
+    if (raw.prompt !== undefined) {
+      fail(file, '"prompt" cannot be combined with "turns" — the first turn\'s prompt is the initial one');
+    }
+    if (raw.when !== undefined || raw.one_of !== undefined) {
+      fail(file, '"turns" cannot be combined with "when" or "one_of"');
+    }
+    if (raw.then !== undefined) {
+      fail(file, '"then" cannot be combined with "turns" — write it on the last turn instead');
+    }
+  } else {
+    if (typeof raw.prompt !== 'string') fail(file, 'missing "prompt"');
+    // Routing attributes a request to a conversation by which opening its
+    // first user message contains (SPEC.md §6.4); an empty (or all-
+    // whitespace) opening is contained in every string, so it would match
+    // every request and collapse routing onto the first conversation.
+    if (raw.prompt.trim().length === 0) fail(file, '"prompt" must be non-empty');
+  }
+
+  const tools = (given.tools ?? {}) as Record<string, ToolDef>;
   if (typeof tools !== 'object' || Array.isArray(tools)) {
     fail(file, '"given.tools" must be a mapping of tool name to definition');
   }
 
   let files: Record<string, string> | undefined;
-  if (raw.given.files !== undefined) {
-    const rawFiles = raw.given.files as Record<string, unknown>;
+  if (given.files !== undefined) {
+    const rawFiles = given.files as Record<string, unknown>;
     if (typeof rawFiles !== 'object' || rawFiles === null || Array.isArray(rawFiles)) {
       fail(file, '"given.files" must be a mapping of relative path to file content');
     }
@@ -551,8 +707,8 @@ export function loadKoan(file: string): Koan {
   }
 
   let limits: RunLimits | undefined;
-  if (raw.given.limits !== undefined) {
-    const rawLimits = raw.given.limits as Record<string, unknown>;
+  if (given.limits !== undefined) {
+    const rawLimits = given.limits as Record<string, unknown>;
     if (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits)) {
       fail(file, '"given.limits" must be a mapping');
     }
@@ -566,38 +722,49 @@ export function loadKoan(file: string): Koan {
     limits = { max_model_requests: max as number };
   }
 
-  if ((raw.when === undefined) === (raw.one_of === undefined)) {
-    fail(file, 'a koan needs exactly one of "when" / "one_of"');
-  }
-
-  const task = raw.given.task;
+  let prompt: string | undefined;
+  let turns: TurnSpec[] | undefined;
   let traces: Record<string, Trace>;
-  if (raw.when !== undefined) {
-    if (!Array.isArray(raw.when) || raw.when.length === 0) {
-      fail(file, '"when" must be a non-empty list of trace steps');
+
+  if (hasTurns) {
+    if (!Array.isArray(raw.turns) || raw.turns.length === 0) {
+      fail(file, '"turns" must be a non-empty list of turn entries');
     }
-    traces = { '': compileTrace(file, raw.when as RawTraceStep[], task) };
+    const compiled = compileTurns(file, raw.turns as RawTurn[]);
+    traces = { '': compiled.trace };
+    turns = compiled.turns;
   } else {
-    const oneOf = raw.one_of as Record<string, unknown>;
-    if (typeof oneOf !== 'object' || oneOf === null || Array.isArray(oneOf)) {
-      fail(file, '"one_of" must be a mapping of variant name to trace');
+    if ((raw.when === undefined) === (raw.one_of === undefined)) {
+      fail(file, 'a koan needs exactly one of "when" / "one_of" / "turns"');
     }
-    const entries = Object.entries(oneOf);
-    if (entries.length < 2) {
-      fail(file, '"one_of" needs at least two variants — use "when" for a single trace');
-    }
-    traces = {};
-    for (const [variant, trace] of entries) {
-      if (!Array.isArray(trace) || trace.length === 0) {
-        fail(file, `"one_of.${variant}" must be a non-empty list of trace steps`);
+    prompt = raw.prompt as string;
+    if (raw.when !== undefined) {
+      if (!Array.isArray(raw.when) || raw.when.length === 0) {
+        fail(file, '"when" must be a non-empty list of trace steps');
       }
-      traces[variant] = compileTrace(file, trace as RawTraceStep[], task, `one_of.${variant}`);
+      traces = { '': compileTrace(file, raw.when as RawTraceStep[], prompt) };
+    } else {
+      const oneOf = raw.one_of as Record<string, unknown>;
+      if (typeof oneOf !== 'object' || oneOf === null || Array.isArray(oneOf)) {
+        fail(file, '"one_of" must be a mapping of variant name to trace');
+      }
+      const entries = Object.entries(oneOf);
+      if (entries.length < 2) {
+        fail(file, '"one_of" needs at least two variants — use "when" for a single trace');
+      }
+      traces = {};
+      for (const [variant, trace] of entries) {
+        if (!Array.isArray(trace) || trace.length === 0) {
+          fail(file, `"one_of.${variant}" must be a non-empty list of trace steps`);
+        }
+        traces[variant] = compileTrace(file, trace as RawTraceStep[], prompt, `one_of.${variant}`);
+      }
     }
   }
 
   for (const [variant, trace] of Object.entries(traces)) {
-    const at = variant ? `one_of.${variant}` : 'when';
-    checkOpeningsDistinct(file, at, trace, task);
+    const at = variant ? `one_of.${variant}` : hasTurns ? 'turns' : 'when';
+    checkOpeningsDistinct(file, at, trace, hasTurns ? 'turns[0].prompt' : 'prompt');
     markInternalReads(trace, files ?? {});
     if (limits?.max_model_requests !== undefined) {
       // Subagent conversations count too: R5 counts HTTP requests at the
@@ -612,9 +779,11 @@ export function loadKoan(file: string): Koan {
   return {
     name: raw.name,
     description: raw.description,
-    given: { task, tools, files, limits },
+    given: { tools, files, limits },
+    prompt,
+    turns,
     traces,
-    then: raw.then ?? {},
+    then: raw.then !== undefined ? compileJudgment(file, 'then', raw.then) : {},
   };
 }
 

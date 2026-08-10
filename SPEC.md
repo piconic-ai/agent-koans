@@ -76,7 +76,7 @@ Submits a task.
 
 ```json
 {
-  "task": { "prompt": "Get the current weather in Tokyo and report it." },
+  "prompt": "Get the current weather in Tokyo and report it.",
   "tools": [
     {
       "name": "get_weather",
@@ -91,7 +91,7 @@ Submits a task.
 }
 ```
 
-`task.prompt` MUST be non-empty: routing an incoming model request to the
+`prompt` MUST be non-empty: routing an incoming model request to the
 right conversation (§6.4) matches by substring, and an empty prompt would
 match every request. `tools` MAY be empty. `input_schema` is a JSON
 Schema object describing the tool's arguments. The body MAY also carry
@@ -140,6 +140,29 @@ Requests cancellation of a run.
 Response: `202` (`200` also acceptable) with any body. Unknown `run_id`
 SHOULD return `404`. See the abort guarantee above for what the run's
 state must do afterward, and §6.1 for how a koan trace scripts an abort.
+
+### 3.5 `POST /runs/{run_id}/prompts`
+
+Delivers a follow-up prompt to an existing run, continuing its
+conversation (§6.5).
+
+```json
+{ "prompt": "What about Osaka?" }
+```
+
+Response: `202` (`200` also acceptable) with any body. Unknown `run_id`
+SHOULD return `404`.
+
+Delivering a prompt to a run already in a terminal state MUST re-open it:
+`status` MUST return to `running`, and the run MUST then reach a terminal
+state again in finite time (the terminal-state guarantee above, applied
+to this new turn), with `output` carrying this turn's final answer. The
+conversation MUST carry every earlier turn's exchanges into this turn's
+model requests — the same continuity §6.5 requires of the koan trace.
+
+Delivering a prompt to a run still `running` is out of scope: no koan
+scripts it, and this version of the contract does not define what an
+agent must do with it.
 
 ## 4. Model interaction
 
@@ -227,14 +250,15 @@ description: >
   A transient 5xx must reach the model as a tool error, and the follow-up
   call must succeed without double-firing the tool.
 
-given:                    # the world as the agent sees it
-  task: "Get the current weather in Tokyo and report it."
+given:                    # agent setup only — never the prompt
   tools:                  # tool name → definition
     get_weather:
       input_schema:
         type: object
         properties: { city: { type: string } }
         required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
 
 when:                     # the expected wire log, in order
   - request: model
@@ -249,22 +273,26 @@ when:                     # the expected wire log, in order
     response: "The weather in Tokyo is 31°C."
 
 then:                     # assertions on the run's outcome
-  run:
-    status: completed
-    output: { contains: "31" }
+  status: completed
+  output: { contains: "31" }
 ```
 
-`given.tools` maps tool name → definition; it defaults to empty and MAY be
-omitted. The runner converts it to the wire-format list of §3.2.
-`given.files` MAY map relative path to file content; the runner
-materializes it into `KOAN_WORKSPACE` (§2) before starting the agent —
-this is how a koan hands the agent context it must find on disk instead
-of over the wire (§6.1 internal reads, §6.4 subagent conversations).
-`given.limits` MAY declare the run's budgets (§3.2); it is forwarded
-verbatim in the run submission. A trace MUST NOT script more model
-requests than a declared `max_model_requests` permits — the loader
+`given` carries agent setup only — never the prompt (§6.2 explains why
+`then` reads the same way). `given.tools` maps tool name → definition; it
+defaults to empty and MAY be omitted. The runner converts it to the
+wire-format list of §3.2. `given.files` MAY map relative path to file
+content; the runner materializes it into `KOAN_WORKSPACE` (§2) before
+starting the agent — this is how a koan hands the agent context it must
+find on disk instead of over the wire (§6.1 internal reads, §6.4 subagent
+conversations). `given.limits` MAY declare the run's budgets (§3.2); it
+is forwarded verbatim in the run submission. A trace MUST NOT script more
+model requests than a declared `max_model_requests` permits — the loader
 rejects such a koan; a subagent conversation's requests count toward the
 same budget as the main conversation's (§6.4).
+
+The top-level `prompt` is the run's initial prompt — what `POST /runs`
+submits (§3.2). It is REQUIRED for a `when`/`one_of` koan; a `turns:`
+koan (§6.5) carries a prompt per turn instead, and has no top-level one.
 
 ### 6.1 The `when` trace
 
@@ -341,7 +369,7 @@ conversation must show is fully determined by the trace before it:
 
 | Preceding trace                              | The conversation must show                                          |
 | -------------------------------------------- | ------------------------------------------------------------------- |
-| Nothing (first request)                      | The task; no tool interaction yet                                   |
+| Nothing (first request)                      | The prompt; no tool interaction yet                                  |
 | Instruction + tool request with status < 400 | The call closed with a tool message carrying the response body's content (R2) |
 | Instruction + tool request with status ≥ 400 | The call closed with a tool message carrying the status code or the error body's content (R3) |
 | Instruction with **no** tool request         | The call closed back to the model without any invocation (R6/R7); content unconstrained |
@@ -391,10 +419,16 @@ settle the run `aborted`. For a late abort, the runner waits for the
 run's terminal state first, then fires the abort, then re-reads the run
 so `then` judges the state after it.
 
-### 6.2 `then` matchers
+### 6.2 `then`: judging the run's outcome
 
-Keys are nouns (actor properties); matchers are structured values. The
-vocabulary is a **closed set** — no general-purpose query language:
+`then` judges one thing: the run's outcome after the trace settles
+(§3.3), as `{ status, output }`, both OPTIONAL. There is no nesting — an
+earlier draft wrapped both under a `run:` key, anticipating other actors
+`then` might someday judge, but none ever appeared: every other
+verification need turned out to belong to the trace itself instead (the
+`request` steps, and rules like §6.1's "Absence of a tool request" or
+§6.4's "Isolation"), not to `then`. `status` and `output` are matched
+with the same closed set of matchers throughout the format:
 
 | Matcher                 | Meaning                                  |
 | ----------------------- | ---------------------------------------- |
@@ -403,9 +437,8 @@ vocabulary is a **closed set** — no general-purpose query language:
 | `{ contains: <str> }`   | Substring match                          |
 | `{ matches: <regex> }`  | Regular expression match                 |
 
-Semantic assertions: the `request` steps and the implicit trace rules
-(§6.1). New verification needs are added here as named assertions, not as
-generic matchers.
+A new verification need is added as a named rule on the trace side, not
+as a new `then` key or a general-purpose query language.
 
 ### 6.3 Alternative processes (`one_of`)
 
@@ -506,13 +539,13 @@ subagent block for that turn — MUST appear before the trace's next
 **Conversation coherence, per conversation.** §6.1's conversation
 coherence table and its "Trace consumption" and "Argument fidelity"
 rules apply independently to every conversation in the trace: the main
-one (opened by `given.task`) and every subagent's (each opened by its
-delegation's briefing).
+one (opened by the top-level `prompt`) and every subagent's (each opened
+by its delegation's briefing).
 
 **Routing.** The mock attributes an incoming model request to a
-conversation by content: whichever opening — `given.task`, or a
+conversation by content: whichever opening — the top-level `prompt`, or a
 delegate's briefing — its first user message contains. This is why no
-briefing may equal or contain another briefing or the task: `contains`,
+briefing may equal or contain another briefing or the prompt: `contains`,
 chosen to tolerate a framework lightly wrapping the briefing text, could
 not otherwise route unambiguously. For the same reason every opening
 MUST be non-empty (trimmed of whitespace) — an empty one is contained in
@@ -532,13 +565,89 @@ in both directions:
 - *Negative.* A value scripted exclusively for one conversation MUST NOT
   appear in a different conversation's request. Between a conversation
   and its own delegate, only genuinely exclusive material is restricted:
-  the delegator's task/briefings and its own tool results MUST NOT reach
+  the delegator's prompt/briefings and its own tool results MUST NOT reach
   the delegate (they were not disclosed in the briefing), and the
   delegate's tool results MUST NOT reach the delegator (only its final
   reply is a sanctioned crossing). Between conversations that are not in
   a direct parent/child relationship — siblings, or otherwise unrelated
   — everything scripted exclusively into one MUST NOT appear in the
   other's requests at all.
+
+### 6.5 Turn koans (follow-up prompts)
+
+A koan MAY replace the top-level `prompt` and `when`/`one_of` with a
+top-level **`turns`**: a list of at least two entries, each
+`{ prompt, when, then }`. `prompt` is the user's text for that turn;
+`when` is a trace with exactly the grammar of §6.1 — subagent blocks
+included — scripting that turn's exchanges; `then` is that turn's own
+judgment, in the same flat shape as the top-level `then` (§6.2). A turn's
+`then` is OPTIONAL, defaulting to `{ status: completed }` — every turn
+is judged, whether the koan writes its own `then` or relies on that
+default. A `turns:` koan has no top-level `then` of its own: the last
+turn's is the run's final judgment, since a turn is a small koan and
+every level of this format keeps `when`/`then`'s names and meaning.
+Mixing `turns` with a top-level `prompt`, `when`, `one_of`, or `then` is
+a load error; a 1-turn koan is just `when` (`POST .../prompts`, §3.5,
+needs a second turn to exercise at all).
+
+```yaml
+given:
+  tools:
+    get_weather:            # same shape as any given.tools entry (§6)
+      input_schema: { type: object, properties: { city: { type: string } }, required: [city] }
+
+turns:
+  - prompt: "What is the weather in Tokyo?"
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Tokyo" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 31 } }
+      - request: model
+        response: "Tokyo is 31°C."
+    then:
+      status: completed
+      output: { contains: "31" }
+  - prompt: "What about Osaka?"
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Osaka" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 33 } }
+      - request: model
+        response: "Osaka is 33°C, warmer than Tokyo."
+    then:
+      status: completed
+      output: { contains: "33" }
+```
+
+**Runner process.** Turn 1's prompt is submitted as `prompt` (§3.2), the
+same as any koan's top-level one. The runner waits for a terminal state
+(§3.3), judges that turn against its own `then`, and — for every turn but
+the last — continues only if the run in fact landed `completed`: nothing
+meaningful is left to continue otherwise, whatever that turn's `then`
+happened to expect. It then sends the next turn's prompt via `POST
+.../prompts` (§3.5) and waits for a terminal state again. The run's final
+state (after the last turn, late abort included where applicable) is
+judged against that last turn's `then`.
+
+**One continuous conversation.** All turns belong to the same
+conversation as the main one of a `when`/`one_of` koan — `turns` is an
+alternative way to script it, not a different kind of conversation.
+§6.1's conversation coherence table, "Trace consumption", and "Argument
+fidelity" all apply across the whole thing, turn boundaries included.
+Routing (§6.4) is unaffected: every request in the run, whichever turn
+it belongs to, still carries turn 1's prompt somewhere in its history, so
+it still routes to this conversation by the same content match.
+
+**Turn boundaries.** The first request of turn 2 onward MUST carry that
+turn's prompt, plus everything scripted into every earlier turn of the
+same conversation (prompts, replies, tool results, internal reads, and
+any subagent's final reply) — checked by information flow, the same
+positive-flow style as a delegate's final reply crossing into its parent
+(§6.4), applied here across turns of one conversation instead of across
+conversations. `abort` MUST NOT appear inside a `turns` koan's `when` —
+turn-level cancellation is not part of this version of the contract.
 
 ## 7. Versioning
 

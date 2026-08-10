@@ -5,13 +5,14 @@ description: >
   reject the call as if the schema demanded something.
 
 given:
-  task: "Get the current time and report it."
   tools:
     get_time:
       description: "Look up the current time"
       input_schema:
         type: object
         properties: {}
+
+prompt: "Get the current time and report it."
 
 when:
   - request: model
@@ -22,6 +23,5 @@ when:
     response: "The current time is 14:05."
 
 then:
-  run:
-    status: completed
-    output: { contains: "14:05" }
+  status: completed
+  output: { contains: "14:05" }

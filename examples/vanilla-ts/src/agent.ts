@@ -134,26 +134,63 @@ function parseArgs(argsWire: string): Record<string, unknown> | undefined {
   }
 }
 
+// Everything a run's conversation needs across turns (SPEC.md §6.5): the
+// growing message array and the tools/subagents/budget it was started
+// with. Kept for the run's whole process lifetime, unlike `controllers`
+// — a follow-up prompt (POST /runs/{id}/prompts) must find the same
+// conversation and the same shared budget right where the last turn left
+// them, not a fresh one.
+interface RunSession {
+  messages: ChatMessage[];
+  tools: ToolDef[];
+  subagents: SubagentDef[];
+  budget: Budget;
+}
+
 export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; workspace: WorkspaceConfig }) {
   const runs = new Map<string, Run>();
-  // One AbortController per in-flight run, so abortRun can cancel exactly
-  // that run's outstanding fetch without touching any other run sharing
+  const sessions = new Map<string, RunSession>();
+  // One AbortController per in-flight turn, so abortRun can cancel exactly
+  // that turn's outstanding fetch without touching any other run sharing
   // this process.
   const controllers = new Map<string, AbortController>();
 
   function startRun(prompt: string, tools: ToolDef[], subagents: SubagentDef[], limits?: RunLimits): Run {
     const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
     runs.set(run.run_id, run);
-    const controller = new AbortController();
-    controllers.set(run.run_id, controller);
-    void executeRun(run, prompt, tools, subagents, limits, controller.signal).finally(() => {
-      controllers.delete(run.run_id);
-    });
+    const session: RunSession = {
+      messages: [{ role: 'user', content: prompt }],
+      tools,
+      subagents,
+      budget: { max: Math.min(MAX_STEPS, limits?.max_model_requests ?? MAX_STEPS), used: 0 },
+    };
+    sessions.set(run.run_id, session);
+    runTurn(run, session);
     return run;
   }
 
   function getRun(runId: string): Run | undefined {
     return runs.get(runId);
+  }
+
+  /**
+   * Deliver a follow-up prompt to an existing run's conversation (SPEC.md
+   * §3.5), continuing it with the same tools, subagents, and — since R5's
+   * budget is a run-wide one, not a per-turn one — the same remaining
+   * budget. Returns `false` when `runId` is unknown, so the caller can
+   * answer 404. Re-opens a run already in a terminal state: `running`
+   * again until this turn itself settles.
+   */
+  function sendPrompt(runId: string, prompt: string): boolean {
+    const run = runs.get(runId);
+    const session = sessions.get(runId);
+    if (!run || !session) return false;
+    session.messages.push({ role: 'user', content: prompt });
+    run.status = 'running';
+    run.output = undefined;
+    run.error = undefined;
+    runTurn(run, session);
+    return true;
   }
 
   /**
@@ -177,24 +214,24 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     return true;
   }
 
-  async function executeRun(
-    run: Run,
-    prompt: string,
-    tools: ToolDef[],
-    subagents: SubagentDef[],
-    limits: RunLimits | undefined,
-    signal: AbortSignal,
-  ): Promise<void> {
-    try {
-      const budget: Budget = { max: Math.min(MAX_STEPS, limits?.max_model_requests ?? MAX_STEPS), used: 0 };
-      const messages: ChatMessage[] = [{ role: 'user', content: prompt }];
+  // Starts (or restarts, for a follow-up) the fetch chain for one turn of
+  // `run`'s session, tracked under a fresh AbortController each time.
+  function runTurn(run: Run, session: RunSession): void {
+    const controller = new AbortController();
+    controllers.set(run.run_id, controller);
+    void executeTurn(run, session, controller.signal).finally(() => {
+      controllers.delete(run.run_id);
+    });
+  }
 
-      const text = await runConversation(messages, tools, subagents, budget, signal);
+  async function executeTurn(run: Run, session: RunSession, signal: AbortSignal): Promise<void> {
+    try {
+      const text = await runConversation(session.messages, session.tools, session.subagents, session.budget, signal);
       if (text === undefined) {
         // Thrifty on the last permitted request: a result obtained now
         // could never be reported back, so the run ends here instead.
         run.status = 'aborted';
-        run.error = `model-request budget exhausted (${budget.max})`;
+        run.error = `model-request budget exhausted (${session.budget.max})`;
         return;
       }
       run.status = 'completed';
@@ -240,6 +277,11 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
         continue;
       }
 
+      // Recorded even though this turn is about to return: a `turns:`
+      // koan's session keeps `messages` across turns (SPEC.md §6.5), so
+      // the reply that ends this turn must stay in the conversation's
+      // history for the next one to carry forward.
+      messages.push(message);
       return message.content ?? '';
     }
   }
@@ -360,5 +402,5 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     return data.choices[0].message;
   }
 
-  return { startRun, getRun, abortRun };
+  return { startRun, getRun, sendPrompt, abortRun };
 }

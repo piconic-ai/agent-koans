@@ -50,8 +50,11 @@ The runner launches the agent process with these environment variables:
 | `KOAN_TOOLS_URL`  | Base URL of the mock tool server                               |
 | `KOAN_WORKSPACE`  | Filesystem path to the run's workspace directory                |
 
-The agent MUST direct all model calls to `OPENAI_BASE_URL` and all tool
-executions to `KOAN_TOOLS_URL`.
+The agent MUST direct all model calls to `OPENAI_BASE_URL`, and every
+invocation of a tool declared in the run's `tools` to `KOAN_TOOLS_URL`. A
+capability of the agent's own — delegation (§6.4), or reading
+`KOAN_WORKSPACE` (§6.1) — is executed internally and MUST NOT reach the
+tool server (R7).
 
 `OPENAI_API_KEY` is set because OpenAI-compatible clients commonly refuse
 to construct without a key, not because the mock wants one: it never

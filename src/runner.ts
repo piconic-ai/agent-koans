@@ -111,8 +111,8 @@ function match(label: string, actual: unknown, matcher: Matcher): string | null 
 }
 
 // Judges one run's outcome against one `then` block — the top-level one
-// for a `when`/`one_of` koan, or one turn's own for a `turns:` koan
-//: both are the same flat `{ status, output }` shape.
+// for a `when`/`one_of` koan, or one turn's own for a `turns:` koan:
+// both are the same flat `{ status, output }` shape.
 function judge(then: Judgment, run: RunState): string[] {
   const failures: string[] = [];
   if (then.status !== undefined && run.status !== then.status) {
@@ -240,8 +240,8 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
 
       let run = await pollToTerminal(base, runId, agent.runTimeoutMs ?? 15_000);
 
-      // Every turn but the last is judged here, against its own `then`
-      //; the last turn's judgment happens below, together
+      // Every turn but the last is judged here, against its own `then`;
+      // the last turn's judgment happens below, together
       // with the plain `when`/`one_of` koan's, once the run has fully
       // settled (including any late abort). A turn that did not land
       // `completed` leaves nothing meaningful to continue, so the runner

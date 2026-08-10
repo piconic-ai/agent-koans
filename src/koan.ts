@@ -244,14 +244,24 @@ interface OpenCall {
 
 function matchOpenCall(openCalls: OpenCall[], tool: string, args: ParsedArgs | undefined): OpenCall {
   const named = openCalls.filter((c) => c.source.tool === tool);
-  if (named.length <= 1) return named[0];
-  return named.find((c) => args !== undefined && deepEqual(argsValueOf(c.source.args), args))!;
+  const match =
+    named.length <= 1
+      ? named[0]
+      : named.find((c) => args !== undefined && deepEqual(argsValueOf(c.source.args), args));
+  // Stated as an invariant rather than asserted away: parse.ts proved the
+  // match exists, and if a future change to its rules stops proving it, the
+  // failure should name this step instead of surfacing as a dereference of
+  // undefined somewhere downstream.
+  if (match === undefined) {
+    throw new Error(`internal: no open call matches the tool request for "${tool}"`);
+  }
+  return match;
 }
 
 /**
  * Compiles one conversation's steps into `conv.turns`, appending (so a
- * `turns:` koan's later turns extend the same conversation, SPEC.md
- * koan-spec.ts), and recursively compiles any subagent block into a fresh
+ * `turns:` koan's later turns extend the same conversation), and
+ * recursively compiles any subagent block into a fresh
  * Conversation appended to `conversations` — the main one first, then
  * subagents in first-appearance order.
  */

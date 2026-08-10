@@ -115,9 +115,9 @@ export function parseKoanFile(raw: unknown): Parsed<KoanFile> {
   return koan;
 }
 
-// `given` is agent setup only (tools/files/limits) — never the prompt
-//. Optional throughout: a koan with no tools, files, or
-// limits needs no `given` block, or an empty one, at all.
+// `given` is agent setup only (tools/files/limits) — never the prompt.
+// Optional throughout: a koan with no tools, files, or limits needs no
+// `given` block, or an empty one, at all.
 function parseGiven(rawGiven: unknown): Parsed<Given> {
   const given = rawGiven ?? {};
   if (typeof given !== 'object' || Array.isArray(given)) return problem('"given" must be a mapping');
@@ -163,8 +163,8 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
   return { tools: tools as Record<string, ToolDef>, files, limits };
 }
 
-// A `turns:` koan replaces the top-level `prompt` and `when`/`one_of`
-//; a `when`/`one_of` koan carries a top-level `prompt` and
+// A `turns:` koan replaces the top-level `prompt` and `when`/`one_of`;
+// a `when`/`one_of` koan carries a top-level `prompt` and
 // exactly one of the two trace forms. Dispatches on which raw keys are
 // present, then hands off to the matching parser.
 function parseBody(ctx: Ctx<KoanFile>, raw: Record<string, unknown>): Parsed<Body> {
@@ -232,9 +232,9 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
   const thens: Judgment[] = [];
   for (let i = 0; i < rawTurns.length; i++) {
     const rt = (rawTurns[i] ?? {}) as Record<string, unknown>;
-    // Trim-empty counts as empty: turn 1's prompt routes the run (SPEC.md
-    // koan-spec.ts) the same way a plain koan's does, and a later turn's is what
-    // a turn-boundary request must be shown to carry.
+    // Trim-empty counts as empty: turn 1's prompt routes the run the same
+    // way a plain koan's does, and a later turn's is what a turn-boundary
+    // request must be shown to carry.
     if (typeof rt.prompt !== 'string' || rt.prompt.trim().length === 0) {
       return problem(`turns[${i}] needs a non-empty "prompt"`);
     }
@@ -762,8 +762,8 @@ function apiFailureEndsTheTrace(koan: KoanFile): Problem | undefined {
 }
 
 // A subagent name may be delegated to at most once per trace: there is no
-// such thing yet as a second delegation resuming an existing conversation
-//. Depth-first, in trace order.
+// such thing yet as a second delegation resuming an existing
+// conversation. Depth-first, in trace order.
 function eachSubagentIsDelegatedToOnce(koan: KoanFile): Problem | undefined {
   for (const { steps, at } of scriptedTraces(koan)) {
     const found = checkNamesUnique(steps, at, new Set());

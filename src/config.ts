@@ -13,9 +13,9 @@ import path from 'node:path';
 import { parse } from 'yaml';
 
 /**
- * How the mock LLM emits a delegation instruction on the wire (SPEC.md
- * koan-spec.ts). The mock plays the model, so it must speak the framework's own
- * delegation vocabulary — there is no adapter between mock and framework.
+ * How the mock LLM emits a delegation instruction on the wire. The mock
+ * plays the model, so it must speak the framework's own delegation
+ * vocabulary — there is no adapter between mock and framework.
  */
 export interface DelegationVocabulary {
   /** The tool_call name the framework's runtime understands. */

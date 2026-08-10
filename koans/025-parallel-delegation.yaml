@@ -1,0 +1,47 @@
+name: parallel-delegation
+description: >
+  One model response delegates to two subagents at once (R10 applied to
+  delegation instructions). Both children must run; the parent's next
+  request must carry both finals, and neither child's own intermediate
+  values — its tool results, distinguishable per child here — may reach
+  the parent or the other child (R11).
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Prepare the weather report for Tokyo and Osaka."
+
+when:
+  - request: model
+    response:
+      - { subagent: tokyo-researcher, prompt: "Look up the current temperature in Tokyo." }
+      - { subagent: osaka-researcher, prompt: "Look up the current temperature in Osaka." }
+  - subagent: tokyo-researcher
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Tokyo" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 31, station: "TK-77" } }
+      - request: model
+        response: "Tokyo is 31°C."
+  - subagent: osaka-researcher
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Osaka" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 28, station: "OS-12" } }
+      - request: model
+        response: "Osaka is 28°C."
+  - request: model
+    response: "Tokyo is 31°C and Osaka is 28°C."
+
+then:
+  status: completed
+  output: { contains: "31" }

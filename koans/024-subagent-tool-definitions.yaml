@@ -1,0 +1,44 @@
+name: subagent-tool-definitions
+description: >
+  The run declares two tools; the child conversation only ever calls one
+  of them. R1 applies inside a delegate's conversation exactly as it
+  does in the main one: the child's model requests must still carry
+  definitions for every declared tool, not just the one it happens to
+  call.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+    get_forecast:
+      description: "Get the weather forecast for the coming days"
+      input_schema:
+        type: object
+        properties:
+          days: { type: number }
+        required: [days]
+
+prompt: "Prepare the weather report."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Look up the current temperature in Tokyo." }
+  - subagent: researcher
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Tokyo" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 31 } }
+      - request: model
+        response: "31°C."
+  - request: model
+    response: "Tokyo is 31°C."
+
+then:
+  status: completed
+  output: { contains: "31" }

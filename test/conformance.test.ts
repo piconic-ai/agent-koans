@@ -50,7 +50,7 @@ const allIds = new Set(koans.map((k) => k.id));
  * A target's own `agent-koans.yaml` (skips and delegation vocabulary), if
  * it has one — absent by default, since a target need not carry a config
  * file at all. Stale skip ids are rejected the same way the CLI rejects
- * them (SPEC.md §7: a skip must stay honest about what it names). `add`
+ * them (SPEC.md §6: a skip must stay honest about what it names). `add`
  * has no meaning for a fixed koan set, so a non-empty one is a config
  * error here, not a silently ignored key.
  */

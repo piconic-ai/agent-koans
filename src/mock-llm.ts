@@ -1,7 +1,7 @@
 // Internal: the scripted stand-in for the OpenAI Chat Completions API,
 // and the coherence checks on what the agent sends it — including the
 // attribution of interleaved requests to their conversations and the
-// information-flow rules between them (SPEC.md §6.4). Tool invocation
+// information-flow rules between them. Tool invocation
 // belongs to mock-tools.ts; pass/fail aggregation to runner.ts.
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -101,7 +101,7 @@ interface ConversationScript {
   forbidden: Array<{ value: string; reason: string }>;
 }
 
-// Builds the negative information-flow sets (SPEC.md §6.4). Every value
+// Builds the negative information-flow sets. Every value
 // scripted into one conversation is forbidden from appearing in every
 // other conversation's requests, with one exception: a value that is
 // also legitimately visible *in the target* (its own `allowed` set,
@@ -116,7 +116,7 @@ interface ConversationScript {
 // notably) from one of them by oversight.
 function buildForbidden(trace: Trace): Map<string, ConversationScript['forbidden']> {
   // Every user turn's prompt, not just the first: a `turns:` koan's main
-  // conversation (SPEC.md §6.5) opens more than one (conv.followUps).
+  // conversation opens more than one (conv.followUps).
   const openings = (conv: Conversation): string[] => [
     conv.briefing,
     ...(conv.followUps?.map((f) => f.prompt) ?? []),
@@ -165,11 +165,11 @@ function buildForbidden(trace: Trace): Map<string, ConversationScript['forbidden
 }
 
 // Never matched against wording: failure phrasing is framework-specific,
-// so only values the mock itself scripted are looked for (SPEC.md §6.1).
+// so only values the mock itself scripted are looked for.
 //
 // Within the conversation's trailing run of tool messages, closures are
 // matched by id rather than by position: the agent may close a parallel
-// group's calls in any order (SPEC.md §6.1), so "the last message" is not
+// group's calls in any order, so "the last message" is not
 // a meaningful thing to inspect once more than one call can be open at
 // once. The run itself still has to be trailing — a conversation that
 // continues past the closures is calling the model with something other
@@ -216,11 +216,11 @@ function checkCoherence(
     if (member.readsFile !== undefined && !text.includes(member.readsFile)) {
       violations.push(
         `request #${requestNo}: the content of given.files["${String(member.args?.path)}"] did not reach the model — ` +
-          `the internal "${member.name}" read must flow into the conversation's next request (SPEC.md §5 R7)`,
+          `the internal "${member.name}" read must flow into the conversation's next request (SPEC.md R7)`,
       );
     }
     // No content check for other refused calls: self-generated report
-    // phrasing is implementation-specific (SPEC.md §4 R3).
+    // phrasing is implementation-specific (SPEC.md R3).
     const responds = member.tool_responds;
     if (!responds) continue;
 
@@ -238,14 +238,14 @@ function checkCoherence(
     }
   }
 
-  // Positive flow (SPEC.md §6.4): each delegate's final reply must reach
+  // Positive flow: each delegate's final reply must reach
   // the parent's next model request — for parallel delegations, every
   // sibling's, which is what makes the parent join all of them.
   for (const d of delegations) {
     if (!text.includes(d.final)) {
       violations.push(
         `request #${requestNo}: subagent "${d.subagent}"'s final reply did not reach ${label(conv)} — ` +
-          `the delegation must be closed with the child's final answer (SPEC.md §6.4)`,
+          `the delegation must be closed with the child's final answer`,
       );
     }
   }
@@ -265,11 +265,11 @@ function checkConversationStart(
   }
 }
 
-// Everything a `turns:` koan's conversation (SPEC.md §6.5) scripted
+// Everything a `turns:` koan's conversation scripted
 // before `uptoIndex`: every earlier turn's opening prompt, replies, tool
 // response scalars, internal reads, and delegation finals — what a later
 // turn's first request must still carry, the same positive-flow style as
-// a subagent's final reply crossing into its parent (SPEC.md §6.4).
+// a subagent's final reply crossing into its parent.
 function turnValues(conv: Conversation, uptoIndex: number): string[] {
   const values: string[] = [conv.briefing];
   for (const f of conv.followUps ?? []) {
@@ -286,10 +286,10 @@ function turnValues(conv: Conversation, uptoIndex: number): string[] {
   return values;
 }
 
-// The request that opens turn 2+ of a `turns:` koan (SPEC.md §6.5): it
+// The request that opens turn 2+ of a `turns:` koan: it
 // must carry the new turn's prompt, plus everything scripted into every
 // earlier turn — the run-level counterpart of a subagent's continuation
-// history, before that was cut back to one delegation per name (§6.4).
+// history, before that was cut back to one delegation per name.
 function checkTurnBoundary(
   conv: Conversation,
   boundary: TurnBoundary,
@@ -302,12 +302,12 @@ function checkTurnBoundary(
   }
   const text = requestText(messages);
   if (!text.includes(boundary.prompt)) {
-    violations.push(`request #${requestNo}: the new turn's prompt is missing from the request (SPEC.md §6.5)`);
+    violations.push(`request #${requestNo}: the new turn's prompt is missing from the request`);
   }
   for (const value of turnValues(conv, boundary.start)) {
     if (!text.includes(value)) {
       violations.push(
-        `request #${requestNo}: a follow-up must carry the earlier turns' history — ${JSON.stringify(value)} is missing (SPEC.md §6.5)`,
+        `request #${requestNo}: a follow-up must carry the earlier turns' history — ${JSON.stringify(value)} is missing`,
       );
     }
   }
@@ -396,7 +396,7 @@ export function startMockLlm(
         // hold the connection open rather than reject it. This request is
         // either racing the caller's abort or arriving after it already
         // landed — both converge on the run having nothing left to wait
-        // for but its own abort settling (SPEC.md §6.1).
+        // for but its own abort settling.
         return;
       }
       state.violations.push(
@@ -437,14 +437,14 @@ export function startMockLlm(
       checkCoherence(conv, index, requestNo, messages, state.violations);
     }
 
-    // Negative flow (SPEC.md §6.4): nothing scripted exclusively into
+    // Negative flow: nothing scripted exclusively into
     // another conversation may surface here.
     const text = requestText(messages);
     for (const { value, reason } of script.forbidden) {
       if (text.includes(value)) {
         state.violations.push(
           `request #${requestNo} (${label(conv)}) carries ${JSON.stringify(value)}, ${reason} — ` +
-            `information crosses conversations only through a briefing or a final reply (SPEC.md §6.4)`,
+            `information crosses conversations only through a briefing or a final reply`,
         );
       }
     }
@@ -486,11 +486,11 @@ export function startMockLlm(
             type: 'function',
             // The wire string, verbatim — this is what carries a
             // malformed-arguments koan's unparseable string through to the
-            // agent (SPEC.md §6.1).
+            // agent.
             function: { name: member.name, arguments: member.argsWire },
           })),
           // A delegation is emitted in the implementation's declared
-          // vocabulary (SPEC.md §6.4): the mock plays the model, so the
+          // vocabulary: the mock plays the model, so the
           // tool_call must be one the framework's runtime executes as a
           // delegation.
           ...delegations.map((d, j) => ({

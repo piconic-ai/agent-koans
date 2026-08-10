@@ -1,5 +1,14 @@
 # agent-koans
 
+## 0.5.0
+
+### Minor Changes
+
+- a930a91: Agents under test may now delegate work to subagents. A model response can be a delegation instruction, `{ subagent: <name>, prompt: <briefing> }`, scripted in a koan trace by a following `- subagent: <name>` / `when:` block that describes the delegate's own conversation. A subagent name may be delegated to at most once per trace — a subagent conversation cannot be continued yet. `given.files` (path → content) now materializes into a new `KOAN_WORKSPACE` env var before the run, so a koan can hand the agent context to find on disk instead of over the wire — read with the agent's own internal tool, never the mock tool server. `POST /runs` gains `subagents: [{ name, description? }]`, and an implementation declares its own delegation wire vocabulary (the tool name and its agent/prompt argument keys) via a new `delegation` key in `agent-koans.yaml`. Two new koans — `020-subagent-briefing` and `021-subagent-file-handoff` — verify bidirectional isolation between conversations and internal file reads. Update your `openapi.yaml`/SPEC.md references and implement subagent conversations (§6.4) to keep conforming.
+- 2186dcc: Agents under test may now receive a follow-up prompt on an existing run: `POST /runs/{run_id}/prompts` re-opens a settled run and continues its conversation, carrying every earlier turn's exchanges into the new one. A koan scripts this with a top-level `turns:` list — entries of `{ prompt, when, then }` — instead of a single prompt and trace; each turn is judged by its own `then` (defaulting to `{ status: completed }`), and the last turn's `then` is the run's final judgment. New koan `022-follow-up` covers it, passing against both `examples/vanilla-ts` and `examples/flue` with no skip needed.
+
+  BREAKING: this release also flattens two vocabularies that had grown unnecessary nesting. `given.task` is gone; every koan now names its initial prompt with a top-level `prompt:` field instead (mechanically renamed across the whole bundled suite — no koan's meaning changed). `then.run.{status,output}` is now flat, `then.{status,output}`: the `run:` wrapper never grew a second occupant, since every other verification need turned out to belong to the trace itself. `POST /runs` follows the same flattening on the wire: the body is now `{ prompt, tools, subagents, limits }`, with no `task` envelope. Update your agent to read `prompt` directly from `POST /runs` and to implement `POST /runs/{run_id}/prompts`, and update any of your own koans (`given.task` → top-level `prompt`, `then.run.*` → `then.*`) to keep conforming.
+
 ## 0.4.0
 
 ### Minor Changes

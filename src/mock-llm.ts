@@ -1,14 +1,17 @@
 // Internal: the scripted stand-in for the OpenAI Chat Completions API,
-// and the coherence checks on what the agent sends it. Tool invocation
+// and the coherence checks on what the agent sends it — including the
+// attribution of interleaved requests to their conversations and the
+// information-flow rules between them (SPEC.md §6.4). Tool invocation
 // belongs to mock-tools.ts; pass/fail aggregation to runner.ts.
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { CallToolInstruction, Koan, ModelTurn } from './koan.js';
+import { DEFAULT_DELEGATION, type DelegationVocabulary } from './config.js';
+import type { Conversation, Koan, ModelTurn, Trace } from './koan.js';
 import type { PendingInvocation } from './pending.js';
 
 interface ChatMessage {
   role: string;
-  content?: string | null;
+  content?: string | null | Array<{ type?: string; text?: string }>;
   tool_call_id?: string;
   tool_calls?: Array<{
     id: string;
@@ -27,9 +30,15 @@ interface MockLlm {
   url: string;
   state: {
     requests: ChatRequest[];
+    /** Model requests served per conversation name (`''` is the main one). */
+    served: Record<string, number>;
     violations: string[];
   };
   close(): Promise<void>;
+}
+
+function label(conv: Conversation): string {
+  return conv.name === '' ? 'the main conversation' : `subagent "${conv.name}"`;
 }
 
 // The conversation's trailing run of tool messages: the closures the
@@ -47,15 +56,107 @@ function scalarLeaves(value: unknown): string[] {
   return Object.values(value as object).flatMap(scalarLeaves);
 }
 
-// The wire `tool_call_id`s of one turn's instructions. A single-instruction
-// turn keeps the plain `call_N` id (no behavioral reason, just avoids
-// churning ids that earlier koans' failure messages might quote); a group
-// numbers its members `call_N_1`, `call_N_2`, ... so every id stays unique
-// within the run.
-function callIdsFor(callTools: CallToolInstruction[], turnIndex: number): string[] {
-  return callTools.length === 1
-    ? [`call_${turnIndex + 1}`]
-    : callTools.map((_, j) => `call_${turnIndex + 1}_${j + 1}`);
+function messageText(msg: ChatMessage): string {
+  if (typeof msg.content === 'string') return msg.content;
+  if (Array.isArray(msg.content)) {
+    return msg.content.map((part) => part.text ?? '').join('\n');
+  }
+  return '';
+}
+
+// The searchable text of a request. Joined from message contents and
+// tool_call arguments rather than JSON.stringify-ing the body: JSON
+// escaping would make `includes` miss any scripted value containing a
+// quote or a backslash.
+function requestText(messages: ChatMessage[]): string {
+  const parts: string[] = [];
+  for (const msg of messages) {
+    parts.push(messageText(msg));
+    for (const call of msg.tool_calls ?? []) parts.push(call.function.arguments);
+  }
+  return parts.join('\n');
+}
+
+function firstUserText(messages: ChatMessage[]): string {
+  const first = messages.find((m) => m.role === 'user');
+  return first ? messageText(first) : '';
+}
+
+// The wire `tool_call_id`s of one turn's instructions, tool calls first,
+// then delegations. The main conversation's single-instruction turns keep
+// the plain `call_N` id (no behavioral reason, just avoids churning ids
+// that earlier koans' failure messages might quote); subagent turns carry
+// the conversation name so every id stays unique within the run.
+function callIdsFor(conv: Conversation, turnIndex: number): string[] {
+  const turn = conv.turns[turnIndex];
+  const count = (turn.call_tools?.length ?? 0) + (turn.delegations?.length ?? 0);
+  const base = conv.name === '' ? `call_${turnIndex + 1}` : `call_${conv.name}_${turnIndex + 1}`;
+  return count === 1 ? [base] : Array.from({ length: count }, (_, j) => `${base}_${j + 1}`);
+}
+
+interface ConversationScript {
+  conv: Conversation;
+  served: number;
+  /** Values whose appearance in another conversation's request is a leak, with their source rule. */
+  forbidden: Array<{ value: string; reason: string }>;
+}
+
+// Builds the negative information-flow sets (SPEC.md §6.4). Every value
+// scripted into one conversation is forbidden from appearing in every
+// other conversation's requests, with one exception: a value that is
+// also legitimately visible *in the target* (its own `allowed` set,
+// below) is dropped, since `includes` could not tell the two apart from
+// a leaked one. This is what makes a crossing sanctioned, by construction
+// rather than by hand-picking which value kinds cross which relation: a
+// child's briefing is visible to the parent that issued it (the parent's
+// own `issuedPrompts`), a child's final reply is visible to the parent
+// that received it (`receivedFinals`), and both are visible to the child
+// itself (its own openings/replies) — nothing else needs to single out
+// parent/child/sibling cases, or omit a value kind (file contents, most
+// notably) from one of them by oversight.
+function buildForbidden(trace: Trace): Map<string, ConversationScript['forbidden']> {
+  const openings = (conv: Conversation): string[] => [conv.briefing];
+  const replies = (conv: Conversation): string[] =>
+    conv.turns.map((t) => t.reply).filter((r): r is string => r !== undefined);
+  const toolScalars = (conv: Conversation): string[] =>
+    conv.turns.flatMap((t) =>
+      (t.call_tools ?? []).flatMap((m) => (m.tool_responds ? scalarLeaves(m.tool_responds.body) : [])),
+    );
+  const fileContents = (conv: Conversation): string[] =>
+    conv.turns.flatMap((t) => (t.call_tools ?? []).flatMap((m) => (m.readsFile !== undefined ? [m.readsFile] : [])));
+  const issuedPrompts = (conv: Conversation): string[] =>
+    conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.prompt));
+  const receivedFinals = (conv: Conversation): string[] =>
+    conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.final));
+
+  const allowed = new Map<string, string[]>();
+  for (const conv of trace.conversations) {
+    allowed.set(conv.name, [
+      ...openings(conv),
+      ...replies(conv),
+      ...toolScalars(conv),
+      ...fileContents(conv),
+      ...issuedPrompts(conv),
+      ...receivedFinals(conv),
+    ]);
+  }
+
+  const forbidden = new Map<string, ConversationScript['forbidden']>();
+  for (const target of trace.conversations) {
+    const entries: ConversationScript['forbidden'] = [];
+    for (const source of trace.conversations) {
+      if (source.name === target.name) continue;
+      const values = allowed.get(source.name) ?? [];
+      const visible = allowed.get(target.name) ?? [];
+      for (const value of new Set(values)) {
+        if (value.length === 0) continue;
+        if (visible.some((a) => a.includes(value))) continue;
+        entries.push({ value, reason: `a value scripted only into ${label(source)}` });
+      }
+    }
+    forbidden.set(target.name, entries);
+  }
+  return forbidden;
 }
 
 // Never matched against wording: failure phrasing is framework-specific,
@@ -69,47 +170,53 @@ function callIdsFor(callTools: CallToolInstruction[], turnIndex: number): string
 // continues past the closures is calling the model with something other
 // than the tool results.
 function checkCoherence(
+  conv: Conversation,
   index: number,
-  script: ModelTurn[],
+  requestNo: number,
   messages: ChatMessage[],
   violations: string[],
 ): void {
-  const prev = index > 0 ? script[index - 1] : undefined;
-
-  if (!prev) {
-    if (messages[messages.length - 1]?.role === 'tool') {
-      violations.push('request #1 must carry the task, but its last message is a tool message');
-    }
-    return;
-  }
-
-  // Compile-time guarantees prev.call_tools here: a model request can
-  // never follow a text reply (koan.ts rejects that trace shape).
+  const prev = conv.turns[index - 1];
+  // Compile-time guarantees prev has instructions here: a model request
+  // can never follow a text reply within one conversation (koan.ts
+  // rejects that trace shape), and a conversation's first request is
+  // checked separately (checkConversationStart).
   const group = prev.call_tools ?? [];
-  const ids = callIdsFor(group, index - 1);
+  const delegations = prev.delegations ?? [];
+  const ids = callIdsFor(conv, index - 1);
+  const names = [...group.map((m) => m.name), ...delegations.map((d) => `the delegation to "${d.subagent}"`)];
   const trailing = trailingToolMessages(messages);
 
   if (trailing.length === 0) {
     violations.push(
-      `request #${index + 1} must close the pending tool call${ids.length > 1 ? 's' : ''} with a tool message, ` +
+      `request #${requestNo} must close the pending tool call${ids.length > 1 ? 's' : ''} with a tool message, ` +
         `but its last message has role "${messages[messages.length - 1]?.role}"`,
     );
     return;
   }
 
   const byId = new Map(trailing.map((m) => [m.tool_call_id, m]));
+  const text = requestText(messages);
 
   for (const [i, id] of ids.entries()) {
     const msg = byId.get(id);
     if (!msg) {
       violations.push(
-        `request #${index + 1} must close tool call "${id}" (${group[i].name}) with a tool message before calling the model again (R2)`,
+        `request #${requestNo} must close tool call "${id}" (${names[i]}) with a tool message before calling the model again (R2)`,
       );
       continue;
     }
-    // No content check for refused calls: self-generated report phrasing
-    // is implementation-specific (SPEC.md §4 R3).
-    const responds = group[i].tool_responds;
+    if (i >= group.length) continue; // a delegation's result is checked below, request-wide
+    const member = group[i];
+    if (member.readsFile !== undefined && !text.includes(member.readsFile)) {
+      violations.push(
+        `request #${requestNo}: the content of given.files["${String(member.args?.path)}"] did not reach the model — ` +
+          `the internal "${member.name}" read must flow into the conversation's next request (SPEC.md §5 R7)`,
+      );
+    }
+    // No content check for other refused calls: self-generated report
+    // phrasing is implementation-specific (SPEC.md §4 R3).
+    const responds = member.tool_responds;
     if (!responds) continue;
 
     const { status, body } = responds;
@@ -117,13 +224,39 @@ function checkCoherence(
     const indicators = failed ? [String(status), ...scalarLeaves(body)] : scalarLeaves(body);
     if (indicators.length === 0) continue;
 
-    const content = String(msg.content ?? '');
+    const content = messageText(msg);
     if (!indicators.some((s) => content.includes(s))) {
       violations.push(
-        `request #${index + 1}: the tool ${failed ? `failure (status ${status})` : 'result'} for "${group[i].name}" did not reach ` +
+        `request #${requestNo}: the tool ${failed ? `failure (status ${status})` : 'result'} for "${member.name}" did not reach ` +
           `the model — the tool message carries none of ${JSON.stringify(indicators)} (${failed ? 'R3' : 'R2'})`,
       );
     }
+  }
+
+  // Positive flow (SPEC.md §6.4): each delegate's final reply must reach
+  // the parent's next model request — for parallel delegations, every
+  // sibling's, which is what makes the parent join all of them.
+  for (const d of delegations) {
+    if (!text.includes(d.final)) {
+      violations.push(
+        `request #${requestNo}: subagent "${d.subagent}"'s final reply did not reach ${label(conv)} — ` +
+          `the delegation must be closed with the child's final answer (SPEC.md §6.4)`,
+      );
+    }
+  }
+}
+
+// A conversation's first request needs no content check beyond this: the
+// opening briefing is what routed the request here (see `route`, below),
+// so re-asserting its presence would be redundant.
+function checkConversationStart(
+  conv: Conversation,
+  requestNo: number,
+  messages: ChatMessage[],
+  violations: string[],
+): void {
+  if (messages[messages.length - 1]?.role === 'tool') {
+    violations.push(`request #${requestNo} opens ${label(conv)}, but its last message is a tool message`);
   }
 }
 
@@ -139,16 +272,37 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 /** Serve one trace's model turns; records requests and violations. */
 export function startMockLlm(
   koan: Koan,
-  script: ModelTurn[],
+  trace: Trace,
   pending: PendingInvocation[],
+  delegation: DelegationVocabulary = DEFAULT_DELEGATION,
 ): Promise<MockLlm> {
-  const state: MockLlm['state'] = { requests: [], violations: [] };
+  const state: MockLlm['state'] = { requests: [], served: {}, violations: [] };
   const issuedToolCallIds = new Set<string>();
   const givenToolNames = Object.keys(koan.given.tools);
+  const scripts = trace.conversations.map((conv): ConversationScript => ({ conv, served: 0, forbidden: [] }));
+  const forbidden = buildForbidden(trace);
+  for (const script of scripts) {
+    script.forbidden = forbidden.get(script.conv.name) ?? [];
+    state.served[script.conv.name] = 0;
+  }
+  const main = scripts[0];
   // A live abort means the runner cancels the run right after this
   // script is fully served; a request beyond it is the agent racing that
   // cancellation, not a bug, so it must not be scored as an overrun.
-  const liveAbort = script.at(-1)?.abort === 'live';
+  const liveAbort = main.conv.turns.at(-1)?.abort === 'live';
+
+  // Requests are attributed to conversations by content: the first user
+  // message carries the task (main) or a briefing (that subagent), and
+  // the loader guarantees no opening contains another. Routing on a
+  // per-conversation `model` field ("model: koan/<name>") remains a
+  // possible future alternative, but it would change the run contract
+  // and require frameworks to register one provider entry per delegate;
+  // expectation matching needs neither, and the briefing arriving
+  // verbatim as the child's first user message is measured behavior.
+  const route = (messages: ChatMessage[]): ConversationScript | undefined => {
+    const opening = firstUserText(messages);
+    return scripts.find((s) => opening.includes(s.conv.briefing));
+  };
 
   const server = http.createServer(async (req, res) => {
     const respond = (status: number, body: unknown) => {
@@ -169,11 +323,22 @@ export function startMockLlm(
     }
 
     state.requests.push(body);
-    const index = state.requests.length - 1;
-    const entry = script[index];
+    const requestNo = state.requests.length;
+    const messages = body.messages ?? [];
+
+    const script = route(messages);
+    if (!script) {
+      state.violations.push(
+        `request #${requestNo} matches no scripted conversation — its first user message carries neither the task nor any briefing`,
+      );
+      return respond(400, { error: { message: 'mock LLM: request matches no scripted conversation' } });
+    }
+    const conv = script.conv;
+    const index = script.served;
+    const entry = conv.turns[index];
 
     if (!entry) {
-      if (liveAbort) {
+      if (liveAbort && conv.name === '') {
         // The world stops answering once the pre-abort script is served:
         // hold the connection open rather than reject it. This request is
         // either racing the caller's abort or arriving after it already
@@ -182,10 +347,12 @@ export function startMockLlm(
         return;
       }
       state.violations.push(
-        `model was called ${state.requests.length} times but the script has only ${script.length} entries`,
+        `${label(conv)} called the model ${index + 1} times but its script has only ${conv.turns.length} entries`,
       );
       return respond(400, { error: { message: 'mock LLM: script exhausted' } });
     }
+    script.served += 1;
+    state.served[conv.name] = script.served;
 
     if (givenToolNames.length > 0) {
       const offered = new Set(
@@ -194,21 +361,37 @@ export function startMockLlm(
       for (const name of givenToolNames) {
         if (!offered.has(name)) {
           state.violations.push(
-            `request #${index + 1} is missing the definition of tool "${name}" (R1)`,
+            `request #${requestNo} is missing the definition of tool "${name}" (R1)`,
           );
         }
       }
     }
 
-    for (const msg of trailingToolMessages(body.messages ?? [])) {
+    for (const msg of trailingToolMessages(messages)) {
       if (!issuedToolCallIds.has(String(msg.tool_call_id))) {
         state.violations.push(
-          `request #${index + 1} has a tool message with unknown tool_call_id "${msg.tool_call_id}" (R2)`,
+          `request #${requestNo} has a tool message with unknown tool_call_id "${msg.tool_call_id}" (R2)`,
         );
       }
     }
 
-    checkCoherence(index, script, body.messages ?? [], state.violations);
+    if (index === 0) {
+      checkConversationStart(conv, requestNo, messages, state.violations);
+    } else {
+      checkCoherence(conv, index, requestNo, messages, state.violations);
+    }
+
+    // Negative flow (SPEC.md §6.4): nothing scripted exclusively into
+    // another conversation may surface here.
+    const text = requestText(messages);
+    for (const { value, reason } of script.forbidden) {
+      if (text.includes(value)) {
+        state.violations.push(
+          `request #${requestNo} (${label(conv)}) carries ${JSON.stringify(value)}, ${reason} — ` +
+            `information crosses conversations only through a briefing or a final reply (SPEC.md §6.4)`,
+        );
+      }
+    }
 
     if (entry.fails) {
       // A scripted API failure is a plain JSON error even for stream
@@ -223,9 +406,11 @@ export function startMockLlm(
 
     let message: ChatMessage;
     let finishReason: string;
-    if (entry.call_tools) {
-      const ids = callIdsFor(entry.call_tools, index);
-      entry.call_tools.forEach((member, j) => {
+    if (entry.call_tools || entry.delegations) {
+      const ids = callIdsFor(conv, index);
+      const callTools = entry.call_tools ?? [];
+      const delegations = entry.delegations ?? [];
+      callTools.forEach((member, j) => {
         issuedToolCallIds.add(ids[j]);
         if (member.tool_responds) {
           pending.push({
@@ -235,17 +420,32 @@ export function startMockLlm(
           });
         }
       });
+      delegations.forEach((_, j) => issuedToolCallIds.add(ids[callTools.length + j]));
       message = {
         role: 'assistant',
         content: null,
-        tool_calls: entry.call_tools.map((member, j) => ({
-          id: ids[j],
-          type: 'function',
-          // The wire string, verbatim — this is what carries a
-          // malformed-arguments koan's unparseable string through to the
-          // agent (SPEC.md §6.1).
-          function: { name: member.name, arguments: member.argsWire },
-        })),
+        tool_calls: [
+          ...callTools.map((member, j) => ({
+            id: ids[j],
+            type: 'function',
+            // The wire string, verbatim — this is what carries a
+            // malformed-arguments koan's unparseable string through to the
+            // agent (SPEC.md §6.1).
+            function: { name: member.name, arguments: member.argsWire },
+          })),
+          // A delegation is emitted in the implementation's declared
+          // vocabulary (SPEC.md §6.4): the mock plays the model, so the
+          // tool_call must be one the framework's runtime executes as a
+          // delegation.
+          ...delegations.map((d, j) => ({
+            id: ids[callTools.length + j],
+            type: 'function',
+            function: {
+              name: delegation.tool,
+              arguments: JSON.stringify({ [delegation.agent_arg]: d.subagent, [delegation.prompt_arg]: d.prompt }),
+            },
+          })),
+        ],
       };
       finishReason = 'tool_calls';
     } else {
@@ -253,7 +453,7 @@ export function startMockLlm(
       finishReason = 'stop';
     }
 
-    const id = `chatcmpl-koan-${index + 1}`;
+    const id = `chatcmpl-koan-${requestNo}`;
     const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
     if (body.stream) {

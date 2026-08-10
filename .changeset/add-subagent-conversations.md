@@ -1,0 +1,5 @@
+---
+"agent-koans": minor
+---
+
+Agents under test may now delegate work to subagents. A model response can be a delegation instruction, `{ subagent: <name>, prompt: <briefing> }`, scripted in a koan trace by a following `- subagent: <name>` / `when:` block that describes the delegate's own conversation. A subagent name may be delegated to at most once per trace — a subagent conversation cannot be continued yet. `given.files` (path → content) now materializes into a new `KOAN_WORKSPACE` env var before the run, so a koan can hand the agent context to find on disk instead of over the wire — read with the agent's own internal tool, never the mock tool server. `POST /runs` gains `subagents: [{ name, description? }]`, and an implementation declares its own delegation wire vocabulary (the tool name and its agent/prompt argument keys) via a new `delegation` key in `agent-koans.yaml`. Two new koans — `020-subagent-briefing` and `021-subagent-file-handoff` — verify bidirectional isolation between conversations and internal file reads. Update your `openapi.yaml`/SPEC.md references and implement subagent conversations (§6.4) to keep conforming.

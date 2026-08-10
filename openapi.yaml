@@ -106,12 +106,26 @@ components:
           properties:
             prompt:
               type: string
-              description: The user task, verbatim.
+              minLength: 1
+              description: >-
+                The user task, verbatim. Routing to the right conversation
+                (SPEC.md §6.4) matches by substring, so an empty prompt
+                would match every request.
         tools:
           type: array
           default: []
           items:
             $ref: "#/components/schemas/ToolDef"
+        subagents:
+          type: array
+          default: []
+          description: >-
+            Delegates available for this run (SPEC.md §6.4). The agent
+            recognizes its own delegation tool call and, instead of
+            invoking the tool server, starts a subagent conversation with
+            the named delegate.
+          items:
+            $ref: "#/components/schemas/SubagentDef"
         limits:
           type: object
           description: Optional per-run budgets the agent must honor (SPEC.md §4 R5).
@@ -123,6 +137,17 @@ components:
                 Maximum number of model requests the agent may issue for
                 this run. Exhausting the budget before a final answer must
                 end the run as `aborted`.
+
+    SubagentDef:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: How the model addresses this delegate in a delegation instruction.
+        description:
+          type: string
 
     ToolDef:
       type: object

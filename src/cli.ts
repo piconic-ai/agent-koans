@@ -82,7 +82,7 @@ if (configPath !== undefined) {
   configPath = 'agent-koans.yaml';
 }
 
-let config: { skip: Record<string, string>; add: string[] } = { skip: {}, add: [] };
+let config: ReturnType<typeof loadConfig> = { skip: {}, add: [] };
 if (configPath !== undefined) {
   try {
     config = loadConfig(configPath);
@@ -179,7 +179,7 @@ for (const group of groups) {
       continue;
     }
     try {
-      await runKoan(koan, { command: values.agent, cwd: values.cwd });
+      await runKoan(koan, { command: values.agent, cwd: values.cwd, delegation: config.delegation });
       console.log(`ok    ${id}`);
     } catch (e) {
       failed += 1;

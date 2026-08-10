@@ -1,0 +1,30 @@
+name: subagent-file-handoff
+description: >
+  Context crosses to a subagent through a file instead of the briefing.
+  The child reads the named workspace file with the agent's own tool —
+  the mock tool server is never involved — and the file's content must
+  reach the child's next model request.
+
+given:
+  task: "Summarize the incident. The details are in report.md."
+  files:
+    report.md: "2026-08-09 03:12 UTC: checkout returned 503 for 4 minutes. Incident code INC-4407."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Read report.md and summarize the incident." }
+  - subagent: researcher
+    when:
+      - request: model
+        response: { tool: read_file, args: { path: "report.md" } }
+      # No tool request: read_file is the agent's own tool, executed
+      # against KOAN_WORKSPACE (SPEC.md §5 R7).
+      - request: model
+        response: "A 4-minute 503 outage, incident INC-4407."
+  - request: model
+    response: "Summary ready: incident INC-4407."
+
+then:
+  run:
+    status: completed
+    output: { contains: "INC-4407" }

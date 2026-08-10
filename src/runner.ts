@@ -4,7 +4,11 @@
 // aggregation belong here; what to verify is decided by the compiled
 // koan and the mocks.
 import { spawn, type ChildProcess } from 'node:child_process';
-import type { Koan, Matcher, ModelTurn } from './koan.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import type { DelegationVocabulary } from './config.js';
+import type { Koan, Matcher, Trace } from './koan.js';
 import { startMockLlm } from './mock-llm.js';
 import { startMockTools } from './mock-tools.js';
 import type { PendingInvocation } from './pending.js';
@@ -19,6 +23,12 @@ export interface AgentConfig {
   startupTimeoutMs?: number;
   /** Milliseconds to wait for a terminal run state. Default 15000. */
   runTimeoutMs?: number;
+  /**
+   * The implementation's delegation wire vocabulary (SPEC.md §6.4),
+   * usually loaded from its `agent-koans.yaml`. Absent means the neutral
+   * default: a `subagent` tool with `name`/`prompt` arguments.
+   */
+  delegation?: DelegationVocabulary;
 }
 
 const TERMINAL_STATES = new Set(['completed', 'failed', 'aborted']);
@@ -83,40 +93,59 @@ function match(label: string, actual: unknown, matcher: Matcher): string | null 
 export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
   const variants = Object.entries(koan.traces);
   const allFailures: string[] = [];
-  for (const [variant, script] of variants) {
-    const failures = await runTrace(koan, script, agent);
+  for (const [variant, trace] of variants) {
+    const failures = await runTrace(koan, trace, agent);
     if (failures.length === 0) return;
     allFailures.push(...(variant ? failures.map((f) => `[${variant}] ${f}`) : failures));
   }
   throw new Error(`koan "${koan.name}" failed:\n  - ${allFailures.join('\n  - ')}`);
 }
 
-async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Promise<string[]> {
+async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<string[]> {
   const pending: PendingInvocation[] = [];
-  const llm = await startMockLlm(koan, script, pending);
+  const llm = await startMockLlm(koan, trace, pending, agent.delegation);
   const tools = await startMockTools(pending);
   const port = await getFreePort();
   const base = `http://127.0.0.1:${port}`;
+  const totalTurns = trace.conversations.reduce((n, c) => n + c.turns.length, 0);
+  const subagentNames = trace.conversations.filter((c) => c.name !== '').map((c) => c.name);
 
-  const child = spawn('sh', ['-c', agent.command], {
-    cwd: agent.cwd,
-    env: {
-      ...process.env,
-      PORT: String(port),
-      OPENAI_BASE_URL: `${llm.url}/v1`,
-      OPENAI_API_KEY: 'koan-dummy-key',
-      KOAN_TOOLS_URL: tools.url,
-    },
-    stdio: ['ignore', 'inherit', 'inherit'],
-    // Own process group, killed as a group below: killing only the
-    // direct child leaves the agent's own children (pnpm → sh → node)
-    // running and holding the inherited stdio open.
-    detached: true,
-  });
+  // Always created, even without given.files: KOAN_WORKSPACE is part of
+  // the environment contract (SPEC.md §2), and an agent must be able to
+  // rely on it existing. `mkdtempSync` itself is outside the try below —
+  // if it fails, nothing was created, so there is nothing for the finally
+  // to clean up — but everything after it (materializing given.files,
+  // spawning the agent) moves inside: a failing write (ENOSPC, EPERM)
+  // must still leave the finally block to remove `workspace`.
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-'));
+  let child: ChildProcess | undefined;
 
   const failures: string[] = [];
   try {
     try {
+      for (const [rel, content] of Object.entries(koan.given.files ?? {})) {
+        const dest = path.join(workspace, rel);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, content);
+      }
+
+      child = spawn('sh', ['-c', agent.command], {
+        cwd: agent.cwd,
+        env: {
+          ...process.env,
+          PORT: String(port),
+          OPENAI_BASE_URL: `${llm.url}/v1`,
+          OPENAI_API_KEY: 'koan-dummy-key',
+          KOAN_TOOLS_URL: tools.url,
+          KOAN_WORKSPACE: workspace,
+        },
+        stdio: ['ignore', 'inherit', 'inherit'],
+        // Own process group, killed as a group below: killing only the
+        // direct child leaves the agent's own children (pnpm → sh → node)
+        // running and holding the inherited stdio open.
+        detached: true,
+      });
+
       await waitForHealth(base, agent.startupTimeoutMs ?? 10_000, child);
 
       const submitRes = await fetch(`${base}/runs`, {
@@ -125,6 +154,7 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
         body: JSON.stringify({
           task: { prompt: koan.given.task },
           tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
+          ...(subagentNames.length > 0 ? { subagents: subagentNames.map((name) => ({ name })) } : {}),
           ...(koan.given.limits ? { limits: koan.given.limits } : {}),
         }),
       });
@@ -136,7 +166,7 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
         throw new Error('POST /runs response is missing "run_id"');
       }
 
-      const abortKind = script.at(-1)?.abort;
+      const abortKind = trace.conversations[0].turns.at(-1)?.abort;
       const deadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
 
       if (abortKind === 'live') {
@@ -145,11 +175,11 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
         // request that then races ahead of the abort landing is parked by
         // the mock (mock-llm.ts), not rejected here — so whichever one
         // wins, the run has nothing left to do but settle aborted.
-        while (!(llm.state.requests.length >= script.length && pending.length === 0)) {
+        while (!(llm.state.requests.length >= totalTurns && pending.length === 0)) {
           if (Date.now() > deadline) {
             throw new Error(
               `abort trace's pre-abort steps were not fully observed within ${agent.runTimeoutMs ?? 15_000}ms: ` +
-                `${llm.state.requests.length}/${script.length} model requests served, ${pending.length} tool call(s) still unresolved`,
+                `${llm.state.requests.length}/${totalTurns} model requests served, ${pending.length} tool call(s) still unresolved`,
             );
           }
           await sleep(100);
@@ -190,10 +220,14 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
       failures.push(...llm.state.violations, ...tools.state.violations);
 
       // Underruns only: overruns are already recorded by the mocks.
-      if (llm.state.requests.length < script.length) {
-        failures.push(
-          `model script not fully consumed: ${llm.state.requests.length} of ${script.length} requests`,
-        );
+      for (const conv of trace.conversations) {
+        const served = llm.state.served[conv.name] ?? 0;
+        if (served < conv.turns.length) {
+          failures.push(
+            `model script not fully consumed${conv.name ? ` for subagent "${conv.name}"` : ''}: ` +
+              `${served} of ${conv.turns.length} requests`,
+          );
+        }
       }
       if (pending.length > 0) {
         failures.push(
@@ -215,8 +249,10 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
       failures.push(err instanceof Error ? err.message : String(err));
     }
   } finally {
+    // `child` is undefined when materialization or spawn itself failed
+    // before ever producing a process — nothing to kill or wait for then.
     const killTree = (signal: NodeJS.Signals) => {
-      if (child.pid === undefined) return;
+      if (!child || child.pid === undefined) return;
       try {
         process.kill(-child.pid, signal);
       } catch {
@@ -226,10 +262,11 @@ async function runTrace(koan: Koan, script: ModelTurn[], agent: AgentConfig): Pr
     killTree('SIGTERM');
     const killTimer = setTimeout(() => killTree('SIGKILL'), 2_000);
     await new Promise<void>((r) => {
-      if (child.exitCode !== null) return r();
+      if (!child || child.exitCode !== null) return r();
       child.on('exit', () => r());
     });
     clearTimeout(killTimer);
+    fs.rmSync(workspace, { recursive: true, force: true });
     await Promise.all([llm.close(), tools.close()]);
   }
 

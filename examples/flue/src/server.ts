@@ -9,6 +9,7 @@ import { Assistant, type AssistantData } from './agents/assistant.js';
 import { armBudget, budgetTripped } from './budget.js';
 import { loadConfig } from './config.js';
 import { createKoanProvider } from './provider.js';
+import type { RunSubagentDef } from './subagents.js';
 import type { RunToolDef } from './tools.js';
 
 interface RunLimits {
@@ -36,7 +37,7 @@ const runs = new Map<string, Run>();
 // already settled has nothing left to cancel (SPEC.md §3 abort guarantee).
 const handles = new Map<string, AgentInstanceHandle>();
 
-function startRun(prompt: string, tools: RunToolDef[], limits?: RunLimits): Run {
+function startRun(prompt: string, tools: RunToolDef[], subagents: RunSubagentDef[], limits?: RunLimits): Run {
   const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
   runs.set(run.run_id, run);
   armBudget(limits?.max_model_requests);
@@ -46,7 +47,12 @@ function startRun(prompt: string, tools: RunToolDef[], limits?: RunLimits): Run 
   handles.set(run.run_id, agent);
   void (async () => {
     try {
-      const initialData: AssistantData = { tools, toolsBaseUrl: config.tools.baseUrl };
+      const initialData: AssistantData = {
+        tools,
+        toolsBaseUrl: config.tools.baseUrl,
+        subagents,
+        workspaceDir: config.workspace.dir,
+      };
       const receipt = await agent.dispatch({ message: prompt, initialData });
       const reply = await agent.read(receipt);
       run.status = 'completed';
@@ -89,14 +95,19 @@ app.get('/health', (c) => c.json({ status: 'ok' }));
 
 app.post('/runs', async (c) => {
   const body = await c.req
-    .json<{ task?: { prompt?: string }; tools?: RunToolDef[]; limits?: RunLimits }>()
+    .json<{
+      task?: { prompt?: string };
+      tools?: RunToolDef[];
+      subagents?: RunSubagentDef[];
+      limits?: RunLimits;
+    }>()
     .catch(() => null);
   const prompt = body?.task?.prompt;
   if (typeof prompt !== 'string') {
     return c.json({ error: 'task.prompt is required' }, 400);
   }
   // The run executes asynchronously; the caller polls GET /runs/{id}.
-  const run = startRun(prompt, body?.tools ?? [], body?.limits);
+  const run = startRun(prompt, body?.tools ?? [], body?.subagents ?? [], body?.limits);
   return c.json({ run_id: run.run_id }, 202);
 });
 

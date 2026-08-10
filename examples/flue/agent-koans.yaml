@@ -1,2 +1,7 @@
+delegation:
+  tool: task
+  agent_arg: agent
+  prompt_arg: prompt
+
 skip:
   014-malformed-arguments: "pi-ai's parseStreamingJson silently repairs malformed JSON via partial-json instead of erroring, has no strict mode, and useTool() never exposes the raw wire string to intercept (upstream: @earendil-works/pi-ai)."

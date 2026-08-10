@@ -246,12 +246,16 @@ made available to the model as the tool result content.
 
 ## 6. Koan file format
 
-The koan file's exhaustive shape and its load-time constraints are
-defined normatively in [src/format.ts](./src/format.ts). This section
-gives the overview and the verification semantics a validator cannot
-express: conversation coherence, trace consumption, argument fidelity,
-the information flows of §6.4, and the meanings a step's position alone
-derives (live/late abort, unordered parallel groups).
+The koan file's exhaustive shape is defined normatively in
+[src/koan-spec.ts](./src/koan-spec.ts) — every exported type there carries
+a doc comment saying what it means, the way [openapi.yaml](./openapi.yaml)
+defines the wire format for §3. Reading a file into those types, and the
+load-time rules a file must satisfy before any agent runs, are in
+[src/parse.ts](./src/parse.ts). This section is the overview and the
+verification semantics only a running trace can judge — conversation
+coherence, trace consumption, argument fidelity, the information flows of
+§6.4, and the meanings a step's position alone derives (live/late abort,
+unordered parallel groups) — not the file's shape.
 
 Koans are declarative YAML files using a given / when / then structure.
 The `when` block is the run's **expected wire log**: an ordered sequence
@@ -292,25 +296,22 @@ then:                     # assertions on the run's outcome
   output: { contains: "31" }
 ```
 
-`given` carries agent setup only — never the prompt (§6.2 explains why
-`then` reads the same way). `given.tools` is converted to the
-wire-format list of §3.2. `given.files` materializes into
-`KOAN_WORKSPACE` (§2) before starting the agent — this is how a koan
-hands the agent context it must find on disk instead of over the wire
-(§6.1 internal reads, §6.4 subagent conversations). `given.limits` is
-forwarded verbatim in the run submission (§3.2). A trace MUST NOT script
-more model requests than a declared `max_model_requests` permits — the
-loader rejects such a koan; a subagent conversation's requests count
+`given.tools` is converted to the wire-format list of §3.2. `given.files`
+materializes into `KOAN_WORKSPACE` (§2) before starting the agent — this
+is how a koan hands the agent context it must find on disk instead of
+over the wire (§6.1 internal reads, §6.4 subagent conversations).
+`given.limits` is forwarded verbatim in the run submission (§3.2). A
+trace MUST NOT script more model requests than a declared
+`max_model_requests` permits; a subagent conversation's requests count
 toward the same budget as the main conversation's (§6.4).
 
 The top-level `prompt` is the run's initial prompt — what `POST /runs`
-submits (§3.2). It is REQUIRED for a `when`/`one_of` koan; a `turns:`
-koan (§6.5) carries a prompt per turn instead, and has no top-level one.
+submits (§3.2).
 
 ### 6.1 The `when` trace
 
 Each step pairs the agent's request (asserted) with the called party's
-scripted response. Requests take two forms:
+scripted response.
 
 - `request: model` — the agent calls the model. What the conversation
   must show is not written: it is **derived from the preceding trace**
@@ -321,28 +322,17 @@ scripted response. Requests take two forms:
   written to declare the expected invocation arguments when the trace
   legitimately transforms them (see §6.3); omitted, argument fidelity
   applies — the invocation must carry the instruction's args verbatim.
-  When the preceding response is a parallel group (below), a tool request
-  is matched against the group's instructions by tool name, and by `args`
+  When the preceding response is a parallel group, a tool request is
+  matched against the group's instructions by tool name, and by `args`
   when the name repeats within the group, not by the position it is
   written in.
 
-Responses discriminate by form:
-
-| Form                                  | Meaning                                              |
-| ------------------------------------- | ----------------------------------------------------- |
-| bare string                           | The model's text reply                                |
-| `{ tool: <name>, args }`              | The model's tool-call instruction                     |
-| `{ subagent: <name>, prompt }`        | The model's delegation instruction (§6.4)             |
-| list of `{ tool, args }` / `{ subagent, prompt }` | A parallel group: one assistant message, multiple tool_calls |
-| `{ status, body }`                    | The called party's HTTP response                      |
-
 A `{ status }` response to `request: model` scripts a **model API
-failure**. Its `status` MUST be a 4xx other than 408 or 429: those two
-and 5xx are auto-retried by common SDKs, which would make the trace
-nondeterministic — 401 is the canonical choice. `body` MAY be omitted;
-the mock then serves an OpenAI-style error envelope, since its content
-is not part of the contract (R8). Such a step MUST be the last one:
-after a non-retryable API failure the agent contacts no one.
+failure**. `body` MAY be omitted; the mock then serves an OpenAI-style
+error envelope, since its content is not part of the contract (R8).
+After a non-retryable API failure the agent contacts no one — this is
+also why 408, 429, and 5xx are not permitted statuses for it: common
+SDKs auto-retry those, which would make the trace nondeterministic.
 
 A tool-call instruction's `args` is normally a mapping — JSON-encoding
 sugar for the wire `function.arguments` string, which the mock builds by
@@ -358,30 +348,26 @@ MUST refuse the call instead (R6). The refusal path is the existing one:
 an instruction with no following tool request.
 
 `response` on a `request: model` step MAY also be a list of instructions
-instead of one — `{ tool, args }`, `{ subagent, prompt }`, or a mix of
-both — a single assistant message carrying multiple `tool_calls` (a
-**parallel group**). A 1-element list is a load error — write the single
-form. Two list members naming the same tool with deep-equal args, or two
-delegating to the same subagent, are load errors too, since a following
-tool request or subagent block could not tell them apart. The
-`request: { tool: ... }` steps and the subagent blocks (§6.4) that close
-a group are matched against it unordered, as stated above; nothing in the
-YAML spells out the unorderedness, it is derived from the group having
-more than one member. A group member with no matching tool-request step
-follows the ordinary absence rule (below); every delegation, in contrast,
-MUST have a matching subagent block — a koan cannot script one the model
-"decides" not to pursue, since delegation has no tool-server round trip
-to omit. The agent MAY execute a group's invocations sequentially or
-concurrently, in any order — the contract is completeness (every member
-closed, R2) and exactly-once delivery per member (R4), not concurrency,
-so an implementation that serializes a parallel group conforms exactly as
-well as one that runs it concurrently.
+instead of one — a single assistant message carrying multiple
+`tool_calls` (a **parallel group**). The `request: { tool: ... }` steps
+and the subagent blocks (§6.4) that close a group are matched against it
+unordered; nothing in the YAML spells out the unorderedness, it is
+derived from the group having more than one member. A group member with
+no matching tool-request step follows the ordinary absence rule (below);
+every delegation, in contrast, MUST have a matching subagent block — a
+koan cannot script one the model "decides" not to pursue, since
+delegation has no tool-server round trip to omit. The agent MAY execute a
+group's invocations sequentially or concurrently, in any order — the
+contract is completeness (every member closed, R2) and exactly-once
+delivery per member (R4), not concurrency, so an implementation that
+serializes a parallel group conforms exactly as well as one that runs it
+concurrently.
 
 **Conversation coherence.** For every model request, what the incoming
 conversation must show is fully determined by the trace before it:
 
 | Preceding trace                              | The conversation must show                                          |
-| -------------------------------------------- | ------------------------------------------------------------------- |
+| --------------------------------------------- | --------------------------------------------------------------------- |
 | Nothing (first request)                      | The prompt; no tool interaction yet                                  |
 | Instruction + tool request with status < 400 | The call closed with a tool message carrying the response body's content (R2) |
 | Instruction + tool request with status ≥ 400 | The call closed with a tool message carrying the status code or the error body's content (R3) |
@@ -413,21 +399,18 @@ fails the koan. Three further rules fall out of the trace itself, so
   Nothing about the instruction's tool name marks it this way; only the
   `args.path` correlation with `given.files` does.
 
-A trace MAY end with the bare list item `abort` (a YAML string, not a
-`request`/`response` mapping). It MUST be the trace's last step —
-anything after it is a load error — and it MUST follow at least one
-exchange: `abort` alone, with nothing before it, is a load error too. Its
-meaning is derived from what precedes it, the same shape-derived style as
-the rest of this format: preceded by a tool exchange or a tool-call
-instruction (the run is still in progress) it is a **live abort** — the
-caller cancels mid-run, and `then` asserts `status: aborted`; preceded by
-a model text reply (the final answer already delivered) it is a **late
-abort** — the caller cancels after the run has settled, and `then`
-asserts the committed result is unchanged. For a live abort, the runner
-fires `POST /runs/{run_id}/abort` (§3.4) as soon as every step before it
-has been observed; from that point the world stops answering — a further
-model request racing the abort is parked (held open, never answered, and
-never scored as an overrun), so the agent is left with nothing to do but
+A trace MAY end with the bare list item `abort`. Its meaning is derived
+from what precedes it, the same shape-derived style as the rest of this
+format: preceded by a tool exchange or a tool-call instruction (the run
+is still in progress) it is a **live abort** — the caller cancels
+mid-run, and `then` asserts `status: aborted`; preceded by a model text
+reply (the final answer already delivered) it is a **late abort** — the
+caller cancels after the run has settled, and `then` asserts the
+committed result is unchanged. For a live abort, the runner fires `POST
+/runs/{run_id}/abort` (§3.4) as soon as every step before it has been
+observed; from that point the world stops answering — a further model
+request racing the abort is parked (held open, never answered, and never
+scored as an overrun), so the agent is left with nothing to do but
 settle the run `aborted`. For a late abort, the runner waits for the
 run's terminal state first, then fires the abort, then re-reads the run
 so `then` judges the state after it.
@@ -489,11 +472,10 @@ interaction shape itself (e.g. the parallel tool-call group of §6.1).
 
 ### 6.4 Subagent conversations
 
-A model response MAY be a **delegation instruction**,
-`{ subagent: <name>, prompt: <briefing> }`, instead of a tool call or a
-text reply (§6.1). `name` MUST be one of the run's declared `subagents`
-(§3.2); `prompt` is the briefing that opens that delegate's own
-conversation with the model. On the wire this is a `tool_calls` entry
+A model response MAY be a **delegation instruction** instead of a tool
+call or a text reply (§6.1). `subagent` MUST be one of the run's declared
+`subagents` (§3.2); `prompt` is the briefing that opens that delegate's
+own conversation with the model. On the wire this is a `tool_calls` entry
 like any other: the agent's own delegation tool, which per R7 MUST NOT
 reach the tool server, and instead starts a **subagent conversation** as
 scripted below. This suite does not mandate a wire name or argument keys
@@ -502,18 +484,14 @@ band, so the mock can speak it — only that the agent recognizes its own
 delegation calls and handles them as this section specifies.
 
 A delegation instruction MUST be scripted by a following **subagent
-block**, a trace step of the form `- subagent: <name>` / `when: <trace>`
-— not a `request`/`response` pair, a third kind of step alongside those
-and `abort`. `when` has exactly the shape of a top-level `when` (§6.1):
-it may itself contain further tool calls, model API failures are
-forbidden inside it (a subagent conversation cannot end the run — only
-the caller's own run can, R8), `abort` is forbidden inside it for the
-same reason, and it may contain its own delegation instructions and
-subagent blocks, nested arbitrarily. It MUST end with the delegate's own
-text reply — never a tool call or a further delegation — since that
-reply is what returns to the delegator; there is no such thing as a
-subagent block whose delegation instruction goes unanswered (unlike a
-plain tool call, a delegation cannot be scripted absent, §6.1).
+block**. Its nested trace has exactly the shape of a top-level `when`
+(§6.1) — model API failures and `abort` are forbidden inside it, since a
+subagent conversation cannot end the run (only the caller's own run can,
+R8) — and MUST end with the delegate's own text reply — never a tool
+call or a further delegation — since that reply is what returns to the
+delegator; there is no such thing as a subagent block whose delegation
+instruction goes unanswered (unlike a plain tool call, a delegation
+cannot be scripted absent, §6.1).
 
 ```yaml
 when:
@@ -530,14 +508,6 @@ when:
   - request: model
     response: "Tokyo is 31°C."
 ```
-
-**One delegation per name.** A subagent name MAY be delegated to at most
-once per trace: a second delegation instruction or subagent block naming
-a delegate already used earlier in the trace is a load error — a
-subagent conversation cannot be continued yet. This is a format
-limitation, not a capability one: nothing stops a caller from addressing
-the same delegate again in a later koan version once the format grows a
-way to script it.
 
 **Ordering.** Sibling subagent blocks — those resolving delegations from
 the same parallel group — MAY appear in the trace in any order relative
@@ -562,8 +532,6 @@ chosen to tolerate a framework lightly wrapping the briefing text, could
 not otherwise route unambiguously. For the same reason every opening
 MUST be non-empty (trimmed of whitespace) — an empty one is contained in
 every string, so it would match every request instead of routing at all.
-The loader rejects a koan whose openings are not mutually distinct or
-not all non-empty this way.
 
 **Isolation.** A subagent conversation's world is its briefing, nothing
 more; the parent's is the delegate's final reply, nothing more. The
@@ -588,19 +556,12 @@ in both directions:
 ### 6.5 Turn koans (follow-up prompts)
 
 A koan MAY replace the top-level `prompt` and `when`/`one_of` with a
-top-level **`turns`**: a list of at least two entries, each
-`{ prompt, when, then }`. `prompt` is the user's text for that turn;
-`when` is a trace with exactly the grammar of §6.1 — subagent blocks
-included — scripting that turn's exchanges; `then` is that turn's own
-judgment, in the same flat shape as the top-level `then` (§6.2). A turn's
-`then` is OPTIONAL, defaulting to `{ status: completed }` — every turn
-is judged, whether the koan writes its own `then` or relies on that
-default. A `turns:` koan has no top-level `then` of its own: the last
-turn's is the run's final judgment, since a turn is a small koan and
-every level of this format keeps `when`/`then`'s names and meaning.
-Mixing `turns` with a top-level `prompt`, `when`, `one_of`, or `then` is
-a load error; a 1-turn koan is just `when` (`POST .../prompts`, §3.5,
-needs a second turn to exercise at all).
+top-level **`turns`**. Each turn's `then` is OPTIONAL, defaulting to
+`{ status: completed }` — every turn is judged, whether the koan writes
+its own `then` or relies on that default. A `turns:` koan has no
+top-level `then` of its own: the last turn's is the run's final
+judgment, since a turn is a small koan and every level of this format
+keeps `when`/`then`'s names and meaning.
 
 ```yaml
 given:
@@ -658,8 +619,8 @@ same conversation (prompts, replies, tool results, internal reads, and
 any subagent's final reply) — checked by information flow, the same
 positive-flow style as a delegate's final reply crossing into its parent
 (§6.4), applied here across turns of one conversation instead of across
-conversations. `abort` MUST NOT appear inside a `turns` koan's `when` —
-turn-level cancellation is not part of this version of the contract.
+conversations. Turn-level cancellation (`abort` mid-turn) is not part of
+this version of the contract.
 
 ## 7. Versioning
 

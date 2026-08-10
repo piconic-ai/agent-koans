@@ -1,21 +1,26 @@
 // Loading and compiling koan YAML into the runner's internal trace form.
-// File-format parsing and validation belong to format.ts; this file only
-// reads the YAML, hands it to parseKoanFile, and COMPILES the result
-// (assumed valid — format.ts already rejected anything else) into the
-// runner's own shapes: Koan, ModelTurn, Conversation, Trace. Runtime
-// verification belongs to the mocks and the runner, not here.
+// File-format parsing belongs to koan-spec.ts (the shape) and parse.ts
+// (reading it); this file only reads the YAML, hands it to
+// parseKoanFile, and COMPILES the result (assumed valid — parse.ts
+// already rejected anything else) into the runner's own shapes: Koan,
+// ModelTurn, Conversation, Trace. Runtime verification belongs to the
+// mocks and the runner, not here.
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
-import {
-  parseKoanFile,
-  type GroupMember,
-  type ModelResponse,
-  type ThenBlock,
-  type ToolCallResponse,
-  type TraceStep,
-  type TurnEntry as ParsedTurn,
-} from './format.js';
+import { deepEqual } from './pending.js';
+import type {
+  Args,
+  Instruction,
+  Judgment as ParsedJudgment,
+  KoanFile,
+  ModelResponse,
+  ParsedArgs,
+  Step,
+  Trace as ParsedTrace,
+  Turn as ParsedTurn,
+} from './koan-spec.js';
+import { parseKoanFile } from './parse.js';
 
 /** A tool definition as written in `given.tools` (JSON Schema input). */
 export interface ToolDef {
@@ -171,43 +176,50 @@ export interface DiscoveredKoan {
 }
 
 // TypeScript rejects an unhandled discriminated-union case at compile
-// time, before this ever runs; format.ts having already validated the
-// file means it never runs anyway. It exists so a variant added to
-// format.ts and forgotten here is a build failure, not a silent gap.
+// time, before this ever runs; parse.ts having already validated the file
+// means it never runs anyway. It exists so a variant added to
+// koan-spec.ts and forgotten here is a build failure, not a silent gap.
 function assertNever(x: never): never {
   throw new Error(`unreachable koan shape: ${JSON.stringify(x)}`);
 }
 
-function compileCallTool(r: ToolCallResponse): CallToolInstruction {
-  return { name: r.tool, argsWire: r.argsWire, args: r.args, invokeArgs: r.invokeArgs, tool_responds: r.result };
+type CallInstruction = Extract<Instruction, { kind: 'call' }>;
+type DelegateInstruction = Extract<Instruction, { kind: 'delegate' }>;
+
+function isCall(i: Instruction): i is CallInstruction {
+  return i.kind === 'call';
 }
 
-function compileDelegationInstruction(r: { subagent: string; prompt: string }): DelegationInstruction {
+function isDelegate(i: Instruction): i is DelegateInstruction {
+  return i.kind === 'delegate';
+}
+
+function argsValueOf(args: Args): ParsedArgs | undefined {
+  return args.kind === 'mapping' ? args.value : args.parsed;
+}
+
+// A call instruction's wire string is its `mapping` value re-encoded, or
+// the `wire` form's own verbatim text — koan-spec.ts keeps only one of the
+// two, per Args's own header.
+function compileCallTool(instr: CallInstruction): CallToolInstruction {
+  const argsWire = instr.args.kind === 'wire' ? instr.args.text : JSON.stringify(instr.args.value);
+  return { name: instr.tool, argsWire, args: argsValueOf(instr.args) };
+}
+
+function compileDelegationInstruction(instr: DelegateInstruction): DelegationInstruction {
   // `final` is filled in once the matching subagent block compiles, right
-  // after this turn is pushed — the block is mandatory (format.ts), so a
+  // after this turn is pushed — the block is mandatory (parse.ts), so a
   // placeholder can never survive to runtime.
-  return { subagent: r.subagent, prompt: r.prompt, final: '' };
-}
-
-function isToolCall(m: GroupMember): m is ToolCallResponse {
-  return m.kind === 'tool-call';
-}
-
-function isDelegation(m: GroupMember): m is Extract<GroupMember, { kind: 'delegation' }> {
-  return m.kind === 'delegation';
+  return { subagent: instr.subagent, prompt: instr.prompt, final: '' };
 }
 
 function compileModelTurn(response: ModelResponse): ModelTurn {
   switch (response.kind) {
     case 'reply':
       return { reply: response.text };
-    case 'tool-call':
-      return { call_tools: [compileCallTool(response)] };
-    case 'delegation':
-      return { delegations: [compileDelegationInstruction(response)] };
-    case 'group': {
-      const call_tools = response.members.filter(isToolCall).map(compileCallTool);
-      const delegations = response.members.filter(isDelegation).map(compileDelegationInstruction);
+    case 'instructions': {
+      const call_tools = response.instructions.filter(isCall).map(compileCallTool);
+      const delegations = response.instructions.filter(isDelegate).map(compileDelegationInstruction);
       return {
         ...(call_tools.length > 0 ? { call_tools } : {}),
         ...(delegations.length > 0 ? { delegations } : {}),
@@ -220,6 +232,22 @@ function compileModelTurn(response: ModelResponse): ModelTurn {
   }
 }
 
+// One `call` instruction still open for a following `tool` step to close,
+// paired with the compiled turn field it closes. parse.ts's
+// everyToolRequestMatchesAnOpenCall already proved every `tool` step in a
+// valid file matches exactly one of these; this walk repeats the same
+// match, now free to assume it always succeeds.
+interface OpenCall {
+  source: CallInstruction;
+  compiled: CallToolInstruction;
+}
+
+function matchOpenCall(openCalls: OpenCall[], tool: string, args: ParsedArgs | undefined): OpenCall {
+  const named = openCalls.filter((c) => c.source.tool === tool);
+  if (named.length <= 1) return named[0];
+  return named.find((c) => args !== undefined && deepEqual(argsValueOf(c.source.args), args))!;
+}
+
 /**
  * Compiles one conversation's steps into `conv.turns`, appending (so a
  * `turns:` koan's later turns extend the same conversation, SPEC.md
@@ -227,29 +255,41 @@ function compileModelTurn(response: ModelResponse): ModelTurn {
  * Conversation appended to `conversations` — the main one first, then
  * subagents in first-appearance order.
  */
-function compileSteps(steps: TraceStep[], conv: Conversation, conversations: Conversation[]): void {
+function compileSteps(steps: Step[], conv: Conversation, conversations: Conversation[]): void {
   const delegationBySubagent = new Map<string, DelegationInstruction>();
+  let openCalls: OpenCall[] = [];
+
   for (const step of steps) {
     switch (step.kind) {
       case 'model': {
         const turn = compileModelTurn(step.response);
         conv.turns.push(turn);
         for (const d of turn.delegations ?? []) delegationBySubagent.set(d.subagent, d);
+        openCalls =
+          step.response.kind === 'instructions'
+            ? step.response.instructions
+                .filter(isCall)
+                .map((source, i) => ({ source, compiled: turn.call_tools![i] }))
+            : [];
         break;
       }
-      case 'subagent-block': {
-        const child: Conversation = { name: step.subagent, parent: conv.name, turns: [], briefing: step.prompt };
+      case 'subagent': {
+        const briefing = delegationBySubagent.get(step.name)!.prompt;
+        const child: Conversation = { name: step.name, parent: conv.name, turns: [], briefing };
         conversations.push(child);
-        compileSteps(step.when, child, conversations);
+        compileSteps(step.trace.steps, child, conversations);
         // A subagent block always closes a delegation from this same
-        // conversation's own turns (format.ts's pairing) — the child's
+        // conversation's own turns (parse.ts's pairing) — the child's
         // final reply is what returns to the parent (SPEC.md §6.4).
-        delegationBySubagent.get(step.subagent)!.final = child.turns.at(-1)!.reply!;
+        delegationBySubagent.get(step.name)!.final = child.turns.at(-1)!.reply!;
+        openCalls = [];
         break;
       }
-      case 'abort': {
-        const last = conv.turns.at(-1)!;
-        last.abort = last.call_tools || last.delegations ? 'live' : 'late';
+      case 'tool': {
+        const match = matchOpenCall(openCalls, step.tool, step.args);
+        match.compiled.invokeArgs = step.args ?? match.compiled.args;
+        match.compiled.tool_responds = { status: step.response.status, body: step.response.body };
+        openCalls = openCalls.filter((c) => c !== match);
         break;
       }
       default:
@@ -258,17 +298,18 @@ function compileSteps(steps: TraceStep[], conv: Conversation, conversations: Con
   }
 }
 
-function compileTrace(steps: TraceStep[], prompt: string): Trace {
+function compileTrace(trace: ParsedTrace, briefing: string): Trace {
   const conversations: Conversation[] = [];
-  const main: Conversation = { name: '', turns: [], briefing: prompt };
+  const main: Conversation = { name: '', turns: [], briefing };
   conversations.push(main);
-  compileSteps(steps, main, conversations);
+  compileSteps(trace.steps, main, conversations);
+  if (trace.abort !== undefined) main.turns.at(-1)!.abort = trace.abort;
   return { conversations };
 }
 
-function compileJudgment(then: ThenBlock | undefined): Judgment {
+function compileJudgment(then: ParsedJudgment | undefined): Judgment {
   if (then === undefined) return {};
-  return { status: then.status, output: then.output as Matcher | undefined };
+  return { status: then.status, output: then.output };
 }
 
 /**
@@ -279,7 +320,7 @@ function compileJudgment(then: ThenBlock | undefined): Judgment {
  * submits); turn 2 onward each append a `followUps` boundary and their
  * own steps to the same conversation.
  */
-function compileTurnsTrace(turns: ParsedTurn[]): { trace: Trace; turnSpecs: TurnSpec[] } {
+function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): { trace: Trace; turnSpecs: TurnSpec[] } {
   const conversations: Conversation[] = [];
   const followUps: TurnBoundary[] = [];
   const main: Conversation = { name: '', turns: [], briefing: turns[0].prompt, followUps };
@@ -288,11 +329,8 @@ function compileTurnsTrace(turns: ParsedTurn[]): { trace: Trace; turnSpecs: Turn
   const turnSpecs: TurnSpec[] = [];
   for (const [i, t] of turns.entries()) {
     if (i > 0) followUps.push({ start: main.turns.length, prompt: t.prompt });
-    compileSteps(t.when, main, conversations);
-    // Every turn is judged, whether the koan writes its own `then` or not
-    // — an intermediate turn defaults to requiring "completed" (SPEC.md
-    // §6.5), and this is the only place that default is applied.
-    turnSpecs.push({ prompt: t.prompt, then: t.then !== undefined ? compileJudgment(t.then) : { status: 'completed' } });
+    compileSteps(t.trace.steps, main, conversations);
+    turnSpecs.push({ prompt: t.prompt, then: compileJudgment(t.then) });
   }
 
   return { trace: { conversations }, turnSpecs };
@@ -314,12 +352,7 @@ function markInternalReads(trace: Trace, files: Record<string, string>): void {
   }
 }
 
-/** Load and compile one koan file; throws on any format violation. */
-export function loadKoan(file: string): Koan {
-  const raw: unknown = parse(fs.readFileSync(file, 'utf8'));
-  const parsed = parseKoanFile(raw);
-  if (typeof parsed === 'string') throw new Error(`Invalid koan ${file}: ${parsed}`);
-
+function compileKoan(parsed: KoanFile): Koan {
   const given = {
     tools: parsed.given.tools as Record<string, ToolDef>,
     files: parsed.given.files,
@@ -330,34 +363,43 @@ export function loadKoan(file: string): Koan {
   let turns: TurnSpec[] | undefined;
   let traces: Record<string, Trace>;
 
-  if (parsed.turns !== undefined) {
-    const compiled = compileTurnsTrace(parsed.turns);
-    traces = { '': compiled.trace };
-    turns = compiled.turnSpecs;
-  } else if (parsed.when !== undefined) {
-    prompt = parsed.prompt;
-    traces = { '': compileTrace(parsed.when, prompt as string) };
-  } else {
-    prompt = parsed.prompt;
-    traces = {};
-    for (const [variant, steps] of Object.entries(parsed.one_of!)) {
-      traces[variant] = compileTrace(steps, prompt as string);
+  switch (parsed.body.kind) {
+    case 'single':
+      prompt = parsed.body.prompt;
+      traces = { '': compileTrace(parsed.body.trace, prompt) };
+      break;
+    case 'variants':
+      prompt = parsed.body.prompt;
+      traces = {};
+      for (const [variant, trace] of Object.entries(parsed.body.variants)) {
+        traces[variant] = compileTrace(trace, prompt);
+      }
+      break;
+    case 'turns': {
+      const compiled = compileTurnsTrace(parsed.body.turns);
+      traces = { '': compiled.trace };
+      turns = compiled.turnSpecs;
+      break;
     }
+    default:
+      return assertNever(parsed.body);
   }
 
   for (const trace of Object.values(traces)) {
     markInternalReads(trace, given.files ?? {});
   }
 
-  return {
-    name: parsed.name,
-    description: parsed.description,
-    given,
-    prompt,
-    turns,
-    traces,
-    then: compileJudgment(parsed.then),
-  };
+  const then = parsed.body.kind === 'turns' ? {} : compileJudgment(parsed.body.then);
+
+  return { name: parsed.name, description: parsed.description, given, prompt, turns, traces, then };
+}
+
+/** Load and compile one koan file; throws on any format violation. */
+export function loadKoan(file: string): Koan {
+  const raw: unknown = parse(fs.readFileSync(file, 'utf8'));
+  const parsed = parseKoanFile(raw);
+  if (typeof parsed === 'string') throw new Error(`Invalid koan ${file}: ${parsed}`);
+  return compileKoan(parsed);
 }
 
 /** Load every koan file directly in a directory, sorted by id. */

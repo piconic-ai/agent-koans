@@ -5,7 +5,6 @@ description: >
   in turn, and only then report the comparison.
 
 given:
-  task: "Compare the current temperature in Tokyo and Osaka."
   tools:
     get_weather:
       description: "Look up current weather for a city"
@@ -14,6 +13,8 @@ given:
         properties:
           city: { type: string }
         required: [city]
+
+prompt: "Compare the current temperature in Tokyo and Osaka."
 
 when:
   - request: model
@@ -28,6 +29,5 @@ when:
     response: "Osaka (33°C) is warmer than Tokyo (31°C)."
 
 then:
-  run:
-    status: completed
-    output: { matches: "33.*31|31.*33" }
+  status: completed
+  output: { matches: "33.*31|31.*33" }

@@ -3,8 +3,7 @@ description: >
   An abort that arrives after the run has settled must not rewrite the
   committed result.
 
-given:
-  task: "Say hello."
+prompt: "Say hello."
 
 when:
   - request: model
@@ -12,6 +11,5 @@ when:
   - abort
 
 then:
-  run:
-    status: completed
-    output: { contains: "Hello" }
+  status: completed
+  output: { contains: "Hello" }

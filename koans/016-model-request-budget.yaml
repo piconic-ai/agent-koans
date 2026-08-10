@@ -6,7 +6,6 @@ description: >
   may be skipped or finished — both processes stay within the budget.
 
 given:
-  task: "Get the current weather in Tokyo and report it."
   tools:
     get_weather:
       description: "Look up current weather for a city"
@@ -17,6 +16,8 @@ given:
         required: [city]
   limits:
     max_model_requests: 3
+
+prompt: "Get the current weather in Tokyo and report it."
 
 one_of:
   stop-before-the-last-tool:
@@ -49,5 +50,4 @@ one_of:
     # budget exhausted: the last tool finished, but no fourth model request
 
 then:
-  run:
-    status: aborted
+  status: aborted

@@ -9,6 +9,9 @@ export interface Config {
   tools: {
     baseUrl: string;
   };
+  workspace: {
+    dir: string;
+  };
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -20,6 +23,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     },
     tools: {
       baseUrl: env.KOAN_TOOLS_URL ?? '',
+    },
+    workspace: {
+      dir: env.KOAN_WORKSPACE ?? '',
     },
   };
 }

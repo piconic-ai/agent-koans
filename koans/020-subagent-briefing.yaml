@@ -1,0 +1,36 @@
+name: subagent-briefing
+description: >
+  The parent delegates one lookup to a subagent. The briefing is the
+  child's whole world: the child must see only its briefing, and the
+  parent must see only the child's final answer — none of the child's
+  intermediate work.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Prepare the weather report."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Look up the current temperature in Tokyo." }
+  - subagent: researcher
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Tokyo" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 31, station: "TK-77" } }
+      - request: model
+        response: "31°C."
+  - request: model
+    response: "Tokyo is 31°C."
+
+then:
+  status: completed
+  output: { contains: "31" }

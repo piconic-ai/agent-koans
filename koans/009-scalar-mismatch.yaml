@@ -7,7 +7,6 @@ description: >
   report back, and let the model correct itself.
 
 given:
-  task: "Get the 3-day forecast for Tokyo."
   tools:
     get_forecast:
       description: "Get the weather forecast for the coming days"
@@ -16,6 +15,8 @@ given:
         properties:
           days: { type: number }
         required: [days]
+
+prompt: "Get the 3-day forecast for Tokyo."
 
 one_of:
   coerce:
@@ -38,6 +39,5 @@ one_of:
       response: "Sunny for the next 3 days."
 
 then:
-  run:
-    status: completed
-    output: { contains: "Sunny" }
+  status: completed
+  output: { contains: "Sunny" }

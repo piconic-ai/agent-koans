@@ -4,7 +4,6 @@ description: >
   world for anything and settle the run as aborted.
 
 given:
-  task: "Get the current weather in Tokyo and report it."
   tools:
     get_weather:
       description: "Look up current weather for a city"
@@ -14,6 +13,8 @@ given:
           city: { type: string }
         required: [city]
 
+prompt: "Get the current weather in Tokyo and report it."
+
 when:
   - request: model
     response: { tool: get_weather, args: { city: "Tokyo" } }
@@ -22,5 +23,4 @@ when:
   - abort
 
 then:
-  run:
-    status: aborted
+  status: aborted

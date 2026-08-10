@@ -5,7 +5,6 @@ description: >
   model's retry must target only the failed call.
 
 given:
-  task: "Report the current weather and local time in Tokyo."
   tools:
     get_weather:
       description: "Look up current weather for a city"
@@ -21,6 +20,8 @@ given:
         properties:
           city: { type: string }
         required: [city]
+
+prompt: "Report the current weather and local time in Tokyo."
 
 when:
   - request: model
@@ -39,6 +40,5 @@ when:
     response: "It is 31°C and 14:05 in Tokyo."
 
 then:
-  run:
-    status: completed
-    output: { contains: "31" }
+  status: completed
+  output: { contains: "31" }

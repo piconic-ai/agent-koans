@@ -6,7 +6,6 @@ description: >
   Exactly one tool invocation is made.
 
 given:
-  task: "Get the current weather in Atlantis and report it."
   tools:
     get_weather:
       description: "Look up current weather for a city"
@@ -15,6 +14,8 @@ given:
         properties:
           city: { type: string }
         required: [city]
+
+prompt: "Get the current weather in Atlantis and report it."
 
 when:
   - request: model
@@ -25,6 +26,5 @@ when:
     response: "I couldn't find weather data for Atlantis."
 
 then:
-  run:
-    status: completed
-    output: { contains: "Atlantis" }
+  status: completed
+  output: { contains: "Atlantis" }

@@ -6,7 +6,6 @@ description: >
   report the answer as soon as the model gives one.
 
 given:
-  task: "What is the capital of France?"
   tools:
     get_weather:
       description: "Look up current weather for a city"
@@ -16,11 +15,12 @@ given:
           city: { type: string }
         required: [city]
 
+prompt: "What is the capital of France?"
+
 when:
   - request: model
     response: "The capital of France is Paris."
 
 then:
-  run:
-    status: completed
-    output: { contains: "Paris" }
+  status: completed
+  output: { contains: "Paris" }

@@ -1,0 +1,7 @@
+---
+"agent-koans": minor
+---
+
+Agents under test may now receive a follow-up prompt on an existing run: `POST /runs/{run_id}/prompts` re-opens a settled run and continues its conversation, carrying every earlier turn's exchanges into the new one. A koan scripts this with a top-level `turns:` list — entries of `{ prompt, when, then }` — instead of a single prompt and trace; each turn is judged by its own `then` (defaulting to `{ status: completed }`), and the last turn's `then` is the run's final judgment. New koan `022-follow-up` covers it, passing against both `examples/vanilla-ts` and `examples/flue` with no skip needed.
+
+BREAKING: this release also flattens two vocabularies that had grown unnecessary nesting. `given.task` is gone; every koan now names its initial prompt with a top-level `prompt:` field instead (mechanically renamed across the whole bundled suite — no koan's meaning changed). `then.run.{status,output}` is now flat, `then.{status,output}`: the `run:` wrapper never grew a second occupant, since every other verification need turned out to belong to the trace itself. `POST /runs` follows the same flattening on the wire: the body is now `{ prompt, tools, subagents, limits }`, with no `task` envelope. Update your agent to read `prompt` directly from `POST /runs` and to implement `POST /runs/{run_id}/prompts`, and update any of your own koans (`given.task` → top-level `prompt`, `then.run.*` → `then.*`) to keep conforming.

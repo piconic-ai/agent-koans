@@ -7,7 +7,6 @@ description: >
   completes.
 
 given:
-  task: "Get the current weather in Osaka and report it."
   tools:
     get_weather:
       description: "Look up current weather for a city"
@@ -16,6 +15,8 @@ given:
         properties:
           city: { type: string }
         required: [city]
+
+prompt: "Get the current weather in Osaka and report it."
 
 when:
   - request: model
@@ -26,6 +27,5 @@ when:
     response: "I'm sorry, the weather service for Osaka is unavailable right now."
 
 then:
-  run:
-    status: completed
-    output: { contains: "Osaka" }
+  status: completed
+  output: { contains: "Osaka" }

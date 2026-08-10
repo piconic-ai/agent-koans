@@ -25,9 +25,9 @@ paths:
   /runs:
     post:
       operationId: createRun
-      summary: Submit a task
+      summary: Submit a prompt
       description: >
-        Accepts a task and starts a run asynchronously. The harness polls
+        Accepts a prompt and starts a run asynchronously. The harness polls
         `GET /runs/{run_id}` until the run reaches a terminal state.
       requestBody:
         required: true
@@ -49,7 +49,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/RunCreated"
         "400":
-          description: Malformed body (not JSON, or `task.prompt` missing).
+          description: Malformed body (not JSON, or `prompt` missing).
 
   /runs/{run_id}:
     get:
@@ -94,24 +94,70 @@ paths:
         "404":
           description: Unknown `run_id`.
 
+  /runs/{run_id}/prompts:
+    post:
+      operationId: sendPrompt
+      summary: Deliver a follow-up prompt to the conversation
+      description: >
+        Continues an existing run's conversation with a new prompt
+        (SPEC.md §6.5). Delivering to a run already in a terminal state
+        MUST re-open it: `status` returns to `running`, and the run MUST
+        reach a terminal state again in finite time, with `output`
+        carrying this turn's final answer.
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt:
+                  type: string
+                  minLength: 1
+                  description: The follow-up prompt, verbatim.
+      responses:
+        "202":
+          description: Prompt accepted.
+        "200":
+          description: Prompt accepted. Equivalent to 202.
+        "404":
+          description: Unknown `run_id`.
+
 components:
   schemas:
     RunRequest:
       type: object
-      required: [task]
+      required: [prompt]
       properties:
-        task:
-          type: object
-          required: [prompt]
-          properties:
-            prompt:
-              type: string
-              description: The user task, verbatim.
+        prompt:
+          type: string
+          minLength: 1
+          description: >-
+            The user's initial prompt, verbatim. Routing to the right
+            conversation (SPEC.md §6.4) matches by substring, so an empty
+            prompt would match every request.
         tools:
           type: array
           default: []
           items:
             $ref: "#/components/schemas/ToolDef"
+        subagents:
+          type: array
+          default: []
+          description: >-
+            Delegates available for this run (SPEC.md §6.4). The agent
+            recognizes its own delegation tool call and, instead of
+            invoking the tool server, starts a subagent conversation with
+            the named delegate.
+          items:
+            $ref: "#/components/schemas/SubagentDef"
         limits:
           type: object
           description: Optional per-run budgets the agent must honor (SPEC.md §4 R5).
@@ -123,6 +169,17 @@ components:
                 Maximum number of model requests the agent may issue for
                 this run. Exhausting the budget before a final answer must
                 end the run as `aborted`.
+
+    SubagentDef:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: How the model addresses this delegate in a delegation instruction.
+        description:
+          type: string
 
     ToolDef:
       type: object

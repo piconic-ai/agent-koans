@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { withKoanIndex } from '../src/koan-index.js';
+import { withKoanIndex } from './koan-index.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const specPath = path.join(repoRoot, 'SPEC.md');

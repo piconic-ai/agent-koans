@@ -233,7 +233,7 @@ function checkCoherence(
     if (!indicators.some((s) => content.includes(s))) {
       violations.push(
         `request #${requestNo}: the tool ${failed ? `failure (status ${status})` : 'result'} for "${member.name}" did not reach ` +
-          `the model — the tool message carries none of ${JSON.stringify(indicators)} `,
+          `the model — the tool message carries none of ${JSON.stringify(indicators)}`,
       );
     }
   }

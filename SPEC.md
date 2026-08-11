@@ -100,12 +100,12 @@ runner's timeout fails the koan.
 already settled MUST keep the state it settled on: a late abort never
 rewrites a committed result, and repeated aborts are idempotent.
 
-**Follow-up prompts.** Delivering a prompt to a settled run MUST re-open
-it: `status` returns to `running`, the run reaches a terminal state again,
-and `output` carries the new turn's answer. The conversation MUST carry
-every earlier turn into this turn's model requests. Delivering a prompt to
-a run still `running` is out of scope — no koan scripts it, and this
-version of the contract does not define what you must do with it.
+**Follow-up prompts.** A prompt sent to a settled run MUST re-open it:
+`status` returns to `running`, the run reaches a terminal state again, and
+`output` carries the new turn's answer. The conversation MUST carry every
+earlier turn into this turn's model requests. A prompt sent to a run still
+`running` is out of scope — no koan scripts it, and this version of the
+contract does not define what you must do with it.
 
 ## 4. Talking to the model
 

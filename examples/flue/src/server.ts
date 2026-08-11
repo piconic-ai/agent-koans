@@ -34,7 +34,7 @@ interface Run {
 const runs = new Map<string, Run>();
 // The per-run agent handle, kept for the run's whole process lifetime —
 // not just while a turn is in flight. The abort endpoint needs it to call
-// the handle's own abort(); a follow-up prompt (SPEC.md §3.5) needs it to
+// the handle's own abort(); a follow-up prompt (SPEC.md §3) needs it to
 // dispatch into the SAME durable conversation instead of a fresh one.
 const handles = new Map<string, AgentInstanceHandle>();
 
@@ -83,12 +83,12 @@ function startRun(prompt: string, tools: RunToolDef[], subagents: RunSubagentDef
 }
 
 /**
- * Deliver a follow-up prompt to an existing run's conversation (SPEC.md
- * §3.5): the same handle, so Flue continues the same durable instance
+ * Send a follow-up prompt to an existing run's conversation (SPEC.md
+ * §3): the same handle, so Flue continues the same durable instance
  * rather than starting a fresh one. Returns `false` when `runId` is
  * unknown, so the caller can answer 404. Re-opens a run already in a
  * terminal state: `running` again until this turn itself settles. The
- * budget armed at `startRun` is run-wide (SPEC.md §4 R5), not re-armed
+ * budget armed at `startRun` is run-wide (SPEC.md §3), not re-armed
  * here, so it keeps counting down across turns.
  */
 function sendPrompt(runId: string, prompt: string): boolean {

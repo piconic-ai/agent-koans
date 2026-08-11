@@ -1,6 +1,6 @@
 # The wire format of the agent HTTP interface — normative.
 # Behavioral requirements (terminal-state guarantee, model interaction
-# rules R1-R7, tool invocation) live in SPEC.md.
+# rules, tool invocation) live in SPEC.md.
 openapi: 3.1.0
 info:
   title: agent-koans Agent HTTP Interface
@@ -97,10 +97,10 @@ paths:
   /runs/{run_id}/prompts:
     post:
       operationId: sendPrompt
-      summary: Deliver a follow-up prompt to the conversation
+      summary: Send a follow-up prompt to the conversation
       description: >
         Continues an existing run's conversation with a new prompt
-        (SPEC.md §6.5). Delivering to a run already in a terminal state
+        (SPEC.md §3). A prompt sent to a run already in a terminal state
         MUST re-open it: `status` returns to `running`, and the run MUST
         reach a terminal state again in finite time, with `output`
         carrying this turn's final answer.
@@ -141,8 +141,8 @@ components:
           minLength: 1
           description: >-
             The user's initial prompt, verbatim. Routing to the right
-            conversation (SPEC.md §6.4) matches by substring, so an empty
-            prompt would match every request.
+            conversation matches by substring, so an empty prompt would
+            match every request.
         tools:
           type: array
           default: []
@@ -152,7 +152,7 @@ components:
           type: array
           default: []
           description: >-
-            Delegates available for this run (SPEC.md §6.4). The agent
+            Delegates available for this run (SPEC.md §3). The agent
             recognizes its own delegation tool call and, instead of
             invoking the tool server, starts a subagent conversation with
             the named delegate.
@@ -160,7 +160,7 @@ components:
             $ref: "#/components/schemas/SubagentDef"
         limits:
           type: object
-          description: Optional per-run budgets the agent must honor (SPEC.md §4 R5).
+          description: Optional per-run budgets the agent must honor (SPEC.md §3).
           properties:
             max_model_requests:
               type: integer
@@ -213,7 +213,7 @@ components:
           enum: [running, completed, failed, aborted]
           description: >
             `running` is the only non-terminal state. Every run MUST reach
-            a terminal state in finite time (SPEC.md §3.3).
+            a terminal state in finite time (SPEC.md §3).
         output:
           type: string
           description: Final answer. REQUIRED when `status` is `completed`.

@@ -3,14 +3,14 @@
 // Subagents arrive per run (POST /runs), so they are not known at build
 // time, unlike a hand-authored specialist agent. A delegate's render is
 // isolated from the parent — nothing flows in but the shared environment
-// and, unless overridden, the parent's model (SPEC.md §6.4) — so each
+// and, unless overridden, the parent's model — so each
 // delegate's `agent` function re-mounts the run's own tools and read_file
 // itself instead of inheriting the caller's.
 import { useSubagent } from '@flue/runtime';
 import { useReadFileTool } from './read-file.js';
 import { useRunTools, type RunToolDef } from './tools.js';
 
-/** A delegate declared by the run (SPEC.md §3.2). */
+/** A delegate declared by the run (SPEC.md §3). */
 export interface RunSubagentDef {
   name: string;
   description?: string;

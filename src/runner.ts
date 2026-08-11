@@ -8,10 +8,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { DelegationVocabulary } from './config.js';
-import type { Judgment, Koan, Matcher, Trace } from './koan.js';
+import { interceptOf, type Judgment, type Koan, type Matcher, type Trace } from './koan.js';
 import { startMockLlm } from './mock-llm.js';
 import { startMockTools } from './mock-tools.js';
-import type { PendingInvocation } from './pending.js';
+import { createHold, type PendingInvocation } from './pending.js';
 
 /** How to launch the agent under test. */
 export interface AgentConfig {
@@ -47,17 +47,54 @@ function sleep(ms: number): Promise<void> {
 // Waits for one terminal state, from its own fresh deadline: a `turns:`
 // koan calls this once per turn, and a later turn must not
 // be charged for time an earlier one already spent waiting.
-async function pollToTerminal(base: string, runId: string, runTimeoutMs: number): Promise<RunState> {
+//
+// `settled` is the extra condition an intercepted run needs. An agent
+// that queues the delivered prompt settles the submission it interrupted
+// first, so the first terminal state it reports is not the run's last
+// word — judging `then` against it would judge the wrong turn. Waiting
+// for the script to be consumed too lets that agent re-open the run,
+// while an agent that dropped the prompt still leaves through the
+// deadline below.
+async function pollToTerminal(
+  base: string,
+  runId: string,
+  runTimeoutMs: number,
+  settled?: () => boolean,
+): Promise<RunState> {
   const deadline = Date.now() + runTimeoutMs;
   for (;;) {
     const res = await fetch(`${base}/runs/${runId}`);
     if (!res.ok) throw new Error(`GET /runs/${runId} returned ${res.status}`);
     const run = (await res.json()) as RunState;
-    if (TERMINAL_STATES.has(String(run.status))) return run;
+    const terminal = TERMINAL_STATES.has(String(run.status));
+    if (terminal && (settled === undefined || settled())) return run;
     if (Date.now() > deadline) {
+      // A run that settled but left its script unconsumed kept its
+      // terminal-state promise; what it broke is the script, and the
+      // underrun check names that exactly. Reporting a terminal-state
+      // violation here would name the wrong failure.
+      if (terminal) return run;
       throw new Error(`terminal-state guarantee violated: run still "${run.status}" after ${runTimeoutMs}ms`);
     }
     await sleep(100);
+  }
+}
+
+// Awaits `p`, or fails at `deadline` with the message `onTimeout` builds.
+// An agent that never reaches the intercepted invocation must fail the
+// koan naming that fact, rather than hang until the test framework's own
+// timeout reports nothing useful.
+async function within<T>(p: Promise<T>, deadline: number, onTimeout: () => string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(onTimeout())), Math.max(0, deadline - Date.now()));
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -142,7 +179,12 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
 
 async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<string[]> {
   const pending: PendingInvocation[] = [];
-  const llm = await startMockLlm(koan, trace, pending, agent.delegation);
+  // Created here rather than inside the mocks because both sides need it:
+  // the tool mock withholds the response, the runner delivers into the
+  // window that opens.
+  const interceptPrompt = interceptOf(trace);
+  const hold = interceptPrompt !== undefined ? createHold() : undefined;
+  const llm = await startMockLlm(koan, trace, pending, agent.delegation, hold);
   const tools = await startMockTools(pending);
   const port = await getFreePort();
   const base = `http://127.0.0.1:${port}`;
@@ -238,7 +280,51 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         }
       }
 
-      let run = await pollToTerminal(base, runId, agent.runTimeoutMs ?? 15_000);
+      if (interceptPrompt !== undefined && hold) {
+        // Deliver exactly where the trace says the caller does: while the
+        // tool mock is withholding the invocation's response. The agent
+        // is blocked on that response, so the run is provably still
+        // running and no model request is in flight to be restarted —
+        // the two facts that make both join and queue the only shapes
+        // the delivery can take.
+        await within(
+          hold.engaged,
+          Date.now() + (agent.runTimeoutMs ?? 15_000),
+          () =>
+            `the intercepted invocation was never made: nothing to deliver into within ${agent.runTimeoutMs ?? 15_000}ms`,
+        );
+        try {
+          const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ prompt: interceptPrompt }),
+          });
+          if (promptRes.status !== 202 && promptRes.status !== 200) {
+            throw new Error(
+              `POST /runs/${runId}/prompts returned ${promptRes.status} for a run still running, expected 202 or 200`,
+            );
+          }
+        } finally {
+          // Released even when the delivery failed: the tool mock is
+          // parked on this promise, and its server cannot close until it
+          // returns — an unreleased hold would turn a reported failure
+          // into a hung run.
+          hold.release();
+        }
+      }
+
+      // An intercepted run is judged only once its script is consumed
+      // too, so a queueing agent's first settle is not mistaken for its
+      // last (see pollToTerminal).
+      const scriptConsumed = () =>
+        trace.conversations.every((c) => (llm.state.served[c.name] ?? 0) >= c.turns.length) && pending.length === 0;
+
+      let run = await pollToTerminal(
+        base,
+        runId,
+        agent.runTimeoutMs ?? 15_000,
+        interceptPrompt !== undefined ? scriptConsumed : undefined,
+      );
 
       // Every turn but the last is judged here, against its own `then`;
       // the last turn's judgment happens below, together

@@ -492,6 +492,160 @@ const rows: Row[] = [
     message: 'when[0]: "abort" needs at least one exchange before it in the trace',
   },
   {
+    rule: '"intercept" belongs on a tool step',
+    yaml: koan(`
+      when:
+        - request: model
+          response: ok
+          intercept:
+            prompt: p
+    `),
+    message: 'when[0]: "intercept" belongs on the tool step whose response is held open, not on a model request',
+  },
+  {
+    rule: '"intercept" cannot appear inside a "turns" koan',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request: model
+            response: { tool: x, args: {} }
+          - request: { tool: x }
+            response: { status: 200 }
+            intercept:
+              prompt: p
+    `),
+    message:
+      'turns[0].when[1]: "intercept" cannot appear inside a "turns" koan — a scripted turn and a mid-run delivery are different things',
+  },
+  {
+    rule: '"intercept" cannot appear inside a subagent block',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { subagent: r, prompt: "go look" }
+        - subagent: r
+          when:
+            - request: model
+              response: { tool: x, args: {} }
+            - request: { tool: x }
+              response: { status: 200 }
+              intercept:
+                prompt: p
+    `),
+    message:
+      'when[1].when[1]: "intercept" cannot appear inside a subagent block — only the caller\'s own run can be prompted',
+  },
+  {
+    rule: 'a trace carries at most one "intercept"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+          intercept:
+            prompt: p
+        - request: model
+          response: { tool: y, args: {} }
+        - request: { tool: y }
+          response: { status: 200 }
+          intercept:
+            prompt: q
+        - request: model
+          response: ok
+    `),
+    message: 'when[3]: a trace carries at most one "intercept" — the caller delivers once',
+  },
+  {
+    rule: '"abort" and "intercept" cannot share a trace',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+          intercept:
+            prompt: p
+        - request: model
+          response: ok
+        - abort
+    `),
+    message:
+      'when: a trace carries either "abort" or "intercept", not both — cancelling a held invocation is not scripted yet',
+  },
+  {
+    rule: '"intercept" needs a model request after it',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+          intercept:
+            prompt: p
+    `),
+    message: 'when[1]: an "intercept" needs a model request after it — otherwise no request carries the delivered prompt',
+  },
+  {
+    rule: 'an intercepted prompt opens at most one queued turn',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+          intercept:
+            prompt: p
+        - request: model
+          response: one
+        - request: model
+          response: two
+        - request: model
+          response: three
+    `),
+    message:
+      'when[4]: an intercepted prompt opens at most one queued turn — this is the second model request to follow a text reply',
+  },
+  {
+    rule: '"intercept" is a mapping',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+          intercept: p
+    `),
+    message: 'when[1].intercept must be a mapping — what the caller delivers, written as { prompt: <text> }',
+  },
+  {
+    rule: 'an "intercept" has no unknown key',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+          intercept:
+            prompt: p
+            abort: true
+    `),
+    message: 'when[1].intercept has unknown key "abort" — an intercept carries only "prompt"',
+  },
+  {
+    rule: 'an "intercept" carries a non-empty prompt',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+          intercept:
+            prompt: ""
+    `),
+    message: 'when[1].intercept.prompt must be a non-empty string — the prompt the caller delivers here',
+  },
+  {
     rule: 'a subagent block has no unknown key',
     yaml: koan(`
       when:

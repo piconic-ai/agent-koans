@@ -103,9 +103,15 @@ rewrites a committed result, and repeated aborts are idempotent.
 **Follow-up prompts.** A prompt sent to a settled run MUST re-open it:
 `status` returns to `running`, the run reaches a terminal state again, and
 `output` carries the new turn's answer. The conversation MUST carry every
-earlier turn into this turn's model requests. A prompt sent to a run still
-`running` is out of scope — no koan scripts it, and this version of the
-contract does not define what you must do with it.
+earlier turn into this turn's model requests.
+
+A prompt sent to a run still `running` MUST be accepted too, and MUST NOT
+then be dropped: the run MUST reach a terminal state carrying an answer to
+it. Whether it joins the turn already in flight, at that turn's next
+boundary, or waits and runs as its own turn once that one settles, is
+yours to choose — both conform. A queueing agent MAY report a terminal
+state in between, since that is the earlier submission settling, and a
+prompt sent to a settled run re-opens it.
 
 ## 4. Talking to the model
 
@@ -214,6 +220,7 @@ it cannot drift from the contract it indexes.
 | [024-parallel-delegation](./koans/024-parallel-delegation.yaml) | One model response delegates to two subagents at once — a parallel group of delegations. Both children must run; the parent's next request must carry both finals, and neither child's own intermediate values — its tool results, distinguishable per child here — may reach the parent or the other child. |
 | [025-subagent-budget](./koans/025-subagent-budget.yaml) | A delegate's model requests draw from the same budget as the main conversation, not a fresh one of its own. The budget is exhausted by the main request plus the child's two, right as the child answers — so the parent never gets to make its own next request to report that answer, and the whole run must end aborted. |
 | [026-workspace-read](./koans/026-workspace-read.yaml) | The main conversation reads a workspace file directly, with no subagent involved. "read_file" names a tool the run did not declare, so it must not reach the tool server; naming a given.files entry as args.path marks it instead as the agent's own internal read, whose content must flow into the conversation's next model request and the final answer. |
+| [027-prompt-while-running](./koans/027-prompt-while-running.yaml) | A second prompt reaches the caller while the run is still running. It is delivered during a tool invocation the mock holds open, so the run provably has not settled: the agent is blocked on that response and no model request is in flight. The agent must accept the prompt, must not lose it, and must still settle with an answer to it. Two processes are acceptable and the koan is deliberately silent about which: join the live conversation at the next turn boundary, or queue the prompt as its own turn once the first submission settles. Either way the held tool call is still closed — an accepted invocation is never abandoned, which is one thing this koan pins beyond "nothing is lost". What it does not cover is a delivery at any other moment of a run; a held invocation is one instant of "still running", chosen because it is the one the suite can reach without racing the agent. |
 
 <!-- koan-index:end -->
 

@@ -1,0 +1,57 @@
+name: prompt-while-running
+description: >
+  A second prompt reaches the caller while the run is still running. It is
+  delivered during a tool invocation the mock holds open, so the run
+  provably has not settled: the agent is blocked on that response and no
+  model request is in flight. The agent must accept the prompt, must not
+  lose it, and must still settle with an answer to it. Two processes are
+  acceptable and the koan is deliberately silent about which: join the
+  live conversation at the next turn boundary, or queue the prompt as its
+  own turn once the first submission settles. Either way the held tool
+  call is still closed — an accepted invocation is never abandoned, which
+  is one thing this koan pins beyond "nothing is lost". What it does not
+  cover is a delivery at any other moment of a run; a held invocation is
+  one instant of "still running", chosen because it is the one the suite
+  can reach without racing the agent.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+one_of:
+  join-at-the-next-boundary:
+    - request: model
+      response: { tool: get_weather, args: { city: "Tokyo" } }
+    - request: { tool: get_weather }
+      response: { status: 200, body: { temp: 31 } }
+      intercept:
+        prompt: "Also say what that is in Fahrenheit."
+    # One request closes the held call and carries the delivered prompt.
+    - request: model
+      response: "Tokyo is at 31°C, which is 88°F."
+
+  queue-as-its-own-turn:
+    - request: model
+      response: { tool: get_weather, args: { city: "Tokyo" } }
+    - request: { tool: get_weather }
+      response: { status: 200, body: { temp: 31 } }
+      intercept:
+        prompt: "Also say what that is in Fahrenheit."
+    - request: model
+      response: "Tokyo is at 31°C."
+    # The queued turn: a model request after a reply can only be the
+    # delivery re-opening the run, which is what marks this variant.
+    - request: model
+      response: "31°C is 88°F."
+
+then:
+  status: completed
+  output: { contains: "88" }

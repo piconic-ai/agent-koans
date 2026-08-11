@@ -12,15 +12,9 @@ export interface PendingInvocation {
 }
 
 /**
- * A scripted tool response withheld until the caller has delivered into
- * the run. The tool mock engages the hold when the invocation arrives and
- * waits for the release; the runner waits for the engagement, sends its
- * prompt, and releases.
- *
- * Two promises rather than callbacks or a polled flag: HTTP is what stops
- * the agent here — it cannot proceed until this response arrives — so
- * "the run is still running" is settled by the wire, and neither side has
- * to sample the other's progress to know it.
+ * A tool response withheld until the caller has delivered into the run.
+ * Promises rather than a polled flag, so neither side has to sample the
+ * other's progress to know where the agent is.
  */
 export interface InvocationHold {
   /** Resolves once the invocation has arrived and its response is being withheld. */

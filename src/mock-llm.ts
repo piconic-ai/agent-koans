@@ -45,12 +45,9 @@ function label(conv: Conversation): string {
 // agent appended for the turn it is answering now. Tool messages further
 // back closed earlier turns.
 //
-// `pastIntercept` looks past a trailing user message first, and is set
-// only for the request a joined delivery rides: OpenAI's message ordering
-// puts the tool closures before the new user message, so the run is
-// trailing except for the delivery itself. It is not the default, because
-// everywhere else a user message after the closures means the agent
-// called the model with something other than the tool results.
+// `pastIntercept` looks past a trailing user message, and is not the
+// default: everywhere but a joined delivery, a user message after the
+// closures means the agent called the model with something else.
 function trailingToolMessages(messages: ChatMessage[], pastIntercept = false): ChatMessage[] {
   let end = messages.length;
   if (pastIntercept) while (end > 0 && messages[end - 1].role === 'user') end -= 1;
@@ -192,11 +189,10 @@ function checkCoherence(
   joined = false,
 ): void {
   const prev = conv.turns[index - 1];
-  // Compile-time guarantees prev has instructions here: the one trace
-  // shape where a model request follows a text reply — a prompt the
-  // caller intercepted, queued behind the turn it interrupted — compiles
-  // to a turn boundary and is checked there, and a conversation's first
-  // request is checked separately (checkConversationStart).
+  // Compile-time guarantees prev has instructions here: the one shape
+  // where a model request follows a text reply (a queued delivery)
+  // compiles to a turn boundary and is checked there, and a
+  // conversation's first request is checked separately.
   const group = prev.call_tools ?? [];
   const delegations = prev.delegations ?? [];
   const ids = callIdsFor(conv, index - 1);
@@ -335,9 +331,8 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 
 /**
  * Serve one trace's model turns; records requests and violations. `hold`
- * belongs to the runner, which waits on it to deliver the intercepted
- * prompt; this server only hands it to the invocation the trace scripts
- * it on, since that is where the pending entry is created.
+ * belongs to the runner; this server only attaches it to the pending
+ * invocation the trace intercepts, which is where that entry is created.
  */
 export function startMockLlm(
   koan: Koan,
@@ -451,10 +446,8 @@ export function startMockLlm(
       checkConversationStart(conv, requestNo, messages, state.violations);
     } else if (followUp) {
       checkTurnBoundary(conv, followUp, requestNo, messages, state.violations);
-      // A joined delivery rides the same request that closes the held
-      // call, so that closure is still owed here. A queued one opens its
-      // own turn with nothing outstanding, and the boundary check above
-      // is the whole of what it owes.
+      // A joined delivery rides the request that closes the held call, so
+      // that closure is still owed; a queued one has none outstanding.
       if (followUp.joined) checkCoherence(conv, index, requestNo, messages, state.violations, true);
     } else {
       checkCoherence(conv, index, requestNo, messages, state.violations);

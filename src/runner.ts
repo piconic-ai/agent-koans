@@ -48,13 +48,9 @@ function sleep(ms: number): Promise<void> {
 // koan calls this once per turn, and a later turn must not
 // be charged for time an earlier one already spent waiting.
 //
-// `settled` is the extra condition an intercepted run needs. An agent
-// that queues the delivered prompt settles the submission it interrupted
-// first, so the first terminal state it reports is not the run's last
-// word — judging `then` against it would judge the wrong turn. Waiting
-// for the script to be consumed too lets that agent re-open the run,
-// while an agent that dropped the prompt still leaves through the
-// deadline below.
+// `settled` is what an intercepted run adds: a queueing agent settles the
+// submission it interrupted first, so its first terminal state is not the
+// run's last word.
 async function pollToTerminal(
   base: string,
   runId: string,
@@ -69,10 +65,8 @@ async function pollToTerminal(
     const terminal = TERMINAL_STATES.has(String(run.status));
     if (terminal && (settled === undefined || settled())) return run;
     if (Date.now() > deadline) {
-      // A run that settled but left its script unconsumed kept its
-      // terminal-state promise; what it broke is the script, and the
-      // underrun check names that exactly. Reporting a terminal-state
-      // violation here would name the wrong failure.
+      // It kept the terminal-state promise; what it broke is the script,
+      // and the underrun check names that exactly.
       if (terminal) return run;
       throw new Error(`terminal-state guarantee violated: run still "${run.status}" after ${runTimeoutMs}ms`);
     }
@@ -80,10 +74,8 @@ async function pollToTerminal(
   }
 }
 
-// Awaits `p`, or fails at `deadline` with the message `onTimeout` builds.
-// An agent that never reaches the intercepted invocation must fail the
-// koan naming that fact, rather than hang until the test framework's own
-// timeout reports nothing useful.
+// Awaits `p`, or fails at `deadline`: an agent that never reaches the
+// intercepted invocation must fail naming that, rather than hang.
 async function within<T>(p: Promise<T>, deadline: number, onTimeout: () => string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -179,9 +171,8 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
 
 async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<string[]> {
   const pending: PendingInvocation[] = [];
-  // Created here rather than inside the mocks because both sides need it:
-  // the tool mock withholds the response, the runner delivers into the
-  // window that opens.
+  // Created here rather than inside a mock: both it and this driver hold
+  // one end of the same window.
   const interceptPrompt = interceptOf(trace);
   const hold = interceptPrompt !== undefined ? createHold() : undefined;
   const llm = await startMockLlm(koan, trace, pending, agent.delegation, hold);
@@ -281,12 +272,6 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       }
 
       if (interceptPrompt !== undefined && hold) {
-        // Deliver exactly where the trace says the caller does: while the
-        // tool mock is withholding the invocation's response. The agent
-        // is blocked on that response, so the run is provably still
-        // running and no model request is in flight to be restarted —
-        // the two facts that make both join and queue the only shapes
-        // the delivery can take.
         await within(
           hold.engaged,
           Date.now() + (agent.runTimeoutMs ?? 15_000),
@@ -305,17 +290,12 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             );
           }
         } finally {
-          // Released even when the delivery failed: the tool mock is
-          // parked on this promise, and its server cannot close until it
-          // returns — an unreleased hold would turn a reported failure
-          // into a hung run.
+          // Released even on failure: the tool mock is parked on this,
+          // and its server cannot close until it returns.
           hold.release();
         }
       }
 
-      // An intercepted run is judged only once its script is consumed
-      // too, so a queueing agent's first settle is not mistaken for its
-      // last (see pollToTerminal).
       const scriptConsumed = () =>
         trace.conversations.every((c) => (llm.state.served[c.name] ?? 0) >= c.turns.length) && pending.length === 0;
 

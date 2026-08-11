@@ -90,17 +90,9 @@ export type Step =
   | { kind: 'subagent'; name: string; trace: Trace };
 
 /**
- * What the caller does while the invocation carrying it is held open —
- * the mock withholds that response until the delivery has been accepted,
- * so "the run was still running" is a fact of the wire rather than a race
- * the runner has to win.
- *
- * A mapping rather than a bare string: `abort` is the caller's other
- * delivery and belongs to this same position, so giving it a home here
- * later must not change how a prompt interception is written. It does not
- * supersede the trailing `Trace.abort`, whose kind is derived from what it
- * follows — an intercepting abort would be a third thing, timed to an
- * invocation rather than to the end of the script.
+ * What the caller delivers while the invocation carrying it is held open.
+ * A mapping rather than a bare string, so `abort` — the caller's other
+ * delivery — can join it later without changing how a prompt is written.
  */
 export type Intercept = { kind: 'prompt'; text: string };
 

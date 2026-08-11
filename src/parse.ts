@@ -357,11 +357,6 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
   }
 
   const steps: Step[] = [];
-  // Whether this trace's one intercept has been seen, and whether the
-  // queued turn it licenses has been opened. Both are read by the model
-  // branch below: the reply→model seam that is a load error anywhere else
-  // is how a queueing agent's own turn is scripted, so exactly one is
-  // allowed once an intercept precedes it.
   let intercepted = false;
   let interceptAt = -1;
   let queuedSeam = false;
@@ -410,12 +405,9 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       // no such restriction of its own, so this check is model-request-
       // only, same as the shape it mirrors.
       //
-      // An intercept licenses exactly one exception, and that exception
-      // is not a spelling of the rule's own escape hatch: it is how a
-      // queueing agent is scripted. The reply settles the submission the
-      // run opened with, and the request after it can only be the
-      // intercepted prompt re-opening the run — so the seam IS the
-      // evidence of queueing, which is what koan.ts reads it as.
+      // Not forbidden after an intercept: the request following the reply
+      // can only be the delivery re-opening the run, which is how koan.ts
+      // tells a queueing agent from a joining one.
       if (prev?.kind === 'model' && prev.response.kind === 'reply') {
         if (!intercepted) {
           return problem(`${at_i}: a model request cannot follow a text reply here — only a later turn's first request may`);
@@ -478,10 +470,6 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       `${at}: a trace carries either "abort" or "intercept", not both — cancelling a held invocation is not scripted yet`,
     );
   }
-  // Without a model request after it, nothing in the trace could carry
-  // the delivered prompt, and the koan would assert only that the agent
-  // accepted it — the weakest half of the contract. koan.ts also reads
-  // this request's position to tell a joined delivery from a queued one.
   if (interceptAt !== -1 && !steps.slice(interceptAt + 1).some((s) => s.kind === 'model')) {
     return problem(
       `${at}[${interceptAt}]: an "intercept" needs a model request after it — otherwise no request carries the delivered prompt`,

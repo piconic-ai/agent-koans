@@ -54,11 +54,7 @@ export interface CallToolInstruction {
   /** Declared transform from a following tool-request step's `args`; overrides `args` for fidelity checking. */
   invokeArgs?: Record<string, unknown>;
   tool_responds?: ToolResponse;
-  /**
-   * The prompt the caller delivers while this invocation is held open.
-   * Set from the tool step's `intercept`, and read by the mock LLM, which
-   * attaches the hold to the pending invocation it pushes for this call.
-   */
+  /** The prompt the caller delivers while this invocation is held open. */
   intercept?: string;
   /**
    * Content of the `given.files` entry named by `args.path`, set when this
@@ -109,13 +105,7 @@ export interface TurnBoundary {
   start: number;
   /** The user's prompt that opens this turn. */
   prompt: string;
-  /**
-   * Set when an intercepted prompt joined the live turn instead of
-   * queueing behind it: this one request both closes the held tool call
-   * and carries the new prompt, so its closure is checked too. A queued
-   * delivery opens its own turn with no call outstanding and needs
-   * nothing beyond the ordinary boundary checks.
-   */
+  /** Set when this request carries an intercepted prompt *and* closes the held tool call. */
   joined?: boolean;
 }
 
@@ -324,14 +314,9 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
   }
 }
 
-/**
- * Where an intercepted prompt reaches the model, derived from the trace's
- * shape rather than written. A model request that follows a text reply
- * can only be the delivery re-opening the submission that reply settled,
- * so the seam IS the queued turn — which is why parse.ts licenses exactly
- * one of them, and only after an intercept. Without a seam the delivery
- * joined the request that closes the held invocation: the next one.
- */
+// Derived rather than written: a model request after a text reply is the
+// delivery re-opening the run, so that seam is the queued turn; without
+// one, the delivery joined the request that closes the held invocation.
 function interceptBoundary(conv: Conversation): TurnBoundary | undefined {
   let held = -1;
   let prompt: string | undefined;
@@ -347,9 +332,7 @@ function interceptBoundary(conv: Conversation): TurnBoundary | undefined {
   for (let s = held + 1; s < conv.turns.length; s++) {
     if (conv.turns[s - 1].reply !== undefined) return { start: s, prompt };
   }
-  // parse.ts requires a model request after an intercepted invocation —
-  // without one the koan would script a delivery nothing ever carries —
-  // so this index is always a turn that exists.
+  // parse.ts requires a model request after an intercept, so this exists.
   return { start: held + 1, prompt, joined: true };
 }
 

@@ -84,11 +84,8 @@ export function startMockTools(pending: PendingInvocation[]): Promise<MockTools>
       );
     }
 
-    // The caller intercepts this invocation: withhold its response and
-    // let the runner deliver. The agent is blocked on this very request
-    // until the release, so the run cannot settle underneath the
-    // delivery — the timing the koan needs is a property of HTTP here,
-    // not of how fast the runner noticed.
+    // Withheld, not delayed: the agent is blocked on this request until
+    // the release, so the run cannot settle underneath the delivery.
     if (expected.hold) {
       expected.hold.engage();
       await expected.hold.released;

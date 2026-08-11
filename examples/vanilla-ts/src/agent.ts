@@ -146,10 +146,9 @@ interface RunSession {
   subagents: SubagentDef[];
   budget: Budget;
   /**
-   * Prompts that arrived while a turn was in flight, waiting their turn.
-   * Not appended to `messages` on arrival: the running turn would then
-   * send the model a `tool_calls` message it has not answered yet, with a
-   * user message after it — a history no provider accepts.
+   * Prompts that arrived mid-turn. Not appended to `messages` until their
+   * turn starts: the running turn would otherwise send unanswered
+   * `tool_calls` followed by a user message, which no provider accepts.
    */
   queued: string[];
   /** Whether a turn is in flight; one runs at a time per run. */
@@ -192,10 +191,8 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
    * answer 404. Re-opens a run already in a terminal state: `running`
    * again until this turn itself settles.
    *
-   * A prompt that arrives while a turn is still running is accepted the
-   * same way and runs as its own turn once that one settles. Nothing is
-   * dropped, and nothing joins the live turn mid-flight — folding it in
-   * would mean editing a conversation the model is already answering.
+   * A prompt that arrives mid-turn is accepted the same way and runs as
+   * its own turn once that one settles.
    */
   function sendPrompt(runId: string, prompt: string): boolean {
     const run = runs.get(runId);
@@ -206,10 +203,8 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     return true;
   }
 
-  // Opens the next queued prompt's turn, if there is one. The run returns
-  // to `running` here rather than where the prompt was accepted: a queued
-  // prompt does not re-open the run until the turn ahead of it has
-  // settled, and reporting `running` before that would claim work that
+  // The run returns to `running` here rather than where the prompt was
+  // accepted: before the turn ahead settles, that would claim work which
   // has not started.
   function startNextTurn(run: Run, session: RunSession): void {
     const prompt = session.queued.shift();

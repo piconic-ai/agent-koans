@@ -1,0 +1,30 @@
+name: undeclared-argument
+description: >
+  The schema declares only "city", but the model's call also carries
+  "units", a field the schema never mentioned. R9 forbids dropping
+  arguments the schema did not declare: the tool request must carry both,
+  unchanged, and the run completes normally.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo, in metric units."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo", units: "metric" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: model
+    response: "It is 31°C in Tokyo."
+
+then:
+  status: completed
+  output: { contains: "31" }

@@ -1,0 +1,38 @@
+name: subagent-budget
+description: >
+  A delegate's model requests draw from the same budget as the main
+  conversation (R5), not a fresh one of its own. The budget is exhausted
+  by the main request plus the child's two, right as the child answers —
+  so the parent never gets to make its own next request to report that
+  answer, and the whole run must end aborted.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+  limits:
+    max_model_requests: 3
+
+prompt: "Prepare the weather report."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Look up the current temperature in Tokyo." }
+  - subagent: researcher
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Tokyo" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 31 } }
+      - request: model
+        response: "31°C."
+  # budget exhausted (main + child = 3 of 3): the parent never gets to
+  # make its own next request to report the child's answer
+
+then:
+  status: aborted

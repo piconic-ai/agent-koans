@@ -30,7 +30,10 @@ function toValibot(schema: RunToolDef['input_schema']): v.GenericSchema<Record<s
             : v.unknown();
     entries[key] = (required.has(key) ? base : v.optional(base)) as v.GenericSchema<unknown, unknown>;
   }
-  return v.object(entries) as v.GenericSchema<Record<string, unknown>, unknown>;
+  // looseObject, not object: a plain object() schema strips any key its
+  // entries do not name, which would silently drop an argument the JSON
+  // Schema never declared before the tool's run() ever saw it (SPEC.md R9).
+  return v.looseObject(entries) as v.GenericSchema<Record<string, unknown>, unknown>;
 }
 
 export function useRunTools(tools: RunToolDef[], toolsBaseUrl: string): void {

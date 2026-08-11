@@ -126,7 +126,11 @@ The body is the parsed tool arguments. A response status of 400 or above
 is a tool failure.
 
 - **R1 — Tool definitions.** When a run was submitted with tools, every
-  model request MUST include function definitions for all of them.
+  model request of the conversation the run's prompt opened MUST include
+  function definitions for all of them. What a delegate is given is your
+  business — narrowing a subagent's tools is a design choice, not a
+  defect — so a koan asks only that a delegate can make the calls
+  scripted for it.
 - **R2 — Tool results.** After executing a tool call, you MUST append a
   `role: "tool"` message whose `tool_call_id` matches the model's call and
   which carries the response body, then send the updated conversation back

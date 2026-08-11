@@ -1,7 +1,9 @@
-// Rewrites SPEC.md's koan index in place. Run it after adding, renaming,
-// or rewording a koan: `pnpm koan-index`. A test regenerates the same
-// block and fails when SPEC.md is stale, so the index cannot silently
-// disagree with the suite.
+// Rewrites SPEC.md's koan table in place: `pnpm koan-index`, after
+// adding, renaming, or rewording a koan. A pull request that touches
+// koans/ has this run for it (.github/workflows/koan-index.yml), so the
+// command is a convenience rather than a step to remember; the guarantee
+// that the table is current is test/koan-index.test.ts, which regenerates
+// the same block and compares.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -1,0 +1,56 @@
+name: Koan index
+
+# SPEC.md's koan table is generated from koans/. Rather than ask every
+# contributor to remember `pnpm koan-index`, this regenerates it and
+# commits the result to the pull request, so the table a reviewer reads is
+# the one the koans describe. A pull request from a fork cannot be pushed
+# to, so there it fails with the command to run instead — the test in
+# test/koan-index.test.ts is what guarantees the table is current either
+# way; this job only spares people the chore.
+
+on:
+  pull_request:
+    paths:
+      - "koans/**"
+      - "SPEC.md"
+      - "scripts/koan-index.ts"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm koan-index
+
+      - name: Commit the regenerated table
+        run: |
+          if git diff --quiet -- SPEC.md; then
+            echo "SPEC.md's koan table is current."
+            exit 0
+          fi
+          if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            echo "SPEC.md's koan table is stale, and a fork's branch cannot be pushed to."
+            echo "Run 'pnpm koan-index' and commit the result."
+            git --no-pager diff -- SPEC.md
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Regenerate SPEC.md's koan table" -- SPEC.md
+          git push

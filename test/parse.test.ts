@@ -444,7 +444,7 @@ const rows: Row[] = [
         - request: model
           response: "too late"
     `),
-    message: 'when[1]: nothing can follow a model API failure — the agent must stop (R8)',
+    message: 'when[1]: nothing can follow a model API failure — the agent must stop',
   },
   {
     rule: 'nothing follows "abort"',
@@ -652,7 +652,7 @@ const rows: Row[] = [
         - request: { tool: x }
           response: { status: 200 }
     `),
-    message: `when[1]: "x"'s arguments do not parse as a JSON object — argument fidelity is undefined, so the agent must refuse the call instead (R6); no tool request can follow it`,
+    message: `when[1]: "x"'s arguments do not parse as a JSON object — argument fidelity is undefined, so the agent must refuse the call instead; no tool request can follow it`,
   },
   {
     rule: 'a trace entry\'s "request" is "model" or { tool }',
@@ -724,7 +724,7 @@ const rows: Row[] = [
             - request: model
               response: { status: 401 }
     `),
-    message: 'when[1].when[0]: a model API failure cannot appear inside a subagent block — it ends the whole run (R8)',
+    message: 'when[1].when[0]: a model API failure cannot appear inside a subagent block — it ends the whole run',
   },
   {
     rule: "a model API failure's status is a non-retryable 4xx",

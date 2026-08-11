@@ -40,6 +40,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "koan": "tsx src/cli.ts",
+    "koan-index": "tsx scripts/koan-index.ts",
     "prepack": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

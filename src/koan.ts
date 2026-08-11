@@ -57,7 +57,7 @@ export interface CallToolInstruction {
   /**
    * Content of the `given.files` entry named by `args.path`, set when this
    * instruction has no following tool request: an internal read the agent
-   * executes with a tool of its own (SPEC.md R7). The next model
+   * executes with a tool of its own, never the tool server. The next model
    * request of the same conversation must carry this content.
    */
   readsFile?: string;
@@ -347,7 +347,7 @@ function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): { 
 }
 
 // An instruction that names a `given.files` entry and has no tool request
-// is an internal read (SPEC.md R7): the runner must see the file's
+// is an internal read, never a tool-server call: the runner must see the file's
 // content flow into the conversation's next model request. Marked after
 // the trace compiles, since `tool_responds` is only known then.
 function markInternalReads(trace: Trace, files: Record<string, string>): void {

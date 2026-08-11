@@ -1,10 +1,10 @@
 name: parallel-delegation
 description: >
-  One model response delegates to two subagents at once (R10 applied to
-  delegation instructions). Both children must run; the parent's next
+  One model response delegates to two subagents at once — a parallel
+  group of delegations. Both children must run; the parent's next
   request must carry both finals, and neither child's own intermediate
   values — its tool results, distinguishable per child here — may reach
-  the parent or the other child (R11).
+  the parent or the other child.
 
 given:
   tools:

@@ -7,12 +7,12 @@ export interface PendingInvocation {
   name: string;
   args: Record<string, unknown>;
   respond: ToolResponse;
-  /** Set when the caller intercepts the run during this invocation. */
+  /** Set when the caller sends a prompt during this invocation. */
   hold?: InvocationHold;
 }
 
 /**
- * A tool response withheld until the caller has delivered into the run.
+ * A tool response withheld until the caller's prompt has been accepted.
  * Promises rather than a polled flag, so neither side has to sample the
  * other's progress to know where the agent is.
  */

@@ -27,8 +27,7 @@ one_of:
       response: { tool: get_weather, args: { city: "Tokyo" } }
     - request: { tool: get_weather }
       response: { status: 200, body: { temp: 31 } }
-      intercept:
-        prompt: "Also say what that is in Fahrenheit."
+      prompt: "Also say what that is in Fahrenheit."
     # One request closes the held call and carries the delivered prompt.
     - request: model
       response: "Tokyo is at 31°C, which is 88°F."
@@ -38,8 +37,7 @@ one_of:
       response: { tool: get_weather, args: { city: "Tokyo" } }
     - request: { tool: get_weather }
       response: { status: 200, body: { temp: 31 } }
-      intercept:
-        prompt: "Also say what that is in Fahrenheit."
+      prompt: "Also say what that is in Fahrenheit."
     - request: model
       response: "Tokyo is at 31°C."
     # The queued turn: a model request after a reply can only be the

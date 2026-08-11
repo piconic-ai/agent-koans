@@ -44,6 +44,7 @@ import type {
   Body,
   Given,
   Instruction,
+  Intercept,
   Judgment,
   KoanFile,
   Matcher,
@@ -297,14 +298,32 @@ function abortKindOf(trace: Trace): AbortKind {
   return last.kind === 'model' && last.response.kind === 'reply' ? 'late' : 'live';
 }
 
+/** The caller's delivery into a held invocation, written on the tool step it interrupts. */
+function parseIntercept(ctx: Ctx<unknown>): Parsed<Intercept> {
+  const { node, at } = ctx;
+  if (!isMapping(node)) {
+    return problem(`${at} must be a mapping — what the caller delivers, written as { prompt: <text> }`);
+  }
+  for (const key of Object.keys(node)) {
+    if (key !== 'prompt') {
+      return problem(`${at} has unknown key "${key}" — an intercept carries only "prompt"`);
+    }
+  }
+  if (typeof node.prompt !== 'string' || node.prompt.length === 0) {
+    return problem(`${at}.prompt must be a non-empty string — the prompt the caller delivers here`);
+  }
+  return { kind: 'prompt', text: node.prompt };
+}
+
 /**
- * A trace: its steps, and the `abort` that may end it. The bare `abort`
- * item leaves the step list here and becomes the trace's own field
- * (koan-spec.ts's header), which is why nothing downstream has to check
- * that it came last — this function still has to, against the raw list.
- * `inTurns`/`inSubagent` are context, not shape: they say where this
- * array sits, for the two rules that read that context (`abort` inside a
- * `turns` koan or a subagent block).
+ * A trace: its steps, the `abort` that may end it, and the `intercept`
+ * one of its tool steps may carry. The bare `abort` item leaves the step
+ * list here and becomes the trace's own field (koan-spec.ts's header),
+ * which is why nothing downstream has to check that it came last — this
+ * function still has to, against the raw list. `inTurns`/`inSubagent` are
+ * context, not shape: they say where this array sits, for the rules that
+ * read that context (`abort` and `intercept` inside a `turns` koan or a
+ * subagent block).
  */
 function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): Parsed<Trace> {
   const { node, at } = ctx;
@@ -338,6 +357,9 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
   }
 
   const steps: Step[] = [];
+  let intercepted = false;
+  let interceptAt = -1;
+  let queuedSeam = false;
   for (let i = 0; i < written.length; i++) {
     const at_i = `${at}[${i}]`;
     const prev = steps.at(-1);
@@ -363,21 +385,39 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       continue;
     }
 
-    const entry = item as { request?: unknown; response?: unknown } | null;
+    const entry = item as { request?: unknown; response?: unknown; intercept?: unknown } | null;
     const req = entry?.request;
     const res = entry?.response;
+    const rawIntercept = entry?.intercept;
     if (req === undefined || req === null) return problem(`${at_i} needs "request"`);
     if (res === undefined || res === null) return problem(`${at_i} needs "response"`);
 
     if (req === 'model') {
+      if (rawIntercept !== undefined) {
+        return problem(
+          `${at_i}: "intercept" belongs on the tool step whose response is held open, not on a model request`,
+        );
+      }
       // A reply ends a conversation's trace — nothing legitimately
       // follows it with another model request here. A later turn's own
       // array starts fresh, so this never fires for a
       // turn's own opening request; a tool or subagent-block entry has
       // no such restriction of its own, so this check is model-request-
       // only, same as the shape it mirrors.
+      //
+      // Not forbidden after an intercept: the request following the reply
+      // can only be the delivery re-opening the run, which is how koan.ts
+      // tells a queueing agent from a joining one.
       if (prev?.kind === 'model' && prev.response.kind === 'reply') {
-        return problem(`${at_i}: a model request cannot follow a text reply here — only a later turn's first request may`);
+        if (!intercepted) {
+          return problem(`${at_i}: a model request cannot follow a text reply here — only a later turn's first request may`);
+        }
+        if (queuedSeam) {
+          return problem(
+            `${at_i}: an intercepted prompt opens at most one queued turn — this is the second model request to follow a text reply`,
+          );
+        }
+        queuedSeam = true;
       }
       const response = parseModelResponse(into(ctx, `[${i}]`, res), inSubagent);
       if (isProblem(response)) return response;
@@ -392,10 +432,48 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         return problem(`${at_i}.response needs a numeric "status" for a tool request`);
       }
       const r = res as { status: number; body?: unknown };
-      steps.push({ kind: 'tool', tool: reqTool, args: reqArgs, response: { status: r.status, body: r.body } });
+      let intercept: Intercept | undefined;
+      if (rawIntercept !== undefined) {
+        if (inTurns) {
+          return problem(
+            `${at_i}: "intercept" cannot appear inside a "turns" koan — a scripted turn and a mid-run delivery are different things`,
+          );
+        }
+        if (inSubagent) {
+          return problem(
+            `${at_i}: "intercept" cannot appear inside a subagent block — only the caller's own run can be prompted`,
+          );
+        }
+        if (intercepted) {
+          return problem(`${at_i}: a trace carries at most one "intercept" — the caller delivers once`);
+        }
+        const parsed = parseIntercept(into(ctx, `[${i}].intercept`, rawIntercept));
+        if (isProblem(parsed)) return parsed;
+        intercept = parsed;
+        intercepted = true;
+        interceptAt = i;
+      }
+      steps.push({
+        kind: 'tool',
+        tool: reqTool,
+        args: reqArgs,
+        response: { status: r.status, body: r.body },
+        ...(intercept ? { intercept } : {}),
+      });
     } else {
       return problem(`${at_i}.request must be "model" or { tool: <name> }`);
     }
+  }
+
+  if (abort && intercepted) {
+    return problem(
+      `${at}: a trace carries either "abort" or "intercept", not both — cancelling a held invocation is not scripted yet`,
+    );
+  }
+  if (interceptAt !== -1 && !steps.slice(interceptAt + 1).some((s) => s.kind === 'model')) {
+    return problem(
+      `${at}[${interceptAt}]: an "intercept" needs a model request after it — otherwise no request carries the delivered prompt`,
+    );
   }
 
   const trace: Trace = { steps: steps as [Step, ...Step[]] };

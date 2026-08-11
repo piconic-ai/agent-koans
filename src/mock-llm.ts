@@ -7,7 +7,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { DEFAULT_DELEGATION, type DelegationVocabulary } from './config.js';
 import type { Conversation, Koan, ModelTurn, Trace, TurnBoundary } from './koan.js';
-import type { PendingInvocation } from './pending.js';
+import type { InvocationHold, PendingInvocation } from './pending.js';
 
 interface ChatMessage {
   role: string;
@@ -44,10 +44,16 @@ function label(conv: Conversation): string {
 // The conversation's trailing run of tool messages: the closures the
 // agent appended for the turn it is answering now. Tool messages further
 // back closed earlier turns.
-function trailingToolMessages(messages: ChatMessage[]): ChatMessage[] {
-  let start = messages.length;
+//
+// `pastIntercept` looks past a trailing user message, and is not the
+// default: everywhere but a joined delivery, a user message after the
+// closures means the agent called the model with something else.
+function trailingToolMessages(messages: ChatMessage[], pastIntercept = false): ChatMessage[] {
+  let end = messages.length;
+  if (pastIntercept) while (end > 0 && messages[end - 1].role === 'user') end -= 1;
+  let start = end;
   while (start > 0 && messages[start - 1].role === 'tool') start -= 1;
-  return messages.slice(start);
+  return messages.slice(start, end);
 }
 
 function scalarLeaves(value: unknown): string[] {
@@ -180,17 +186,18 @@ function checkCoherence(
   requestNo: number,
   messages: ChatMessage[],
   violations: string[],
+  joined = false,
 ): void {
   const prev = conv.turns[index - 1];
-  // Compile-time guarantees prev has instructions here: a model request
-  // can never follow a text reply within one conversation (koan.ts
-  // rejects that trace shape), and a conversation's first request is
-  // checked separately (checkConversationStart).
+  // Compile-time guarantees prev has instructions here: the one shape
+  // where a model request follows a text reply (a queued delivery)
+  // compiles to a turn boundary and is checked there, and a
+  // conversation's first request is checked separately.
   const group = prev.call_tools ?? [];
   const delegations = prev.delegations ?? [];
   const ids = callIdsFor(conv, index - 1);
   const names = [...group.map((m) => m.name), ...delegations.map((d) => `the delegation to "${d.subagent}"`)];
-  const trailing = trailingToolMessages(messages);
+  const trailing = trailingToolMessages(messages, joined);
 
   if (trailing.length === 0) {
     violations.push(
@@ -322,12 +329,17 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-/** Serve one trace's model turns; records requests and violations. */
+/**
+ * Serve one trace's model turns; records requests and violations. `hold`
+ * belongs to the runner; this server only attaches it to the pending
+ * invocation the trace intercepts, which is where that entry is created.
+ */
 export function startMockLlm(
   koan: Koan,
   trace: Trace,
   pending: PendingInvocation[],
   delegation: DelegationVocabulary = DEFAULT_DELEGATION,
+  hold?: InvocationHold,
 ): Promise<MockLlm> {
   const state: MockLlm['state'] = { requests: [], served: {}, violations: [] };
   const issuedToolCallIds = new Set<string>();
@@ -420,7 +432,9 @@ export function startMockLlm(
       }
     }
 
-    for (const msg of trailingToolMessages(messages)) {
+    const followUp = conv.followUps?.find((f) => f.start === index);
+
+    for (const msg of trailingToolMessages(messages, followUp?.joined ?? false)) {
       if (!issuedToolCallIds.has(String(msg.tool_call_id))) {
         state.violations.push(
           `request #${requestNo} has a tool message with unknown tool_call_id "${msg.tool_call_id}"`,
@@ -428,11 +442,13 @@ export function startMockLlm(
       }
     }
 
-    const followUp = conv.followUps?.find((f) => f.start === index);
     if (index === 0) {
       checkConversationStart(conv, requestNo, messages, state.violations);
     } else if (followUp) {
       checkTurnBoundary(conv, followUp, requestNo, messages, state.violations);
+      // A joined delivery rides the request that closes the held call, so
+      // that closure is still owed; a queued one has none outstanding.
+      if (followUp.joined) checkCoherence(conv, index, requestNo, messages, state.violations, true);
     } else {
       checkCoherence(conv, index, requestNo, messages, state.violations);
     }
@@ -473,6 +489,7 @@ export function startMockLlm(
             name: member.name,
             args: member.invokeArgs ?? member.args ?? {},
             respond: member.tool_responds,
+            ...(member.intercept !== undefined && hold ? { hold } : {}),
           });
         }
       });

@@ -7,7 +7,9 @@
 //
 // The shapes are chosen so that a violation is unrepresentable wherever a
 // type can say it. `abort` sits beside a trace's steps rather than among
-// them, so "abort must be last" needs no rule; a body is a union of three
+// them, so "abort must be last" needs no rule; `intercept` sits on the
+// tool step it interrupts rather than beside it, so "an interception
+// happens during a held invocation" needs none; a body is a union of three
 // forms rather than three optional fields, so "exactly one of when /
 // one_of / turns" needs none either; and the lower bounds that used to be
 // checked by hand (a trace has at least one step, `turns` at least two
@@ -84,8 +86,15 @@ export type AbortKind = 'live' | 'late';
  */
 export type Step =
   | { kind: 'model'; response: ModelResponse }
-  | { kind: 'tool'; tool: string; args?: ParsedArgs; response: ToolResponse }
+  | { kind: 'tool'; tool: string; args?: ParsedArgs; response: ToolResponse; intercept?: Intercept }
   | { kind: 'subagent'; name: string; trace: Trace };
+
+/**
+ * What the caller delivers while the invocation carrying it is held open.
+ * A mapping rather than a bare string, so `abort` — the caller's other
+ * delivery — can join it later without changing how a prompt is written.
+ */
+export type Intercept = { kind: 'prompt'; text: string };
 
 /**
  * What the mock LLM serves for a model request. A tool-call instruction and

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { DelegationVocabulary } from './config.js';
-import { interceptOf, type Judgment, type Koan, type Matcher, type Trace } from './koan.js';
+import { promptDuringOf, type Judgment, type Koan, type Matcher, type Trace } from './koan.js';
 import { startMockLlm } from './mock-llm.js';
 import { startMockTools } from './mock-tools.js';
 import { createHold, type PendingInvocation } from './pending.js';
@@ -48,7 +48,7 @@ function sleep(ms: number): Promise<void> {
 // koan calls this once per turn, and a later turn must not
 // be charged for time an earlier one already spent waiting.
 //
-// `settled` is what an intercepted run adds: a queueing agent settles the
+// `settled` is what a mid-run prompt adds: a queueing agent settles the
 // submission it interrupted first, so its first terminal state is not the
 // run's last word.
 async function pollToTerminal(
@@ -75,7 +75,7 @@ async function pollToTerminal(
 }
 
 // Awaits `p`, or fails at `deadline`: an agent that never reaches the
-// intercepted invocation must fail naming that, rather than hang.
+// held invocation must fail naming that, rather than hang.
 async function within<T>(p: Promise<T>, deadline: number, onTimeout: () => string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -173,8 +173,8 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
   const pending: PendingInvocation[] = [];
   // Created here rather than inside a mock: both it and this driver hold
   // one end of the same window.
-  const interceptPrompt = interceptOf(trace);
-  const hold = interceptPrompt !== undefined ? createHold() : undefined;
+  const promptDuring = promptDuringOf(trace);
+  const hold = promptDuring !== undefined ? createHold() : undefined;
   const llm = await startMockLlm(koan, trace, pending, agent.delegation, hold);
   const tools = await startMockTools(pending);
   const port = await getFreePort();
@@ -271,18 +271,18 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         }
       }
 
-      if (interceptPrompt !== undefined && hold) {
+      if (promptDuring !== undefined && hold) {
         await within(
           hold.engaged,
           Date.now() + (agent.runTimeoutMs ?? 15_000),
           () =>
-            `the intercepted invocation was never made: nothing to deliver into within ${agent.runTimeoutMs ?? 15_000}ms`,
+            `the held invocation was never made: nothing to send into within ${agent.runTimeoutMs ?? 15_000}ms`,
         );
         try {
           const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ prompt: interceptPrompt }),
+            body: JSON.stringify({ prompt: promptDuring }),
           });
           if (promptRes.status !== 202 && promptRes.status !== 200) {
             throw new Error(
@@ -303,7 +303,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         base,
         runId,
         agent.runTimeoutMs ?? 15_000,
-        interceptPrompt !== undefined ? scriptConsumed : undefined,
+        promptDuring !== undefined ? scriptConsumed : undefined,
       );
 
       // Every turn but the last is judged here, against its own `then`;

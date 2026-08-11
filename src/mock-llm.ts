@@ -45,12 +45,12 @@ function label(conv: Conversation): string {
 // agent appended for the turn it is answering now. Tool messages further
 // back closed earlier turns.
 //
-// `pastIntercept` looks past a trailing user message, and is not the
-// default: everywhere but a joined delivery, a user message after the
-// closures means the agent called the model with something else.
-function trailingToolMessages(messages: ChatMessage[], pastIntercept = false): ChatMessage[] {
+// `pastPrompt` looks past a trailing user message, and is not the
+// default: everywhere but a joined mid-run prompt, a user message after
+// the closures means the agent called the model with something else.
+function trailingToolMessages(messages: ChatMessage[], pastPrompt = false): ChatMessage[] {
   let end = messages.length;
-  if (pastIntercept) while (end > 0 && messages[end - 1].role === 'user') end -= 1;
+  if (pastPrompt) while (end > 0 && messages[end - 1].role === 'user') end -= 1;
   let start = end;
   while (start > 0 && messages[start - 1].role === 'tool') start -= 1;
   return messages.slice(start, end);
@@ -190,7 +190,7 @@ function checkCoherence(
 ): void {
   const prev = conv.turns[index - 1];
   // Compile-time guarantees prev has instructions here: the one shape
-  // where a model request follows a text reply (a queued delivery)
+  // where a model request follows a text reply (a queued mid-run prompt)
   // compiles to a turn boundary and is checked there, and a
   // conversation's first request is checked separately.
   const group = prev.call_tools ?? [];
@@ -332,7 +332,7 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 /**
  * Serve one trace's model turns; records requests and violations. `hold`
  * belongs to the runner; this server only attaches it to the pending
- * invocation the trace intercepts, which is where that entry is created.
+ * invocation the trace holds open, which is where that entry is created.
  */
 export function startMockLlm(
   koan: Koan,
@@ -446,7 +446,7 @@ export function startMockLlm(
       checkConversationStart(conv, requestNo, messages, state.violations);
     } else if (followUp) {
       checkTurnBoundary(conv, followUp, requestNo, messages, state.violations);
-      // A joined delivery rides the request that closes the held call, so
+      // A joined prompt rides the request that closes the held call, so
       // that closure is still owed; a queued one has none outstanding.
       if (followUp.joined) checkCoherence(conv, index, requestNo, messages, state.violations, true);
     } else {
@@ -489,7 +489,7 @@ export function startMockLlm(
             name: member.name,
             args: member.invokeArgs ?? member.args ?? {},
             respond: member.tool_responds,
-            ...(member.intercept !== undefined && hold ? { hold } : {}),
+            ...(member.promptDuring !== undefined && hold ? { hold } : {}),
           });
         }
       });

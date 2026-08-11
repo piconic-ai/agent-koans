@@ -85,7 +85,7 @@ export function startMockTools(pending: PendingInvocation[]): Promise<MockTools>
     }
 
     // Withheld, not delayed: the agent is blocked on this request until
-    // the release, so the run cannot settle underneath the delivery.
+    // the release, so the run cannot settle underneath the prompt.
     if (expected.hold) {
       expected.hold.engage();
       await expected.hold.released;

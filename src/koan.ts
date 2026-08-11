@@ -54,8 +54,8 @@ export interface CallToolInstruction {
   /** Declared transform from a following tool-request step's `args`; overrides `args` for fidelity checking. */
   invokeArgs?: Record<string, unknown>;
   tool_responds?: ToolResponse;
-  /** The prompt the caller delivers while this invocation is held open. */
-  intercept?: string;
+  /** A prompt the caller sends while this invocation is held open. */
+  promptDuring?: string;
   /**
    * Content of the `given.files` entry named by `args.path`, set when this
    * instruction has no following tool request: an internal read the agent
@@ -97,15 +97,15 @@ export interface ModelTurn {
 
 /**
  * Where a prompt the caller sent mid-conversation first reaches the
- * model: turn 2+ of a `turns:` koan, or the request that carries an
- * intercepted prompt.
+ * model: turn 2+ of a `turns:` koan, or the request that carries a prompt
+ * sent while a tool invocation was held open.
  */
 export interface TurnBoundary {
   /** Index into the conversation's `turns` where this turn's exchanges begin. */
   start: number;
   /** The user's prompt that opens this turn. */
   prompt: string;
-  /** Set when this request carries an intercepted prompt *and* closes the held tool call. */
+  /** Set when this request carries a mid-run prompt *and* closes the held tool call. */
   joined?: boolean;
 }
 
@@ -118,7 +118,7 @@ export interface Conversation {
   turns: ModelTurn[];
   /** The opening user message: the top-level `prompt` (or a `turns:` koan's first turn) for the main conversation, the delegation's briefing otherwise. */
   briefing: string;
-  /** Boundaries for turn 2 onward of a `turns:` koan, or the single boundary an `intercept` produces; absent otherwise — turn 1 is `briefing`, at index 0. Only ever set on the main conversation. */
+  /** Boundaries for turn 2 onward of a `turns:` koan, or the single boundary a mid-run prompt produces; absent otherwise — turn 1 is `briefing`, at index 0. Only ever set on the main conversation. */
   followUps?: TurnBoundary[];
 }
 
@@ -304,7 +304,7 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
         const match = matchOpenCall(openCalls, step.tool, step.args);
         match.compiled.invokeArgs = step.args ?? match.compiled.args;
         match.compiled.tool_responds = { status: step.response.status, body: step.response.body };
-        if (step.intercept) match.compiled.intercept = step.intercept.text;
+        if (step.prompt !== undefined) match.compiled.promptDuring = step.prompt;
         openCalls = openCalls.filter((c) => c !== match);
         break;
       }
@@ -315,16 +315,16 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
 }
 
 // Derived rather than written: a model request after a text reply is the
-// delivery re-opening the run, so that seam is the queued turn; without
-// one, the delivery joined the request that closes the held invocation.
-function interceptBoundary(conv: Conversation): TurnBoundary | undefined {
+// prompt re-opening the run, so that seam is the queued turn; without one,
+// the prompt joined the request that closes the held invocation.
+function promptBoundary(conv: Conversation): TurnBoundary | undefined {
   let held = -1;
   let prompt: string | undefined;
   for (const [i, turn] of conv.turns.entries()) {
     for (const member of turn.call_tools ?? []) {
-      if (member.intercept !== undefined) {
+      if (member.promptDuring !== undefined) {
         held = i;
-        prompt = member.intercept;
+        prompt = member.promptDuring;
       }
     }
   }
@@ -332,15 +332,15 @@ function interceptBoundary(conv: Conversation): TurnBoundary | undefined {
   for (let s = held + 1; s < conv.turns.length; s++) {
     if (conv.turns[s - 1].reply !== undefined) return { start: s, prompt };
   }
-  // parse.ts requires a model request after an intercept, so this exists.
+  // parse.ts requires a model request after a mid-run prompt, so this exists.
   return { start: held + 1, prompt, joined: true };
 }
 
-/** The prompt the caller delivers into a held invocation, when this trace scripts one. */
-export function interceptOf(trace: Trace): string | undefined {
+/** The prompt the caller sends into a held invocation, when this trace scripts one. */
+export function promptDuringOf(trace: Trace): string | undefined {
   for (const turn of trace.conversations[0].turns) {
     for (const member of turn.call_tools ?? []) {
-      if (member.intercept !== undefined) return member.intercept;
+      if (member.promptDuring !== undefined) return member.promptDuring;
     }
   }
   return undefined;
@@ -352,7 +352,7 @@ function compileTrace(trace: ParsedTrace, briefing: string): Trace {
   conversations.push(main);
   compileSteps(trace.steps, main, conversations);
   if (trace.abort !== undefined) main.turns.at(-1)!.abort = trace.abort;
-  const boundary = interceptBoundary(main);
+  const boundary = promptBoundary(main);
   if (boundary) main.followUps = [boundary];
   return { conversations };
 }

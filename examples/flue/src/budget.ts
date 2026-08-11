@@ -1,4 +1,4 @@
-// Per-run model-request budget (SPEC.md §4 R5), shared between the HTTP
+// Per-run model-request budget (SPEC.md §3), shared between the HTTP
 // adapter and the provider wrapper. Flue exposes no step-limit
 // configuration, so the budget is enforced at the provider boundary: the
 // request that would exceed it is never issued. A single mutable slot is

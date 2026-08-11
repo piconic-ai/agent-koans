@@ -34,7 +34,7 @@ export function createKoanProvider(model: Config['model']) {
       },
     ],
     // The budget check lives on the request boundary so an over-budget
-    // request is never issued at all (SPEC.md §4 R5).
+    // request is never issued at all (SPEC.md §3).
     api: {
       stream: (model, context, options) => {
         noteModelRequest();

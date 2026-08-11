@@ -57,7 +57,7 @@ export interface RunLimits {
   max_model_requests?: number;
 }
 
-/** A delegate declared by the run (SPEC.md §3.2). */
+/** A delegate declared by the run (SPEC.md §3). */
 export interface SubagentDef {
   name: string;
   description?: string;
@@ -93,7 +93,7 @@ function subagentToolDef(subagents: SubagentDef[]): ToolDef {
   };
 }
 
-// A run-wide model-request budget (SPEC.md §4 R5), shared by the main
+// A run-wide model-request budget (SPEC.md §3), shared by the main
 // conversation and every subagent conversation: a delegate's requests
 // arrive at the model endpoint too, so they draw from the same budget
 // rather than each conversation getting its own.
@@ -134,7 +134,7 @@ function parseArgs(argsWire: string): Record<string, unknown> | undefined {
   }
 }
 
-// Everything a run's conversation needs across turns (SPEC.md §6.5): the
+// Everything a run's conversation needs across turns (SPEC.md §3): the
 // growing message array and the tools/subagents/budget it was started
 // with. Kept for the run's whole process lifetime, unlike `controllers`
 // — a follow-up prompt (POST /runs/{id}/prompts) must find the same
@@ -174,8 +174,8 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
   }
 
   /**
-   * Deliver a follow-up prompt to an existing run's conversation (SPEC.md
-   * §3.5), continuing it with the same tools, subagents, and — since R5's
+   * Send a follow-up prompt to an existing run's conversation (SPEC.md
+   * §3), continuing it with the same tools, subagents, and — since the
    * budget is a run-wide one, not a per-turn one — the same remaining
    * budget. Returns `false` when `runId` is unknown, so the caller can
    * answer 404. Re-opens a run already in a terminal state: `running`
@@ -278,7 +278,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
       }
 
       // Recorded even though this turn is about to return: a `turns:`
-      // koan's session keeps `messages` across turns (SPEC.md §6.5), so
+      // koan's session keeps `messages` across turns (SPEC.md §3), so
       // the reply that ends this turn must stay in the conversation's
       // history for the next one to carry forward.
       messages.push(message);
@@ -294,7 +294,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     signal: AbortSignal,
   ): Promise<string> {
     // Internal tools are executed by the agent itself and never reach the
-    // mock tool server (SPEC.md §5 R7): a delegation hands the briefing to
+    // mock tool server (SPEC.md §2): a delegation hands the briefing to
     // a subagent conversation, a file read resolves against KOAN_WORKSPACE.
     if (call.function.name === SUBAGENT_TOOL) {
       return runDelegation(call, tools, subagents, budget, signal);
@@ -349,7 +349,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     }
 
     // A fresh conversation every time: a subagent conversation cannot be
-    // continued yet (SPEC.md §6.4).
+    // continued yet.
     const childMessages: ChatMessage[] = [{ role: 'user', content: prompt }];
     const text = await runConversation(childMessages, tools, subagents, budget, signal);
     return text ?? `Error: subagent "${name}" did not finish before the model-request budget ran out`;

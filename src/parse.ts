@@ -374,6 +374,17 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     if (req === undefined || req === null) return problem(`${at_i} needs "request"`);
     if (res === undefined || res === null) return problem(`${at_i} needs "response"`);
 
+    // A misspelled key would otherwise be dropped in silence, and the two
+    // that can be dropped hurt most: a mistyped `prompt` leaves a koan
+    // that still passes while scripting no delivery at all.
+    for (const key of Object.keys(entry as Record<string, unknown>)) {
+      if (key !== 'request' && key !== 'response' && key !== 'prompt') {
+        return problem(
+          `${at_i} has unknown key "${key}" — a trace step carries only "request", "response", and, on a tool step, "prompt"`,
+        );
+      }
+    }
+
     if (req === 'model') {
       if (rawPrompt !== undefined) {
         return problem(

@@ -276,7 +276,8 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
           hold.engaged,
           Date.now() + (agent.runTimeoutMs ?? 15_000),
           () =>
-            `the held invocation was never made: nothing to send into within ${agent.runTimeoutMs ?? 15_000}ms`,
+            `the tool invocation the trace holds open was never made within ${agent.runTimeoutMs ?? 15_000}ms, ` +
+            `so the mid-run prompt was never sent`,
         );
         try {
           const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {

@@ -492,6 +492,17 @@ const rows: Row[] = [
     message: 'when[0]: "abort" needs at least one exchange before it in the trace',
   },
   {
+    rule: 'a trace step has no unknown key',
+    yaml: koan(`
+      when:
+        - request: model
+          response: ok
+          intercept: p
+    `),
+    message:
+      'when[0] has unknown key "intercept" — a trace step carries only "request", "response", and, on a tool step, "prompt"',
+  },
+  {
     rule: 'a mid-run "prompt" belongs on a tool step',
     yaml: koan(`
       when:

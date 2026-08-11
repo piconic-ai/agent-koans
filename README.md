@@ -72,8 +72,10 @@ your coding agent:
 
 ```text
 Build an HTTP server that passes the agent-koans conformance suite.
+How it is run: https://raw.githubusercontent.com/piconic-ai/agent-koans/main/SPEC.md
 Wire format: https://raw.githubusercontent.com/piconic-ai/agent-koans/main/openapi.yaml
-Rules: https://raw.githubusercontent.com/piconic-ai/agent-koans/main/SPEC.md
+The contract is the koans themselves, listed in SPEC.md and readable at
+https://github.com/piconic-ai/agent-koans/tree/main/koans — read them.
 The server reads PORT, OPENAI_BASE_URL, OPENAI_API_KEY,
 KOAN_TOOLS_URL and KOAN_WORKSPACE from the environment, serves
 GET /health, POST /runs, GET /runs/{id}, POST /runs/{id}/prompts and

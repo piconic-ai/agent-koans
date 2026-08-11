@@ -107,38 +107,20 @@ every earlier turn into this turn's model requests. Delivering a prompt to
 a run still `running` is out of scope — no koan scripts it, and this
 version of the contract does not define what you must do with it.
 
-## 4. What you are building
-
-The contract is the koans; this is orientation. Where a sentence here and
-a koan disagree, the koan is right.
+## 4. Talking to the model
 
 You reach the model at `POST {OPENAI_BASE_URL}/chat/completions`,
-streaming or not as your client prefers, and execute a declared tool at
-`POST {KOAN_TOOLS_URL}/invoke/{name}` with the parsed arguments as the
-body. A status of 400 or above is a tool failure.
+streaming (`stream: true`, SSE) or not, as your client prefers. When a run
+declares tools, every request of the conversation its prompt opened MUST
+carry function definitions for all of them; what a delegate is given is
+your business. A tool call is answered with a `role: "tool"` message whose
+`tool_call_id` matches it.
 
-- Every model request of the run's own conversation carries definitions
-  for all declared tools. What a delegate is given is your business.
-- A tool call is always closed with a `role: "tool"` message matching its
-  `tool_call_id` — carrying the result, or the failure's status code or
-  error body. You may explain a refusal; only the closing is checked.
-- Arguments reach the tool as the model produced them. Validate first
-  (`required` properties, primitive types) and refuse rather than repair:
-  invalid arguments, unparseable arguments, and undeclared tools never
-  reach the tool server.
-- Retrying is the model's decision. One model tool call is at most one
-  invocation; several calls in one response are each executed once and
-  all closed before the next model request, in any order you like.
-- A run may declare `limits.max_model_requests`. Never exceed it, and
-  settle `aborted` when it runs out before a final answer.
-- A model request that fails with a 4xx other than 408 or 429 is not
-  re-issued: settle `failed`.
-- A delegate inherits only its briefing and returns only its final reply.
-  Nothing else crosses, in either direction.
+You execute a declared tool at `POST {KOAN_TOOLS_URL}/invoke/{name}`, the
+parsed arguments as the body. A status of 400 or above is a failure.
 
-Two of these are yours to get right unwatched, because no finite script
-can check them: that a run without a declared budget is still bounded,
-and what you do when a model request fails with 408, 429, or 5xx.
+What you do with any of this — when to invoke a tool, when to refuse one,
+when to retry, when to give up — is the koans' business, below.
 
 ## 5. Koans
 
@@ -190,6 +172,10 @@ little explicitly:
 - **Some koans accept more than one process.** Where a contract is about
   the outcome and more than one route legitimately reaches it, a koan
   scripts each route, and your agent conforms by walking any one of them.
+- **What no koan scripts is open.** No koan answers a model request with
+  408, 429, or a 5xx, because clients retry those on their own schedule
+  and the trace would stop being deterministic. How yours behaves there
+  is its own business.
 
 ### The suite
 

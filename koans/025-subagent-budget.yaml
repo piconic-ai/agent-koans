@@ -1,7 +1,7 @@
 name: subagent-budget
 description: >
   A delegate's model requests draw from the same budget as the main
-  conversation (R5), not a fresh one of its own. The budget is exhausted
+  conversation, not a fresh one of its own. The budget is exhausted
   by the main request plus the child's two, right as the child answers —
   so the parent never gets to make its own next request to report that
   answer, and the whole run must end aborted.

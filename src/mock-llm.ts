@@ -207,7 +207,7 @@ function checkCoherence(
     const msg = byId.get(id);
     if (!msg) {
       violations.push(
-        `request #${requestNo} must close tool call "${id}" (${names[i]}) with a tool message before calling the model again (R2)`,
+        `request #${requestNo} must close tool call "${id}" (${names[i]}) with a tool message before calling the model again`,
       );
       continue;
     }
@@ -216,11 +216,11 @@ function checkCoherence(
     if (member.readsFile !== undefined && !text.includes(member.readsFile)) {
       violations.push(
         `request #${requestNo}: the content of given.files["${String(member.args?.path)}"] did not reach the model — ` +
-          `the internal "${member.name}" read must flow into the conversation's next request (SPEC.md R7)`,
+          `the internal "${member.name}" read must flow into the conversation's next request`,
       );
     }
     // No content check for other refused calls: self-generated report
-    // phrasing is implementation-specific (SPEC.md R3).
+    // phrasing is implementation-specific.
     const responds = member.tool_responds;
     if (!responds) continue;
 
@@ -233,7 +233,7 @@ function checkCoherence(
     if (!indicators.some((s) => content.includes(s))) {
       violations.push(
         `request #${requestNo}: the tool ${failed ? `failure (status ${status})` : 'result'} for "${member.name}" did not reach ` +
-          `the model — the tool message carries none of ${JSON.stringify(indicators)} (${failed ? 'R3' : 'R2'})`,
+          `the model — the tool message carries none of ${JSON.stringify(indicators)} `,
       );
     }
   }
@@ -414,7 +414,7 @@ export function startMockLlm(
       for (const name of givenToolNames) {
         if (!offered.has(name)) {
           state.violations.push(
-            `request #${requestNo} is missing the definition of tool "${name}" (R1)`,
+            `request #${requestNo} is missing the definition of tool "${name}"`,
           );
         }
       }
@@ -423,7 +423,7 @@ export function startMockLlm(
     for (const msg of trailingToolMessages(messages)) {
       if (!issuedToolCallIds.has(String(msg.tool_call_id))) {
         state.violations.push(
-          `request #${requestNo} has a tool message with unknown tool_call_id "${msg.tool_call_id}" (R2)`,
+          `request #${requestNo} has a tool message with unknown tool_call_id "${msg.tool_call_id}"`,
         );
       }
     }

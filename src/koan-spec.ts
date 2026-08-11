@@ -1,6 +1,6 @@
 // What a koan file is. These types are the format's normative definition —
 // SPEC.md links here rather than restating them, and states instead what
-// the agent under test must do (its rules R1–R11). Reading a file into
+// the agent under test must do. Reading a file into
 // these types belongs to parse.ts; compiling them into the runner's own
 // trace form belongs to koan.ts. Nothing here executes: every export is a
 // type.

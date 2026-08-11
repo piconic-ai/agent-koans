@@ -22,7 +22,8 @@ interface MockTools {
 // Matches an incoming invocation against the pending set by name — and by
 // args when the name repeats, which only happens inside one parallel
 // group, since a group with two same-name-same-args members is already a
-// load error (parse.ts). FIFO order is deliberately not asserted: R10 lets
+// load error (parse.ts). FIFO order is deliberately not asserted: SPEC
+// lets
 // the agent execute a group's invocations in any order, sequentially or
 // concurrently, so the contract is completeness, not arrival order. Everything else about the queue — one entry consumed per
 // invocation, extras and unknowns rejected — stays as strict as before.

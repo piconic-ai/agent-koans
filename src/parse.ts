@@ -467,7 +467,7 @@ function parseModelResponse(ctx: Ctx<unknown>, inSubagent: boolean): Parsed<Mode
   }
   if (isMapping(node) && typeof node.status === 'number') {
     if (inSubagent) {
-      return problem(`${at}: a model API failure cannot appear inside a subagent block — it ends the whole run (R8)`);
+      return problem(`${at}: a model API failure cannot appear inside a subagent block — it ends the whole run`);
     }
     const { status } = node;
     // Only statuses the SDKs surface without retrying keep the trace
@@ -733,7 +733,7 @@ function checkToolMatching(steps: Step[], at: string): Problem | undefined {
     closed.add(member);
     if (argsValueOf(member.args) === undefined) {
       return problem(
-        `${at_i}: "${step.tool}"'s arguments do not parse as a JSON object — argument fidelity is undefined, so the agent must refuse the call instead (R6); no tool request can follow it`,
+        `${at_i}: "${step.tool}"'s arguments do not parse as a JSON object — argument fidelity is undefined, so the agent must refuse the call instead; no tool request can follow it`,
       );
     }
   }
@@ -741,7 +741,7 @@ function checkToolMatching(steps: Step[], at: string): Problem | undefined {
 }
 
 /**
- * Nothing may follow a model API failure — the agent must stop (R8),
+ * Nothing may follow a model API failure — the agent must stop,
  * including an `abort` that trails the trace. Local adjacency in the old,
  * mutation-based trace form; here a `tool` step following a failed
  * `model` step is a step of its own, and `abort` is not a step at all
@@ -754,7 +754,7 @@ function apiFailureEndsTheTrace(koan: KoanFile): Problem | undefined {
       const step = steps[i];
       const isLast = i === steps.length - 1;
       if (step.kind === 'model' && step.response.kind === 'api-failure' && (!isLast || abort !== undefined)) {
-        return problem(`${at}[${i + 1}]: nothing can follow a model API failure — the agent must stop (R8)`);
+        return problem(`${at}[${i + 1}]: nothing can follow a model API failure — the agent must stop`);
       }
     }
   }
@@ -823,7 +823,7 @@ function collectBriefings(steps: Step[], out: Array<{ label: string; text: strin
   }
 }
 
-// Subagent conversations count too: R5 counts HTTP requests at the model
+// Subagent conversations count too: the budget counts HTTP requests at the model
 // endpoint, and a delegate's requests arrive there as well.
 function theTraceFitsTheModelRequestBudget(koan: KoanFile): Problem | undefined {
   const maxRequests = koan.given.limits?.max_model_requests;

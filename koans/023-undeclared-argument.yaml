@@ -1,8 +1,8 @@
 name: undeclared-argument
 description: >
   The schema declares only "city", but the model's call also carries
-  "units", a field the schema never mentioned. R9 forbids dropping
-  arguments the schema did not declare: the tool request must carry both,
+  "units", a field the schema never mentioned. Dropping an argument the schema
+  did not declare is forbidden: the tool request must carry both,
   unchanged, and the run completes normally.
 
 given:

@@ -145,6 +145,15 @@ interface RunSession {
   tools: ToolDef[];
   subagents: SubagentDef[];
   budget: Budget;
+  /**
+   * Prompts that arrived while a turn was in flight, waiting their turn.
+   * Not appended to `messages` on arrival: the running turn would then
+   * send the model a `tool_calls` message it has not answered yet, with a
+   * user message after it — a history no provider accepts.
+   */
+  queued: string[];
+  /** Whether a turn is in flight; one runs at a time per run. */
+  busy: boolean;
 }
 
 export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; workspace: WorkspaceConfig }) {
@@ -163,6 +172,8 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
       tools,
       subagents,
       budget: { max: Math.min(MAX_STEPS, limits?.max_model_requests ?? MAX_STEPS), used: 0 },
+      queued: [],
+      busy: false,
     };
     sessions.set(run.run_id, session);
     runTurn(run, session);
@@ -180,17 +191,34 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
    * budget. Returns `false` when `runId` is unknown, so the caller can
    * answer 404. Re-opens a run already in a terminal state: `running`
    * again until this turn itself settles.
+   *
+   * A prompt that arrives while a turn is still running is accepted the
+   * same way and runs as its own turn once that one settles. Nothing is
+   * dropped, and nothing joins the live turn mid-flight — folding it in
+   * would mean editing a conversation the model is already answering.
    */
   function sendPrompt(runId: string, prompt: string): boolean {
     const run = runs.get(runId);
     const session = sessions.get(runId);
     if (!run || !session) return false;
+    session.queued.push(prompt);
+    if (!session.busy) startNextTurn(run, session);
+    return true;
+  }
+
+  // Opens the next queued prompt's turn, if there is one. The run returns
+  // to `running` here rather than where the prompt was accepted: a queued
+  // prompt does not re-open the run until the turn ahead of it has
+  // settled, and reporting `running` before that would claim work that
+  // has not started.
+  function startNextTurn(run: Run, session: RunSession): void {
+    const prompt = session.queued.shift();
+    if (prompt === undefined) return;
     session.messages.push({ role: 'user', content: prompt });
     run.status = 'running';
     run.output = undefined;
     run.error = undefined;
     runTurn(run, session);
-    return true;
   }
 
   /**
@@ -219,8 +247,11 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
   function runTurn(run: Run, session: RunSession): void {
     const controller = new AbortController();
     controllers.set(run.run_id, controller);
+    session.busy = true;
     void executeTurn(run, session, controller.signal).finally(() => {
       controllers.delete(run.run_id);
+      session.busy = false;
+      startNextTurn(run, session);
     });
   }
 

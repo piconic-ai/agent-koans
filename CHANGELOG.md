@@ -1,5 +1,17 @@
 # agent-koans
 
+## 0.7.0
+
+### Minor Changes
+
+- c199a82: A prompt sent to a run that is still `running` is no longer out of scope. SPEC section 3 now says what your agent must do with it: accept it, and do not drop it — the run must reach a terminal state carrying an answer to it. Whether the prompt joins the turn already in flight or waits and runs as its own turn once that one settles is yours to choose, because frameworks answer this differently on purpose, and both answers keep the promise a user actually cares about. The new koan `027-prompt-while-running` scripts both processes and passes an agent that walks either.
+
+  Getting there deterministically needed one new piece of koan vocabulary: a `prompt` written on the tool step whose response the mock then holds open. The agent is blocked on that response, so the run is provably still running when the prompt arrives and no model request is in flight — the timing the koan needs is a fact of the wire rather than a race the runner has to win. It sits on the tool step rather than beside it for the same reason `abort` sits beside a trace's steps: where the prompt belongs is then a property of the shape, not a rule to check.
+
+### Patch Changes
+
+- aa45cfd: SPEC.md stops keeping its own copy of the contract. R1–R11 read as a second normative text beside the koans, and twice in one week the two disagreed — once forbidding a coercion `009-scalar-mismatch` accepts, once demanding a delegate see every declared tool. The requirements section is gone; section 4 now describes only the model wire, and section 5 carries a table of every koan and the contract line it states, generated from `koans/` by `pnpm koan-index` and checked by a test, so the one overview of the contract cannot drift from it.
+
 ## 0.6.0
 
 ### Minor Changes

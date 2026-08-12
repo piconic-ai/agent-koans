@@ -38,6 +38,7 @@ interface RunState {
   status?: string;
   output?: string;
   error?: string;
+  events?: Array<{ type?: string; phase?: string; error?: string }>;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -152,6 +153,22 @@ function judge(then: Judgment, run: RunState): string[] {
     if (failure) failures.push(failure);
   }
   return failures;
+}
+
+// What the caller was told about the folds the trace scripts (SPEC.md
+// §3). Read from the settled run rather than watched as it happens: a
+// client polls, so the record has to survive the activity it describes.
+function judgeReportedFolds(trace: Trace, run: RunState): string[] {
+  const folds = trace.conversations.reduce((n, c) => n + c.turns.filter((t) => t.compaction).length, 0);
+  const reported = (run.events ?? []).filter((e) => e.type === 'compaction');
+  const expected = Array.from({ length: folds }, () => ['started', 'completed']).flat();
+  const actual = reported.map((e) => String(e.phase));
+  if (actual.length === expected.length && actual.every((phase, i) => phase === expected[i])) return [];
+  const detail = reported.map((e) => `${e.phase}${e.error ? ` (${e.error})` : ''}`).join(', ') || 'nothing';
+  return [
+    `the run reported ${detail} to its caller, but the trace folds the conversation down ${folds} time(s): ` +
+      `GET /runs/{run_id} must carry a "compaction" event when a fold starts and one when it ends`,
+  ];
 }
 
 /**
@@ -355,6 +372,8 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       }
 
       failures.push(...llm.state.violations, ...tools.state.violations);
+
+      failures.push(...judgeReportedFolds(trace, run));
 
       // Underruns only: overruns are already recorded by the mocks.
       for (const conv of trace.conversations) {

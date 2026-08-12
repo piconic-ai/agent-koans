@@ -249,3 +249,33 @@ components:
         error:
           type: string
           description: Failure detail. SHOULD be present when `status` is `failed`.
+        events:
+          type: array
+          default: []
+          description: >-
+            What the run did that its caller has to be able to show
+            (SPEC.md §3). Append-only and ordered; the harness reads it
+            after the run settles, and a client UI reads it while the run
+            is still going.
+          items:
+            $ref: "#/components/schemas/RunEvent"
+
+    RunEvent:
+      type: object
+      required: [type, phase]
+      properties:
+        type:
+          type: string
+          enum: [compaction]
+          description: >-
+            The kind of activity. Only compaction is defined so far; a
+            reader MUST ignore a type it does not know.
+        phase:
+          type: string
+          enum: [started, completed, failed]
+          description: >-
+            `started` when the activity begins, and exactly one of
+            `completed`/`failed` when it ends.
+        error:
+          type: string
+          description: Failure detail. SHOULD be present when `phase` is `failed`.

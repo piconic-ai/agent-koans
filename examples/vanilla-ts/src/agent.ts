@@ -38,6 +38,14 @@ interface Run {
   status: 'running' | 'completed' | 'failed' | 'aborted';
   output?: string;
   error?: string;
+  /** What the run did that its caller has to be able to show (SPEC.md §3). */
+  events: RunEvent[];
+}
+
+interface RunEvent {
+  type: 'compaction';
+  phase: 'started' | 'completed' | 'failed';
+  error?: string;
 }
 
 interface ChatMessage {
@@ -173,6 +181,8 @@ interface RunSession {
   queued: string[];
   /** Whether a turn is in flight; one runs at a time per run. */
   busy: boolean;
+  /** Appends to the run's caller-visible record; a delegate's folds report here too. */
+  report: (event: RunEvent) => void;
 }
 
 export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; workspace: WorkspaceConfig }) {
@@ -190,7 +200,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     limits?: RunLimits,
     context?: RunContext,
   ): Run {
-    const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
+    const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running', events: [] };
     runs.set(run.run_id, run);
     const session: RunSession = {
       messages: [{ role: 'user', content: prompt }],
@@ -201,6 +211,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
       size: { used: 0 },
       queued: [],
       busy: false,
+      report: (event) => run.events.push(event),
     };
     sessions.set(run.run_id, session);
     runTurn(run, session);
@@ -287,6 +298,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
         session.budget,
         session.context,
         session.size,
+        session.report,
         signal,
       );
       if (text === undefined) {
@@ -322,13 +334,14 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     budget: Budget,
     context: RunContext | undefined,
     size: ConversationSize,
+    report: (event: RunEvent) => void,
     signal: AbortSignal,
   ): Promise<string | undefined> {
     for (;;) {
       if (reachedThreshold(size.used, context)) {
         if (budget.used >= budget.max) return undefined;
         budget.used += 1;
-        await compact(messages, signal);
+        await compact(messages, report, signal);
         // Not the summarizing request's own usage: carrying that number
         // over would trip the threshold again and fold forever.
         size.used = 0;
@@ -346,7 +359,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
         if (isLastPermitted) return undefined;
         messages.push(message);
         for (const call of message.tool_calls) {
-          const content = await executeToolCall(call, tools, subagents, context, budget, signal);
+          const content = await executeToolCall(call, tools, subagents, context, budget, report, signal);
           messages.push({ role: 'tool', tool_call_id: call.id, content });
         }
         continue;
@@ -367,13 +380,14 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     subagents: SubagentDef[],
     context: RunContext | undefined,
     budget: Budget,
+    report: (event: RunEvent) => void,
     signal: AbortSignal,
   ): Promise<string> {
     // Internal tools are executed by the agent itself and never reach the
     // mock tool server (SPEC.md §2): a delegation hands the briefing to
     // a subagent conversation, a file read resolves against KOAN_WORKSPACE.
     if (call.function.name === SUBAGENT_TOOL) {
-      return runDelegation(call, tools, subagents, context, budget, signal);
+      return runDelegation(call, tools, subagents, context, budget, report, signal);
     }
     if (call.function.name === READ_FILE_TOOL) {
       return runReadFile(call);
@@ -413,6 +427,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     subagents: SubagentDef[],
     context: RunContext | undefined,
     budget: Budget,
+    report: (event: RunEvent) => void,
     signal: AbortSignal,
   ): Promise<string> {
     const args = parseArgs(call.function.arguments);
@@ -429,7 +444,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     // continued yet.
     const childMessages: ChatMessage[] = [{ role: 'user', content: prompt }];
     // A conversation of its own, so a size of its own.
-    const text = await runConversation(childMessages, tools, subagents, budget, context, { used: 0 }, signal);
+    const text = await runConversation(childMessages, tools, subagents, budget, context, { used: 0 }, report, signal);
     return text ?? `Error: subagent "${name}" did not finish before the model-request budget ran out`;
   }
 
@@ -507,17 +522,29 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
    * verbatim: the first is the task the fold exists to keep working on,
    * and the second is not history but the question this turn still owes.
    */
-  async function compact(messages: ChatMessage[], signal: AbortSignal): Promise<void> {
+  async function compact(
+    messages: ChatMessage[],
+    report: (event: RunEvent) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
     const opening = messages[0];
     let answered = messages.length;
     while (answered > 1 && messages[answered - 1].role === 'user') answered -= 1;
     const unanswered = messages.slice(answered);
 
-    const { message } = await post(
-      [...messages, { role: 'user', content: 'Summarize the conversation so far, keeping every detail the task still needs.' }],
-      [],
-      signal,
-    );
+    report({ type: 'compaction', phase: 'started' });
+    let message: ChatMessage;
+    try {
+      ({ message } = await post(
+        [...messages, { role: 'user', content: 'Summarize the conversation so far, keeping every detail the task still needs.' }],
+        [],
+        signal,
+      ));
+    } catch (err) {
+      report({ type: 'compaction', phase: 'failed', error: err instanceof Error ? err.message : String(err) });
+      throw err;
+    }
+    report({ type: 'compaction', phase: 'completed' });
     const summary = message.content ?? '';
     messages.length = 0;
     messages.push(opening, { role: 'user', content: `Summary of the conversation so far: ${summary}` }, ...unanswered);

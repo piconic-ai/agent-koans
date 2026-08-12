@@ -127,6 +127,12 @@ is yours. Summarizing is an ordinary request to the same endpoint; what it
 carries is yours to choose, and its reply MUST reach the conversation it
 summarized.
 
+A fold MUST also be reported to the caller, as two entries appended to the
+run's `events`: `{ type: "compaction", phase: "started" }` when it begins,
+and one `completed` or `failed` when it ends. A client that cannot see a
+fold cannot tell its user why the run went quiet, or why something it was
+told earlier is gone from the conversation.
+
 ## 4. Talking to the model
 
 You reach the model at `POST {OPENAI_BASE_URL}/chat/completions`,
@@ -235,7 +241,7 @@ it cannot drift from the contract it indexes.
 | [025-subagent-budget](./koans/025-subagent-budget.yaml) | A delegate's model requests draw from the same budget as the main conversation, not a fresh one of its own. The budget is exhausted by the main request plus the child's two, right as the child answers — so the parent never gets to make its own next request to report that answer, and the whole run must end aborted. |
 | [026-workspace-read](./koans/026-workspace-read.yaml) | The main conversation reads a workspace file directly, with no subagent involved. "read_file" names a tool the run did not declare, so it must not reach the tool server; naming a given.files entry as args.path marks it instead as the agent's own internal read, whose content must flow into the conversation's next model request and the final answer. |
 | [027-prompt-while-running](./koans/027-prompt-while-running.yaml) | A second prompt is delivered while the run is still running — during a tool invocation the mock holds open, so the run provably has not settled. The agent must accept it, must not lose it, and must still settle with an answer to it. Two processes are acceptable, and the koan is silent about which: join the live conversation at the next turn boundary, or queue the prompt as its own turn once the first submission settles. Either way the held tool call is still closed. A delivery at any other moment of a run is not covered. |
-| [028-context-compaction](./koans/028-context-compaction.yaml) | The run declares the model's context window and the share of it at which the agent compacts. The first turn fills the window past that share, so the second turn cannot open with the conversation as it stands: by its first model request the agent must have folded it into a summary — one extra model request, answered with one. The summary must come back into the conversation carrying what the second turn asks for, an operator code looked up before the fold. Where inside the first turn the agent folds is not covered: before its next request, or once it settles. |
+| [028-context-compaction](./koans/028-context-compaction.yaml) | The run declares the model's context window and the share of it at which the agent compacts. The first turn fills the window past that share, so the second turn cannot open with the conversation as it stands: by its first model request the agent must have folded it into a summary — one extra model request, answered with one. The summary must come back into the conversation carrying what the second turn asks for, an operator code looked up before the fold, and the run must report the fold to its caller, who has a user to explain it to. Where inside the first turn the agent folds is not covered: before its next request, or once it settles. |
 | [029-compaction-off](./koans/029-compaction-off.yaml) | The same pressure as 028, with compaction switched off. The conversation fills the declared window and the agent must leave it alone: no extra model request, no summary, the history carried as it stands — the trace has no compaction step for one to consume. Being nearly out of room is not itself a reason to end the run, which still completes. |
 
 <!-- koan-index:end -->

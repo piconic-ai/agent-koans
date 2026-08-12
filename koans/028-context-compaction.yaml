@@ -6,8 +6,9 @@ description: >
   first model request the agent must have folded it into a summary — one
   extra model request, answered with one. The summary must come back into
   the conversation carrying what the second turn asks for, an operator
-  code looked up before the fold. Where inside the first turn the agent
-  folds is not covered: before its next request, or once it settles.
+  code looked up before the fold, and the run must report the fold to its
+  caller, who has a user to explain it to. Where inside the first turn the
+  agent folds is not covered: before its next request, or once it settles.
 
 given:
   context:

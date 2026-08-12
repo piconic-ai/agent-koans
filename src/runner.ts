@@ -207,8 +207,6 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
   const variants = Object.entries(koan.traces);
   const allFailures: string[] = [];
   for (const [variant, trace] of variants) {
-    // A `turns:` koan's variants branch on one turn, so each carries its
-    // own turn list: the prompts are the same, what judges them is not.
     const failures = await runTrace(koan, koan.turns?.[variant], trace, agent);
     if (failures.length === 0) return;
     allFailures.push(...(variant ? failures.map((f) => `[${variant}] ${f}`) : failures));

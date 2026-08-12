@@ -197,7 +197,7 @@ export interface Koan {
   };
   /** The run's initial prompt (top-level `prompt:`); undefined for a `turns:` koan. */
   prompt?: string;
-  /** The ordered turns of a `turns:` koan, keyed by trace variant the same way `traces` is; undefined for a `when`/`one_of` koan. */
+  /** The ordered turns of a `turns:` koan, keyed by trace variant like `traces`; undefined for a `when`/`one_of` koan. */
   turns?: Record<string, TurnSpec[]>;
   traces: Record<string, Trace>;
   /** Empty (unused) for a `turns:` koan — each turn carries its own judgment instead. */

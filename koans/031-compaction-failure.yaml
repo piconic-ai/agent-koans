@@ -35,9 +35,7 @@ turns:
           used_tokens: 40000
       - compact
 
-  # The caller asked, so this turn opens with a fold — and the fold is
-  # refused. Nothing else here is under pressure: 40000 of 100000 leaves
-  # room for whatever the agent decides to do about it.
+  # 40000 of 100000: nothing here is under pressure but the caller's ask.
   - prompt: "What was that incident's operator code?"
     one_of:
       ends-the-run:

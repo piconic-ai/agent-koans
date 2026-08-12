@@ -150,9 +150,7 @@ function sendPrompt(runId: string, prompt: string): boolean {
 /**
  * Fold this run's conversation down, because its caller asked (SPEC.md
  * §3). Returns `false` when `runId` is unknown, so the caller can answer
- * 404. A fold that fails is not an error at the asking: the run reports it
- * through `events`, which is what its caller reads to decide whether to
- * ask again.
+ * 404.
  */
 async function compactRun(runId: string): Promise<boolean> {
   const agent = handles.get(runId);
@@ -160,7 +158,8 @@ async function compactRun(runId: string): Promise<boolean> {
   try {
     await compactConversation(runId, agent.id);
   } catch {
-    // Reported through the compaction events the observer above records.
+    // Not rethrown: a failed fold owes a report, not an error at the
+    // asking, and the observer above already recorded it.
   }
   return true;
 }

@@ -257,15 +257,13 @@ function parseBody(ctx: Ctx<KoanFile>, raw: Record<string, unknown>): Parsed<Bod
   return { kind: 'variants', prompt, variants, then };
 }
 
-/** One turn's branches before its traces are parsed, keyed by variant name. */
 type RawBranches = Record<string, { at: string; when: unknown; then: Judgment }>;
 
 // Two passes over the raw list, like the shape of the koan itself: every
 // turn's own fields (prompt, unknown keys, its `then`) validate before any
 // turn's `when` is parsed, so a shape error in turn 0's `then` is reported
-// even when turn 1's `when` is merely empty. A turn writing `one_of`
-// carries several of those fields at once, one per branch, and the walk
-// stays the same — a turn with none is a single branch named `''`.
+// even when turn 1's `when` is merely empty. A turn with no `one_of` is a
+// single branch named `''`, so one walk serves both.
 function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
   if (!Array.isArray(rawTurns) || rawTurns.length === 0) return problem('"turns" must be a non-empty list of turn entries');
   if (rawTurns.length < 2) return problem('"turns" needs at least two entries — a 1-turn koan is just "when"');
@@ -330,8 +328,6 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
     turnsPerBranch.push(parsed);
   }
 
-  // A turn the file wrote once is the same turn in every variant, so its
-  // single entry is read for each of them.
   const names = branchedAt === -1 ? [''] : Object.keys(branchesPerTurn[branchedAt]);
   const variants: Record<string, [Turn, Turn, ...Turn[]]> = {};
   for (const name of names) {
@@ -341,10 +337,8 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
   return { kind: 'turns', variants };
 }
 
-// The branches of one turn: what the agent may have produced there, each
-// one a `when` and the `then` that judges it. The prompt stays outside —
-// it is the caller's, and the caller sends the same one whichever way the
-// run goes.
+// The prompt stays outside a branch: it is the caller's, and the caller
+// sends the same one whichever way the run goes.
 function parseTurnBranches(ctx: Ctx<KoanFile>, i: number, rt: Record<string, unknown>): Parsed<RawBranches> {
   if (rt.when !== undefined || rt.then !== undefined) {
     return problem(`turns[${i}] cannot combine "one_of" with "when" or "then" — each branch carries its own`);
@@ -594,9 +588,8 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
   }
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    // Only a fold that completed: a refused one produced no summary, so
-    // there is nothing for a following request to have to carry, and a
-    // run that gives up on the refusal ends right here.
+    // Only a fold that completed: a refused one produced no summary to
+    // carry, and a run that gives up on the refusal ends right here.
     if (step.kind !== 'compaction' || step.report !== 'completed') continue;
     if (steps[i + 1]?.kind !== 'model') {
       return problem(`${at}[${i}]: a compaction step needs a model request after it — otherwise no request carries its summary`);
@@ -960,7 +953,6 @@ function scriptedTraces(koan: KoanFile): ScriptedTrace[] {
   }));
 }
 
-/** Where a turn of a `turns:` koan is written, naming its variant when it has one. */
 function turnAt(variant: string, i: number): string {
   return variant === '' ? `turns[${i}].when` : `turns(${variant})[${i}].when`;
 }

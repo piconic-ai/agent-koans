@@ -395,7 +395,7 @@ const rows: Row[] = [
             response: ok
         extra: 1
     `),
-    message: 'turns[0] has unknown key "extra" — a turn entry carries only "prompt", "when", and "then"',
+    message: 'turns[0] has unknown key "extra" — a turn entry carries only "prompt", "when" or "one_of", and "then"',
   },
   {
     rule: 'a turn\'s "when" is a non-empty list',
@@ -414,6 +414,100 @@ const rows: Row[] = [
             response: { tool: x, args: {} }
     `),
     message: `turns[0].when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one`,
+  },
+  {
+    rule: 'a turn writes "one_of" or "when", not both',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request: model
+            response: ok
+        one_of:
+          x:
+            when:
+              - request: model
+                response: ok
+          y:
+            when:
+              - request: model
+                response: ok
+    `),
+    message: 'turns[0] cannot combine "one_of" with "when" or "then" — each branch carries its own',
+  },
+  {
+    rule: 'only one turn branches',
+    yaml: `name: x\nturns:\n${indent(
+      dedent(`
+        - prompt: a
+          one_of:
+            x:
+              when:
+                - request: model
+                  response: ok
+            y:
+              when:
+                - request: model
+                  response: ok
+        - prompt: b
+          one_of:
+            x:
+              when:
+                - request: model
+                  response: ok
+            y:
+              when:
+                - request: model
+                  response: ok
+      `),
+      2,
+    )}`,
+    message:
+      'turns[0] and turns[1] both carry "one_of" — a koan branches on one turn, so that every variant is one whole run',
+  },
+  {
+    rule: 'a turn\'s "one_of" needs at least two variants',
+    yaml: turnsKoan(`
+      - prompt: a
+        one_of:
+          only:
+            when:
+              - request: model
+                response: ok
+    `),
+    message: 'turns[0].one_of needs at least two variants — use "when" for a single trace',
+  },
+  {
+    rule: 'a variant of a turn has no unknown key',
+    yaml: turnsKoan(`
+      - prompt: a
+        one_of:
+          x:
+            when:
+              - request: model
+                response: ok
+            prompt: mine
+          y:
+            when:
+              - request: model
+                response: ok
+    `),
+    message: 'turns[0].one_of.x has unknown key "prompt" — a variant of a turn carries only "when" and "then"',
+  },
+  {
+    rule: 'a variant of a turn is judged by the same rules as the turn',
+    yaml: turnsKoan(`
+      - prompt: a
+        one_of:
+          x:
+            when:
+              - request: model
+                response: { tool: x, args: {} }
+          y:
+            when:
+              - request: model
+                response: ok
+    `),
+    message: `turns[0].one_of.x.when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one`,
   },
   {
     rule: 'every delegation is answered by a "subagent" block',
@@ -1021,7 +1115,7 @@ const rows: Row[] = [
       'when[2]: used_tokens falls from 50 to 10 — a conversation shrinks only where a compaction folds it down',
   },
   {
-    rule: 'a compaction belongs at the start of a later turn',
+    rule: 'a compaction belongs at the start of a later turn, or after a failed one',
     yaml: koan(`
       given:
         context:
@@ -1036,7 +1130,7 @@ const rows: Row[] = [
           response: ok
     `),
     message:
-      'when[1]: a compaction belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn\'s first model request goes out, and where inside the turn before it is the agent\'s own business',
+      'when[1]: a compaction belongs at the start of a later turn of a "turns:" koan, or straight after one that failed — a run folds the conversation down by the time the next turn\'s first model request goes out, and where inside the turn before it is the agent\'s own business',
   },
   {
     rule: 'a turn past the threshold asks for no further model request',
@@ -1141,6 +1235,50 @@ const rows: Row[] = [
     `)}`,
     message:
       'turns[1].when[0].response needs "compaction: completed" or "compaction: failed" — how the run reported this fold\'s ending to its caller',
+  },
+  {
+    rule: 'a fold that completed is followed by a model request',
+    yaml: `name: x\n${dedent(`
+      given:
+        context:
+          window: 100
+          compaction: "90%"
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: { body: ok, used_tokens: 95 }
+        - prompt: b
+          when:
+            - request: { type: model, purpose: compaction }
+              response: { body: "so far", used_tokens: 10, compaction: completed }
+    `)}`,
+    message:
+      'turns[1].when[0]: a compaction step needs a model request after it — otherwise no request carries its summary',
+  },
+  {
+    rule: 'only a fold that failed may be followed by another fold',
+    yaml: `name: x\n${dedent(`
+      given:
+        context:
+          window: 100
+          compaction: "90%"
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: { body: ok, used_tokens: 95 }
+        - prompt: b
+          when:
+            - request: { type: model, purpose: compaction }
+              response: { body: "so far", used_tokens: 10, compaction: completed }
+            - request: { type: model, purpose: compaction }
+              response: { body: "again", used_tokens: 5, compaction: completed }
+            - request: model
+              response: ok
+    `)}`,
+    message:
+      'turns[1].when[1]: a compaction belongs at the start of a later turn of a "turns:" koan, or straight after one that failed — a run folds the conversation down by the time the next turn\'s first model request goes out, and where inside the turn before it is the agent\'s own business',
   },
   {
     rule: 'a trace fits the model-request budget',

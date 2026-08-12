@@ -197,8 +197,8 @@ export interface Koan {
   };
   /** The run's initial prompt (top-level `prompt:`); undefined for a `turns:` koan. */
   prompt?: string;
-  /** The ordered turns of a `turns:` koan; undefined for a `when`/`one_of` koan. */
-  turns?: TurnSpec[];
+  /** The ordered turns of a `turns:` koan, keyed by trace variant the same way `traces` is; undefined for a `when`/`one_of` koan. */
+  turns?: Record<string, TurnSpec[]>;
   traces: Record<string, Trace>;
   /** Empty (unused) for a `turns:` koan — each turn carries its own judgment instead. */
   then: Judgment;
@@ -472,7 +472,7 @@ function compileKoan(parsed: KoanFile): Koan {
   };
 
   let prompt: string | undefined;
-  let turns: TurnSpec[] | undefined;
+  let turns: Record<string, TurnSpec[]> | undefined;
   let traces: Record<string, Trace>;
 
   switch (parsed.body.kind) {
@@ -488,9 +488,13 @@ function compileKoan(parsed: KoanFile): Koan {
       }
       break;
     case 'turns': {
-      const compiled = compileTurnsTrace(parsed.body.turns);
-      traces = { '': compiled.trace };
-      turns = compiled.turnSpecs;
+      traces = {};
+      turns = {};
+      for (const [variant, sequence] of Object.entries(parsed.body.variants)) {
+        const compiled = compileTurnsTrace(sequence);
+        traces[variant] = compiled.trace;
+        turns[variant] = compiled.turnSpecs;
+      }
       break;
     }
     default:

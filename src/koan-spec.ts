@@ -78,9 +78,20 @@ export type Compaction = { kind: 'off' } | { kind: 'threshold'; percent: number 
 export type Body =
   | { kind: 'single'; prompt: string; trace: Trace; then?: Judgment }
   | { kind: 'variants'; prompt: string; variants: Record<string, Trace>; then?: Judgment }
-  | { kind: 'turns'; turns: [Turn, Turn, ...Turn[]] };
+  /**
+   * One entry per acceptable run of the same prompts. A koan writing no
+   * `one_of` on any turn has the single entry `''`; one that writes it on a
+   * turn has an entry per branch, each a whole turn sequence — the file
+   * writes the prompts once and parse.ts expands, so a rule downstream
+   * sees independent sequences and never a turn that is two things.
+   */
+  | { kind: 'turns'; variants: Record<string, [Turn, Turn, ...Turn[]]> };
 
-/** One turn of a `turns` koan — a small koan of its own. */
+/**
+ * One turn of a `turns` koan — a small koan of its own. `prompt` is the
+ * caller's, so it is the same in every variant of a turn; `trace` and
+ * `then` are what the agent produced, which is what a branch replaces.
+ */
 export interface Turn {
   prompt: string;
   trace: Trace;

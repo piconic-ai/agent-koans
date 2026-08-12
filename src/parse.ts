@@ -415,27 +415,16 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     // that can be dropped hurt most: a mistyped `prompt` leaves a koan
     // that still passes while scripting no delivery at all.
     for (const key of Object.keys(entry as Record<string, unknown>)) {
-      if (
-        key !== 'request' &&
-        key !== 'response' &&
-        key !== 'prompt' &&
-        key !== 'used_tokens' &&
-        key !== 'purpose' &&
-        key !== 'report'
-      ) {
+      if (key !== 'request' && key !== 'response' && key !== 'prompt') {
         return problem(
-          `${at_i} has unknown key "${key}" — a trace step carries only "request", "response", "used_tokens", a tool step's "prompt", and a compaction's "purpose" and "report"`,
+          `${at_i} has unknown key "${key}" — a trace step is a "request" and its "response", plus a tool step's "prompt"; anything else belongs inside one of them`,
         );
       }
     }
-    const rawPurpose = (entry as Record<string, unknown>).purpose;
-    const rawReport = (entry as Record<string, unknown>).report;
-    const rawUsed = (entry as Record<string, unknown>).used_tokens;
-    if (rawUsed !== undefined && (!Number.isInteger(rawUsed) || (rawUsed as number) < 0)) {
-      return problem(`${at_i}.used_tokens must be a non-negative integer — the size this response reports the conversation to have reached`);
-    }
+    const target = parseRequestTarget(at_i, req);
+    if (isProblem(target)) return target;
 
-    if (req === 'model') {
+    if (target.kind === 'model') {
       if (rawPrompt !== undefined) {
         return problem(
           `${at_i}: "prompt" belongs on the tool step whose response is held open, not on a model request`,
@@ -462,36 +451,31 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         }
         queuedSeam = true;
       }
-      if (rawPurpose !== undefined) {
-        const fold = parseCompactionStep(at_i, rawPurpose, res, rawUsed, rawReport, inTurns, i);
+      if (target.purpose !== undefined) {
+        const fold = parseCompactionStep(at_i, res, inTurns, i);
         if (isProblem(fold)) return fold;
         steps.push(fold);
         continue;
       }
-      if (rawReport !== undefined) {
-        return problem(`${at_i}: "report" belongs on a compaction — it says how the run reported that fold's ending`);
-      }
-      const response = parseModelResponse(into(ctx, `[${i}]`, res), inSubagent);
+      const envelope = parseModelEnvelope(at_i, res);
+      if (isProblem(envelope)) return envelope;
+      const response = parseModelResponse(into(ctx, `[${i}]`, envelope.body), inSubagent);
       if (isProblem(response)) return response;
-      steps.push({ kind: 'model', response, ...(rawUsed !== undefined ? { used_tokens: rawUsed as number } : {}) });
-    } else if (typeof req === 'object' && req !== null && typeof (req as Record<string, unknown>).tool === 'string') {
-      const reqTool = (req as Record<string, unknown>).tool as string;
+      steps.push({
+        kind: 'model',
+        response,
+        ...(envelope.used_tokens !== undefined ? { used_tokens: envelope.used_tokens } : {}),
+      });
+    } else if (target.kind === 'tool') {
+      const reqTool = target.tool;
       // No shape check on the request's own args: it is a declared
       // transform, not re-validated against the
       // instruction it closes.
-      const reqArgs = (req as Record<string, unknown>).args as ParsedArgs | undefined;
+      const reqArgs = target.args;
       if (typeof res === 'string' || Array.isArray(res) || typeof (res as Record<string, unknown>).status !== 'number') {
         return problem(`${at_i}.response needs a numeric "status" for a tool request`);
       }
       const r = res as { status: number; body?: unknown };
-      if (rawUsed !== undefined) {
-        return problem(
-          `${at_i}: "used_tokens" belongs on a model step — it is what a model response reports, not something a tool request carries`,
-        );
-      }
-      if (rawPurpose !== undefined || rawReport !== undefined) {
-        return problem(`${at_i}: "purpose" and "report" belong on a model request — a fold is one`);
-      }
       if (rawPrompt !== undefined) {
         if (inTurns) {
           return problem(
@@ -519,8 +503,6 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         response: { status: r.status, body: r.body },
         ...(typeof rawPrompt === 'string' ? { prompt: rawPrompt } : {}),
       });
-    } else {
-      return problem(`${at_i}.request must be "model" or { tool: <name> }`);
     }
   }
 
@@ -547,23 +529,66 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
 }
 
 /**
- * A model request whose `purpose` names it a fold. Everything it does is
- * written on it, and each field is required: the summary it receives, the
- * size the fold leaves behind, and how the run reported the fold's ending
- * to its caller.
+ * Who a step's request goes to, and anything qualifying it. Two written
+ * forms per target — `model` or `{ type: model, purpose: ... }`, and
+ * `{ tool: name, args: ... }` — so a step that needs no detail carries
+ * none, the way most do.
  */
-function parseCompactionStep(
-  at: string,
-  purpose: unknown,
-  res: unknown,
-  used: unknown,
-  report: unknown,
-  inTurns: boolean,
-  index: number,
-): Parsed<Step> {
-  if (purpose !== 'compaction') {
-    return problem(`${at}.purpose must be "compaction" — the only purpose a koan gives a model request of its own`);
+type RequestTarget =
+  | { kind: 'model'; purpose?: 'compaction' }
+  | { kind: 'tool'; tool: string; args?: ParsedArgs };
+
+function parseRequestTarget(at: string, req: unknown): Parsed<RequestTarget> {
+  if (req === 'model') return { kind: 'model' };
+  if (isMapping(req) && typeof req.tool === 'string') {
+    // No shape check on the request's own args: it is a declared
+    // transform, not re-validated against the instruction it closes.
+    return { kind: 'tool', tool: req.tool, args: req.args as ParsedArgs | undefined };
   }
+  if (isMapping(req) && req.type === 'model') {
+    for (const key of Object.keys(req)) {
+      if (key !== 'type' && key !== 'purpose') {
+        return problem(`${at}.request has unknown key "${key}" — a model request carries only "type" and "purpose"`);
+      }
+    }
+    if (req.purpose !== undefined && req.purpose !== 'compaction') {
+      return problem(`${at}.request.purpose must be "compaction" — the only purpose a koan gives a model request of its own`);
+    }
+    return { kind: 'model', ...(req.purpose === 'compaction' ? { purpose: 'compaction' as const } : {}) };
+  }
+  return problem(`${at}.request must be "model", { type: model, purpose: ... }, or { tool: <name> }`);
+}
+
+/**
+ * A model response: the body itself, or the body with what the response
+ * reported alongside it. An envelope is recognized by carrying nothing but
+ * those two keys, which keeps it apart from the API-failure body
+ * `{ status, body }` without a written marker.
+ */
+function parseModelEnvelope(at: string, res: unknown): Parsed<{ body: unknown; used_tokens?: number }> {
+  if (!isMapping(res) || res.body === undefined) return { body: res };
+  const keys = Object.keys(res);
+  if (!keys.every((key) => key === 'body' || key === 'used_tokens')) return { body: res };
+  const used = parseUsedTokens(at, res.used_tokens);
+  if (isProblem(used)) return used;
+  return { body: res.body, ...(used !== undefined ? { used_tokens: used } : {}) };
+}
+
+function parseUsedTokens(at: string, raw: unknown): Parsed<number | undefined> {
+  if (raw === undefined) return undefined;
+  if (!Number.isInteger(raw) || (raw as number) < 0) {
+    return problem(`${at}.response.used_tokens must be a non-negative integer — the size this response reports the conversation to have reached`);
+  }
+  return raw as number;
+}
+
+/**
+ * The response to a model request whose purpose is a fold. Everything a
+ * fold does is written here, and each part is required: the summary it
+ * receives, the size the fold leaves behind, and how the run reported the
+ * fold's ending to its caller.
+ */
+function parseCompactionStep(at: string, res: unknown, inTurns: boolean, index: number): Parsed<Step> {
   // Anywhere but a turn's first step would pin down one of two conforming
   // designs: some agents fold before the next request of a turn already
   // running, some once that turn settles (SPEC.md §3).
@@ -572,18 +597,28 @@ function parseCompactionStep(
       `${at}: a compaction belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn's first model request goes out, and where inside the turn before it is the agent's own business`,
     );
   }
-  if (typeof res !== 'string' || res.trim().length === 0) {
-    return problem(`${at}.response for a compaction must be the summary served to it (a non-empty string)`);
+  if (!isMapping(res)) {
+    return problem(`${at}.response for a compaction must be a mapping (keys: body, used_tokens, compaction)`);
   }
+  for (const key of Object.keys(res)) {
+    if (key !== 'body' && key !== 'used_tokens' && key !== 'compaction') {
+      return problem(`${at}.response has unknown key "${key}" — a compaction's response carries only "body", "used_tokens", and "compaction"`);
+    }
+  }
+  if (typeof res.body !== 'string' || res.body.trim().length === 0) {
+    return problem(`${at}.response.body for a compaction must be the summary served to it (a non-empty string)`);
+  }
+  const used = parseUsedTokens(at, res.used_tokens);
+  if (isProblem(used)) return used;
   if (used === undefined) {
-    return problem(`${at} needs "used_tokens" — what the conversation shrank to, which is half of what a fold does`);
+    return problem(`${at}.response needs "used_tokens" — what the conversation shrank to, which is half of what a fold does`);
   }
-  if (report !== 'completed') {
+  if (res.compaction !== 'completed') {
     return problem(
-      `${at} needs "report: completed" — how the run reported this fold's ending to its caller. A fold that ends any other way is not scriptable yet`,
+      `${at}.response needs "compaction: completed" — how the run reported this fold's ending to its caller. A fold that ends any other way is not scriptable yet`,
     );
   }
-  return { kind: 'compaction', summary: res, used_tokens: used as number, report: 'completed' };
+  return { kind: 'compaction', summary: res.body, used_tokens: used, report: 'completed' };
 }
 
 /**

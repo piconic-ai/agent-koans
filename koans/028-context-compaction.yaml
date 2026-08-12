@@ -32,8 +32,9 @@ turns:
         response: { status: 200, body: { operator_code: "K-9-4471" } }
       # 95000 of the declared 100000 is past the 90% the run compacts at.
       - request: model
-        used_tokens: 95000
-        response: "Incident INC-4407 is logged."
+        response:
+          body: "Incident INC-4407 is logged."
+          used_tokens: 95000
 
   - prompt: "What was that incident's operator code?"
     when:
@@ -41,11 +42,13 @@ turns:
       # of conversation become 20000. The summary must come back — the
       # request after it has to carry the operator code, and after the
       # fold nothing else is left carrying it.
-      - request: model
-        purpose: compaction
-        response: "Earlier: incident INC-4407 has operator code K-9-4471."
-        used_tokens: 20000
-        report: completed
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          body: "Earlier: incident INC-4407 has operator code K-9-4471."
+          used_tokens: 20000
+          compaction: completed
       - request: model
         response: "The operator code is K-9-4471."
     then:

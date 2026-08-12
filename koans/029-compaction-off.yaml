@@ -32,8 +32,9 @@ when:
   - request: { tool: lookup_incident }
     response: { status: 200, body: { operator_code: "K-9-4471" } }
   - request: model
-    used_tokens: 95000
-    response: { tool: check_status, args: {} }
+    response:
+      body: { tool: check_status, args: {} }
+      used_tokens: 95000
   - request: { tool: check_status }
     response: { status: 200, body: { load: "high" } }
   - request: model

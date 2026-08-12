@@ -110,9 +110,16 @@ export type AbortKind = 'live' | 'late';
  * absorbed a tool result into its instruction, produced a turn boundary
  * that could legally add zero new steps — see parse.ts's header).
  */
+//
+// A step is written as a `request` and its `response`, and anything
+// qualifying either sits inside it — `{ type: model, purpose: compaction }`
+// on the one side, `{ body, used_tokens }` on the other. Both take a plain
+// scalar when there is nothing to qualify, which is most steps. These
+// types are flat because the grouping is where a detail is written, not
+// something a shape has to enforce.
 export type Step =
   /**
-   * `used_tokens` is what this response reports the conversation to have
+   * `used_tokens` is what this response reported the conversation to have
    * grown to. It holds until another step writes one — a koan states a
    * size, not every step that keeps it — starts at zero, and falls only
    * across a compaction.
@@ -125,11 +132,12 @@ export type Step =
    * The extra model request an agent makes to fold a conversation that has
    * reached `given.context.compaction` down to a summary — written as a
    * model request with `purpose: compaction`, since that is what it is.
-   * Everything a fold does is written on it: `summary` is what the mock
-   * replies, and the conversation's next request must carry that reply;
-   * `used_tokens` is what the conversation shrank to; `report` is how the
-   * run reported the fold's ending to its caller. The request itself is
-   * the fold beginning, so only its ending is written.
+   * Its response carries everything the fold produced: `summary` (written
+   * `body`) is what the mock replies, and the conversation's next request
+   * must carry that reply; `used_tokens` is what the conversation shrank
+   * to; `report` (written `compaction`) is how the run reported the fold's
+   * ending to its caller. The request itself is the fold beginning, so
+   * only its ending is written.
    *
    * A shape of its own rather than a `model` step carrying two optional
    * fields: a fold's response is a summary and never a tool call, and its

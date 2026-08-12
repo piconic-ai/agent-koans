@@ -500,7 +500,7 @@ const rows: Row[] = [
           intercept: p
     `),
     message:
-      `when[0] has unknown key "intercept" — a trace step carries only "request", "response", "used_tokens", a tool step's "prompt", and a compaction's "purpose" and "report"`,
+      `when[0] has unknown key "intercept" — a trace step is a "request" and its "response", plus a tool step's "prompt"; anything else belongs inside one of them`,
   },
   {
     rule: 'a mid-run "prompt" belongs on a tool step',
@@ -785,13 +785,13 @@ const rows: Row[] = [
     message: `when[1]: "x"'s arguments do not parse as a JSON object — argument fidelity is undefined, so the agent must refuse the call instead; no tool request can follow it`,
   },
   {
-    rule: 'a trace entry\'s "request" is "model" or { tool }',
+    rule: 'a trace entry\'s "request" is "model", a model with a purpose, or { tool }',
     yaml: koan(`
       when:
         - request: nonsense
           response: ok
     `),
-    message: 'when[0].request must be "model" or { tool: <name> }',
+    message: 'when[0].request must be "model", { type: model, purpose: ... }, or { tool: <name> }',
   },
   {
     rule: 'a parallel group needs at least two instructions',
@@ -985,8 +985,7 @@ const rows: Row[] = [
     yaml: koan(`
       when:
         - request: model
-          used_tokens: 50
-          response: ok
+          response: { body: ok, used_tokens: 50 }
     `),
     message: 'when[0]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of',
   },
@@ -999,8 +998,7 @@ const rows: Row[] = [
           compaction: "off"
       when:
         - request: model
-          used_tokens: 101
-          response: ok
+          response: { body: ok, used_tokens: 101 }
     `),
     message: 'when[0]: used_tokens (101) is larger than given.context.window (100)',
   },
@@ -1013,13 +1011,11 @@ const rows: Row[] = [
           compaction: "off"
       when:
         - request: model
-          used_tokens: 50
-          response: { tool: x, args: {} }
+          response: { body: { tool: x, args: {} }, used_tokens: 50 }
         - request: { tool: x }
           response: { status: 200 }
         - request: model
-          used_tokens: 10
-          response: ok
+          response: { body: ok, used_tokens: 10 }
     `),
     message:
       'when[2]: used_tokens falls from 50 to 10 — a conversation shrinks only where a compaction folds it down',
@@ -1033,13 +1029,9 @@ const rows: Row[] = [
           compaction: "90%"
       when:
         - request: model
-          used_tokens: 95
-          response: { tool: x, args: {} }
-        - request: model
-          purpose: compaction
-          response: "so far"
-          used_tokens: 10
-          report: completed
+          response: { body: { tool: x, args: {} }, used_tokens: 95 }
+        - request: { type: model, purpose: compaction }
+          response: { body: "so far", used_tokens: 10, compaction: completed }
         - request: model
           response: ok
     `),
@@ -1055,8 +1047,7 @@ const rows: Row[] = [
           compaction: "90%"
       when:
         - request: model
-          used_tokens: 95
-          response: { tool: x, args: {} }
+          response: { body: { tool: x, args: {} }, used_tokens: 95 }
         - request: { tool: x }
           response: { status: 200 }
         - request: model
@@ -1076,8 +1067,7 @@ const rows: Row[] = [
         - prompt: a
           when:
             - request: model
-              used_tokens: 95
-              response: ok
+              response: { body: ok, used_tokens: 95 }
         - prompt: b
           when:
             - request: model
@@ -1097,15 +1087,11 @@ const rows: Row[] = [
         - prompt: a
           when:
             - request: model
-              used_tokens: 95
-              response: ok
+              response: { body: ok, used_tokens: 95 }
         - prompt: b
           when:
-            - request: model
-              purpose: compaction
-              response: "so far"
-              used_tokens: 10
-              report: completed
+            - request: { type: model, purpose: compaction }
+              response: { body: "so far", used_tokens: 10, compaction: completed }
             - request: model
               response: ok
     `)}`,
@@ -1123,19 +1109,16 @@ const rows: Row[] = [
         - prompt: a
           when:
             - request: model
-              used_tokens: 95
-              response: ok
+              response: { body: ok, used_tokens: 95 }
         - prompt: b
           when:
-            - request: model
-              purpose: compaction
-              response: "so far"
-              report: completed
+            - request: { type: model, purpose: compaction }
+              response: { body: "so far", compaction: completed }
             - request: model
               response: ok
     `)}`,
     message:
-      'turns[1].when[0] needs "used_tokens" — what the conversation shrank to, which is half of what a fold does',
+      'turns[1].when[0].response needs "used_tokens" — what the conversation shrank to, which is half of what a fold does',
   },
   {
     rule: 'a compaction says how the run reported its ending',
@@ -1148,19 +1131,16 @@ const rows: Row[] = [
         - prompt: a
           when:
             - request: model
-              used_tokens: 95
-              response: ok
+              response: { body: ok, used_tokens: 95 }
         - prompt: b
           when:
-            - request: model
-              purpose: compaction
-              response: "so far"
-              used_tokens: 10
+            - request: { type: model, purpose: compaction }
+              response: { body: "so far", used_tokens: 10 }
             - request: model
               response: ok
     `)}`,
     message:
-      'turns[1].when[0] needs "report: completed" — how the run reported this fold\'s ending to its caller. A fold that ends any other way is not scriptable yet',
+      'turns[1].when[0].response needs "compaction: completed" — how the run reported this fold\'s ending to its caller. A fold that ends any other way is not scriptable yet',
   },
   {
     rule: 'a trace fits the model-request budget',

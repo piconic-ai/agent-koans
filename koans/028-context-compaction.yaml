@@ -29,18 +29,15 @@ turns:
         response: { tool: lookup_incident, args: { id: "INC-4407" } }
       - request: { tool: lookup_incident }
         response: { status: 200, body: { operator_code: "K-9-4471" } }
-      # 95000 of the declared 100000 is past the 90% the run compacts at,
-      # so nothing more may be asked of the model until it is folded down.
+      # 95000 of the declared 100000 is past the 90% the run compacts at.
       - request: model
         used_tokens: 95000
         response: "Incident INC-4407 is logged."
 
   - prompt: "What was that incident's operator code?"
     when:
-      # The summary is the mock's own. The request after it must carry the
-      # operator code — whether the agent kept it verbatim or folded it in
-      # here is its own business.
-      - compaction: "Earlier: incident INC-4407 has operator code K-9-4471."
+      - request: compaction
+        response: "Earlier: incident INC-4407 has operator code K-9-4471."
       - request: model
         used_tokens: 20000
         response: "The operator code is K-9-4471."

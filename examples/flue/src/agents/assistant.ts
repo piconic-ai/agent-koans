@@ -21,14 +21,11 @@ export interface AssistantData {
   context?: RunContext;
 }
 
-// Flue triggers compaction on headroom left in the model's own window
-// (`used > contextWindow - reserveTokens`), while a run declares the point
-// as a share of the window it names — so the run's threshold is converted
-// into headroom against the registered window rather than passed through.
-// `keepRecentTokens` is 0 because the harness's conversations are a few
-// hundred bytes against a six-figure declared size: any nonzero amount of
-// "recent" history would be all of it, and there would be nothing left to
-// summarize.
+// Not passed through: Flue triggers on headroom left in the model's own
+// window (`used > contextWindow - reserveTokens`), so the run's share is
+// converted against the registered one. `keepRecentTokens` is 0 because
+// the harness's conversations are a few hundred bytes against a six-figure
+// declared size — any "recent" history would be all of it.
 function compactionOf(context: RunContext | undefined) {
   if (context?.compaction === undefined) return false as const;
   const threshold = Math.ceil((context.window * context.compaction.at_percent) / 100);

@@ -161,10 +161,8 @@ interface RunSession {
   context?: RunContext;
   /**
    * What the endpoint last reported this conversation to have reached
-   * (SPEC.md §3). On the session rather than on the turn: the size a turn
-   * ends at is what decides whether the next one may open on the
-   * conversation as it stands, and a turn that starts over from zero would
-   * carry a full window into it.
+   * (SPEC.md §3). On the session, not the turn: a turn starting over from
+   * zero would carry a full window into itself (agent.ts, `compact`).
    */
   size: ConversationSize;
   /**
@@ -331,10 +329,8 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
         if (budget.used >= budget.max) return undefined;
         budget.used += 1;
         await compact(messages, signal);
-        // Not the summarizing request's own usage: this conversation's
-        // size is unknown again until its next reply reports it, and
-        // carrying that number over would trip the threshold a second
-        // time and fold the conversation down forever.
+        // Not the summarizing request's own usage: carrying that number
+        // over would trip the threshold again and fold forever.
         size.used = 0;
       }
 
@@ -432,8 +428,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     // A fresh conversation every time: a subagent conversation cannot be
     // continued yet.
     const childMessages: ChatMessage[] = [{ role: 'user', content: prompt }];
-    // A conversation of its own, so a size of its own: however full the
-    // caller's is, the child's starts empty.
+    // A conversation of its own, so a size of its own.
     const text = await runConversation(childMessages, tools, subagents, budget, context, { used: 0 }, signal);
     return text ?? `Error: subagent "${name}" did not finish before the model-request budget ran out`;
   }
@@ -508,11 +503,9 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
    * place, so the caller's history — the session's, or a delegate's — is
    * the compacted one from here on.
    *
-   * Two things survive verbatim rather than being summarized with
-   * everything else. The opening prompt, because it is the task and the
-   * whole point of the fold is to keep working on it. And any trailing
-   * prompt the caller has sent but the model has not answered yet: that is
-   * not history, it is the question this turn still owes an answer to.
+   * The opening prompt and any unanswered trailing prompt survive
+   * verbatim: the first is the task the fold exists to keep working on,
+   * and the second is not history but the question this turn still owes.
    */
   async function compact(messages: ChatMessage[], signal: AbortSignal): Promise<void> {
     const opening = messages[0];

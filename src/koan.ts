@@ -87,13 +87,12 @@ export interface ModelTurn {
    * from the trace: a step that writes no `used_tokens` reports whatever
    * the one before it did.
    *
-   * A compaction's own response reports the size the fold leaves behind,
-   * not the larger one it was handed. Reporting the pre-fold size would be
-   * closer to what a real summarizing request costs, but it would also
-   * decide, for every implementation, how the auxiliary exchange's usage
-   * must be booked: one that reads the size off the last response it saw
-   * would find itself over the threshold again and compact forever. That
-   * is exactly the internal this suite must not pin down.
+   * A compaction reports the size its fold leaves behind, not the larger
+   * one it was handed. The pre-fold size is closer to what such a request
+   * really costs, but it would decide for every implementation how the
+   * auxiliary exchange's usage must be booked — one that reads the size
+   * off the last response it saw would be over the threshold again and
+   * fold forever.
    */
   usedTokens: number;
   /** Set on the auxiliary request that folds the conversation down; `reply` is the summary served to it. */
@@ -159,10 +158,9 @@ export interface RunLimits {
 
 /**
  * The run's context window and compaction policy, as the run submission
- * carries them. `off` compiles to an absent threshold rather than to a
- * word of its own: an agent that finds no threshold has nothing to compact
- * at, which is the same instruction, and it keeps every run submitted
- * before this existed meaning what it meant.
+ * carries them. `off` compiles to an absent threshold rather than a word
+ * of its own, so that a run submitted before this existed carries the same
+ * instruction it always did.
  */
 export interface RunContext {
   window: number;
@@ -336,10 +334,8 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
         break;
       }
       case 'compaction': {
-        // The size the fold leaves behind, which parse.ts required the
-        // model step after it to write. Not a turn boundary and not an
-        // answer to anything: the open calls stay open, since folding the
-        // conversation down is not what closes them.
+        // `openCalls` survives: folding a conversation down is not what
+        // closes a call, so one still open across it stays open.
         const next = steps.slice(i + 1).find((s) => s.kind === 'model') as Extract<Step, { kind: 'model' }>;
         conv.turns.push({ reply: step.summary, usedTokens: next.used_tokens!, compaction: true });
         break;

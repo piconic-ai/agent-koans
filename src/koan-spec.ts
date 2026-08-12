@@ -50,10 +50,9 @@ export interface Given {
 
 /**
  * The model's context window for the run, and what the agent does as the
- * conversation fills it. Part of `given` rather than `limits`: `limits`
- * bounds what the caller lets the agent spend, while this describes the
- * world the run is given — how much room the model has, and the policy the
- * caller chose for using it up.
+ * conversation fills it. Not part of `limits`: that block bounds what the
+ * caller lets the agent spend, and a window is not a budget but the size
+ * of the world the run is given.
  */
 export interface ContextSetup {
   /** The window in tokens; a step's `used_tokens` is measured against it. */
@@ -62,16 +61,12 @@ export interface ContextSetup {
 }
 
 /**
- * When the agent compacts, as a share of the window. `off` is written
- * rather than left out so that a koan testing "never compact" states that
- * policy instead of relying on a default; a koan with no `given.context`
- * at all means the same thing, which is why every koan written before this
- * existed keeps its meaning.
- *
- * A percentage, not a token count: the threshold that matters is relative
- * to the window, and writing it that way leaves the two numbers a koan
- * carries — the window and the usage — free of a third that must agree
- * with both.
+ * When the agent compacts, as a share of the window. `off` is a word a
+ * koan writes rather than a field it leaves out, so that a koan testing
+ * "never compact" states the policy instead of leaning on the default —
+ * which a koan with no `given.context` at all leans on, and means the
+ * same. A share rather than a token count: a third number to keep in
+ * agreement with the window and the usage would be one too many.
  */
 export type Compaction = { kind: 'off' } | { kind: 'threshold'; percent: number };
 
@@ -118,9 +113,9 @@ export type AbortKind = 'live' | 'late';
 export type Step =
   /**
    * `used_tokens` is what this response reports the conversation to have
-   * grown to. It holds until another step writes one, so a koan states a
-   * size once rather than on every step that keeps it; the conversation
-   * starts at zero, and only a `compaction` step lets the number fall.
+   * grown to. It holds until another step writes one — a koan states a
+   * size, not every step that keeps it — starts at zero, and falls only
+   * across a compaction.
    */
   | { kind: 'model'; response: ModelResponse; used_tokens?: number }
   /** `prompt` is one the caller sends while this invocation is held open. */
@@ -132,12 +127,10 @@ export type Step =
    * what the mock replies to it, and the conversation's next request must
    * carry that reply.
    *
-   * Its own step rather than an annotation on the model step it precedes:
-   * it is a request the agent makes, so it occupies a place in the trace
-   * the same way every other request does, and the trace stays the
-   * assertion — an agent that does not compact has no step to consume
-   * here, and one that compacts where no koan scripted it has no step to
-   * consume there.
+   * A step of its own, not an annotation on the model step after it: an
+   * agent that never folds then has no step to consume here, and one that
+   * folds where no koan scripted it none to consume there, so the trace
+   * stays the assertion.
    */
   | { kind: 'compaction'; summary: string };
 

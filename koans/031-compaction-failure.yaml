@@ -1,0 +1,90 @@
+name: compaction-failure
+description: >
+  The caller asks for a fold and the summarizing request is refused, so
+  nothing is summarized and the conversation stays as it was. What the run
+  owes for that is one thing: the caller must be told, and told with what
+  the endpoint said, so it can decide whether to ask again. What the agent
+  does next is its own business, and the branches of the second turn are
+  the answers it may give — end the run, carry on while the window still
+  has room, or ask for the fold once more. Each branch is a whole run, and
+  an agent conforms by walking any one of them.
+
+given:
+  context:
+    window: 100000
+    compaction: off
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+turns:
+  - prompt: "Look up incident INC-4407 and confirm it is logged."
+    when:
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-4407" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-9-4471" } }
+      - request: model
+        response:
+          body: "Incident INC-4407 is logged."
+          used_tokens: 40000
+      - compact
+
+  # The caller asked, so this turn opens with a fold — and the fold is
+  # refused. Nothing else here is under pressure: 40000 of 100000 leaves
+  # room for whatever the agent decides to do about it.
+  - prompt: "What was that incident's operator code?"
+    one_of:
+      ends-the-run:
+        when:
+          - request:
+              type: model
+              purpose: compaction
+            response:
+              status: 400
+              body: { error: "summarizer_unavailable" }
+              compaction: failed
+        then:
+          status: failed
+
+      carries-on:
+        when:
+          - request:
+              type: model
+              purpose: compaction
+            response:
+              status: 400
+              body: { error: "summarizer_unavailable" }
+              compaction: failed
+          - request: model
+            response: "The operator code is K-9-4471."
+        then:
+          status: completed
+          output: { contains: "K-9-4471" }
+
+      asks-again:
+        when:
+          - request:
+              type: model
+              purpose: compaction
+            response:
+              status: 400
+              body: { error: "summarizer_unavailable" }
+              compaction: failed
+          - request:
+              type: model
+              purpose: compaction
+            response:
+              body: "Earlier: incident INC-4407 has operator code K-9-4471."
+              used_tokens: 8000
+              compaction: completed
+          - request: model
+            response: "The operator code is K-9-4471."
+        then:
+          status: completed
+          output: { contains: "K-9-4471" }

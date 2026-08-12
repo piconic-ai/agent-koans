@@ -53,10 +53,20 @@ observe((observation, ctx) => {
     run.events.push({
       type: 'compaction',
       phase: failed ? 'failed' : 'completed',
-      ...(failed ? { error: String(observation.error ?? 'compaction failed') } : {}),
+      ...(failed ? { error: reasonOf(observation.error) } : {}),
     });
   }
 });
+
+// Not `String(error)`: Flue serializes a failed fold's cause as an object
+// ({ name, message, ... }), which stringifies to "[object Object]" — the
+// one thing a caller cannot decide from.
+function reasonOf(error: unknown): string {
+  if (error !== null && typeof error === 'object' && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return String(error ?? 'compaction failed');
+}
 // The per-run agent handle, kept for the run's whole process lifetime —
 // not just while a turn is in flight. The abort endpoint needs it to call
 // the handle's own abort(); a follow-up prompt (SPEC.md §3) needs it to

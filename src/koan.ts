@@ -339,7 +339,11 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
       case 'compaction': {
         // `openCalls` survives: folding a conversation down is not what
         // closes a call, so one still open across it stays open.
-        conv.turns.push({ reply: step.summary, usedTokens: step.used_tokens, compaction: step.report });
+        conv.turns.push(
+          step.report === 'failed'
+            ? { fails: step.fails, usedTokens: carried(), compaction: 'failed' }
+            : { reply: step.summary, usedTokens: step.used_tokens, compaction: 'completed' },
+        );
         break;
       }
       case 'tool': {

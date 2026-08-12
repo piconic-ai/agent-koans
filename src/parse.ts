@@ -605,10 +605,11 @@ function parseUsedTokens(at: string, raw: unknown): Parsed<number | undefined> {
 }
 
 /**
- * The response to a model request whose purpose is a fold. Everything a
- * fold does is written here, and each part is required: the summary it
- * receives, the size the fold leaves behind, and how the run reported the
- * fold's ending to its caller.
+ * The response to a model request whose purpose is a fold. `compaction`
+ * says how it ended and decides what the rest must carry: a fold that
+ * completed carries the summary it received and the size it left behind,
+ * one that failed carries the failure the endpoint answered with, and
+ * neither carries the other's fields.
  */
 function parseCompactionStep(at: string, res: unknown, inTurns: boolean, index: number): Parsed<Step> {
   // Anywhere but a turn's first step would pin down one of two conforming
@@ -622,9 +623,15 @@ function parseCompactionStep(at: string, res: unknown, inTurns: boolean, index: 
   if (!isMapping(res)) {
     return problem(`${at}.response for a compaction must be a mapping (keys: body, used_tokens, compaction)`);
   }
+  if (res.compaction === 'failed') return parseFailedCompaction(at, res);
+  if (res.compaction !== 'completed') {
+    return problem(
+      `${at}.response needs "compaction: completed" or "compaction: failed" — how the run reported this fold's ending to its caller`,
+    );
+  }
   for (const key of Object.keys(res)) {
     if (key !== 'body' && key !== 'used_tokens' && key !== 'compaction') {
-      return problem(`${at}.response has unknown key "${key}" — a compaction's response carries only "body", "used_tokens", and "compaction"`);
+      return problem(`${at}.response has unknown key "${key}" — a completed compaction carries only "body", "used_tokens", and "compaction"`);
     }
   }
   if (typeof res.body !== 'string' || res.body.trim().length === 0) {
@@ -635,12 +642,23 @@ function parseCompactionStep(at: string, res: unknown, inTurns: boolean, index: 
   if (used === undefined) {
     return problem(`${at}.response needs "used_tokens" — what the conversation shrank to, which is half of what a fold does`);
   }
-  if (res.compaction !== 'completed') {
-    return problem(
-      `${at}.response needs "compaction: completed" — how the run reported this fold's ending to its caller. A fold that ends any other way is not scriptable yet`,
-    );
-  }
   return { kind: 'compaction', summary: res.body, used_tokens: used, report: 'completed' };
+}
+
+// A fold the model endpoint refused. `status` is restricted the same way a
+// model API failure's is, and for the same reason: a koan cannot script a
+// status the client under test would retry on a schedule of its own.
+function parseFailedCompaction(at: string, res: Record<string, unknown>): Parsed<Step> {
+  for (const key of Object.keys(res)) {
+    if (key !== 'status' && key !== 'body' && key !== 'compaction') {
+      return problem(`${at}.response has unknown key "${key}" — a failed compaction carries only "status", "body", and "compaction"`);
+    }
+  }
+  const status = res.status;
+  if (typeof status !== 'number' || status < 400 || status >= 500 || status === 408 || status === 429) {
+    return problem(`${at}.response.status must be a non-retryable 4xx (not 408/429) — what the model endpoint refused the fold with`);
+  }
+  return { kind: 'compaction', fails: { status, body: res.body }, report: 'failed' };
 }
 
 /**
@@ -1138,7 +1156,7 @@ function usedTokensFitTheWindow(koan: KoanFile): Problem | undefined {
     for (const turn of conv) {
       for (const [i, step] of turn.steps.entries()) {
         if (step.kind !== 'model' && step.kind !== 'compaction') continue;
-        const written = step.used_tokens;
+        const written = step.kind === 'compaction' && step.report === 'failed' ? undefined : step.used_tokens;
         if (written === undefined) continue;
         if (context === undefined) {
           return problem(`${turn.at}[${i}]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of`);
@@ -1200,6 +1218,14 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
             );
           }
           asked = false;
+          // A fold that failed leaves the conversation as it was. What
+          // decides whether the turn may ask the model again is the room
+          // left in the window, not the fold (SPEC.md §3), so the size
+          // stays and only the obligation is discharged.
+          if (step.report === 'failed') {
+            over = false;
+            continue;
+          }
           if (threshold !== undefined && step.used_tokens >= threshold) {
             return problem(
               `${turn.at}[${i}]: used_tokens (${step.used_tokens}) is still at or above the threshold of ${threshold} — the agent would fold the conversation down again immediately`,

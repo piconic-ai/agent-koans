@@ -143,19 +143,25 @@ export type Step =
    * ending to its caller. The request itself is the fold beginning, so
    * only its ending is written.
    *
-   * A shape of its own rather than a `model` step carrying two optional
-   * fields: a fold's response is a summary and never a tool call, and its
-   * three fields are required, none of which a shared shape could say.
+   * A fold that failed has neither of the first two — nothing was
+   * summarized and nothing shrank — so it carries the failure the model
+   * endpoint answered with instead, and the same `report`.
+   *
+   * A shape of its own rather than a `model` step carrying optional
+   * fields: a fold's response is a summary and never a tool call, and what
+   * it must carry depends on how it ended, neither of which a shared shape
+   * could say.
    */
-  | { kind: 'compaction'; summary: string; used_tokens: number; report: CompactionReport };
+  | { kind: 'compaction'; summary: string; used_tokens: number; report: 'completed' }
+  | { kind: 'compaction'; fails: ToolResponse; report: 'failed' };
 
 /**
- * How a fold ended, as its run reported it to its caller. One word today:
- * a fold that fails is not scriptable until the contract says what an
- * agent owes a run whose fold did not happen, and `failed` joins this
- * vocabulary with it.
+ * How a fold ended, as its run reported it to its caller. A fold that
+ * failed owes nothing further of the agent — carrying on and ending the
+ * run both conform (SPEC.md §3) — so what a koan can assert about one is
+ * that its caller was told, which is what this word is.
  */
-export type CompactionReport = 'completed';
+export type CompactionReport = 'completed' | 'failed';
 
 /**
  * What the mock LLM serves for a model request. A tool-call instruction and

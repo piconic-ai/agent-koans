@@ -482,11 +482,19 @@ export function startMockLlm(
       // verbatim. What a fold must not lose is checked one request later.
     } else if (index === 0) {
       checkConversationStart(conv, requestNo, messages, state.violations);
-    } else if (previous?.compaction) {
+    } else if (previous?.compaction !== undefined) {
       // A turn that opens with a fold spends its first request on it, so
       // the new turn's prompt is owed by the one after — here.
       const folded = conv.followUps?.find((f) => f.start === index - 1);
-      checkCompacted(previous.reply as string, folded, requestNo, messages, state.violations);
+      if (previous.compaction === 'completed') {
+        checkCompacted(previous.reply as string, folded, requestNo, messages, state.violations);
+      } else if (folded) {
+        // Nothing was folded, so nothing was replaced: this request owes
+        // the earlier turns the way any other follow-up does.
+        checkTurnBoundary(conv, folded, requestNo, messages, state.violations);
+      } else {
+        checkCoherence(conv, index, requestNo, messages, state.violations);
+      }
     } else if (followUp) {
       checkTurnBoundary(conv, followUp, requestNo, messages, state.violations);
       // A joined prompt rides the request that closes the held call, so

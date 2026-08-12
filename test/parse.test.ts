@@ -1140,7 +1140,7 @@ const rows: Row[] = [
               response: ok
     `)}`,
     message:
-      'turns[1].when[0].response needs "compaction: completed" — how the run reported this fold\'s ending to its caller. A fold that ends any other way is not scriptable yet',
+      'turns[1].when[0].response needs "compaction: completed" or "compaction: failed" — how the run reported this fold\'s ending to its caller',
   },
   {
     rule: 'a trace fits the model-request budget',

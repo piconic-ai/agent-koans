@@ -165,12 +165,38 @@ function judgeReportedFolds(trace: Trace, run: RunState): string[] {
   // ended, so that is the only phase read off the trace.
   const expected = folds.flatMap((t) => ['started', t.compaction as string]);
   const actual = reported.map((e) => String(e.phase));
-  if (actual.length === expected.length && actual.every((phase, i) => phase === expected[i])) return [];
-  const detail = reported.map((e) => `${e.phase}${e.error ? ` (${e.error})` : ''}`).join(', ') || 'nothing';
-  return [
-    `the run reported ${detail} to its caller, but the trace folds the conversation down ${folds.length} time(s): ` +
-      `GET /runs/{run_id} must carry a "compaction" event when a fold starts and one when it ends`,
-  ];
+  if (actual.length !== expected.length || actual.some((phase, i) => phase !== expected[i])) {
+    const detail = reported.map((e) => `${e.phase}${e.error ? ` (${e.error})` : ''}`).join(', ') || 'nothing';
+    return [
+      `the run reported ${detail} to its caller, but the trace folds the conversation down ${folds.length} time(s): ` +
+        `GET /runs/{run_id} must carry a "compaction" event when a fold starts and one when it ends`,
+    ];
+  }
+
+  // What a caller needs from a failure is the reason, so it can decide
+  // whether to ask again. Matched against what the endpoint itself said,
+  // never against wording (SPEC.md §1).
+  const failures: string[] = [];
+  const failed = reported.filter((e) => e.phase === 'failed');
+  const refusals = folds.filter((t) => t.compaction === 'failed').map((t) => t.fails);
+  for (const [i, event] of failed.entries()) {
+    const refusal = refusals[i];
+    if (!refusal) continue;
+    const indicators = [String(refusal.status), ...scalarLeaves(refusal.body)];
+    if (!indicators.some((s) => (event.error ?? '').includes(s))) {
+      failures.push(
+        `the fold's failure reached the caller as ${JSON.stringify(event.error)}, which carries none of ` +
+          `${JSON.stringify(indicators)} — a caller decides from what the endpoint said whether to ask again`,
+      );
+    }
+  }
+  return failures;
+}
+
+function scalarLeaves(value: unknown): string[] {
+  if (value === null || value === undefined) return [];
+  if (typeof value !== 'object') return [String(value)];
+  return Object.values(value as object).flatMap(scalarLeaves);
 }
 
 /**

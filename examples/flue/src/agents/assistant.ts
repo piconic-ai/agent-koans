@@ -1,11 +1,12 @@
 // The agent itself, defined with Flue's hooks API.
 // This file is the part that agent-koans verifies.
 'use agent';
-import { useInitialData, useModel } from '@flue/runtime';
+import { useAgentStart, useInitialData, useModel } from '@flue/runtime';
 import { CONTEXT_WINDOW } from '../provider.js';
 import { useReadFileTool } from '../read-file.js';
 import { useRunSubagents, type RunSubagentDef } from '../subagents.js';
 import { useRunTools, type RunToolDef } from '../tools.js';
+import { noteInstanceStores } from '../compaction.js';
 
 /** The run's context window and compaction policy (SPEC.md §3). */
 export interface RunContext {
@@ -14,6 +15,8 @@ export interface RunContext {
 }
 
 export interface AssistantData {
+  /** The run this instance serves, so a fold asked for between turns finds it. */
+  runId: string;
   tools: RunToolDef[];
   toolsBaseUrl: string;
   subagents: RunSubagentDef[];
@@ -26,15 +29,26 @@ export interface AssistantData {
 // converted against the registered one. `keepRecentTokens` is 0 because
 // the harness's conversations are a few hundred bytes against a six-figure
 // declared size — any "recent" history would be all of it.
+//
+// A run that declares no threshold is written as a reserve of one token
+// rather than `compaction: false`, which would say the same thing about
+// folding on its own and one thing more: the tuning above is what a fold
+// the caller asks for reads too, and without it such a fold finds every
+// message recent and nothing to summarize.
 function compactionOf(context: RunContext | undefined) {
-  if (context?.compaction === undefined) return false as const;
+  if (context?.compaction === undefined) return { reserveTokens: 1, keepRecentTokens: 0 };
   const threshold = Math.ceil((context.window * context.compaction.at_percent) / 100);
   return { reserveTokens: CONTEXT_WINDOW - threshold, keepRecentTokens: 0 };
 }
 
 export function Assistant() {
-  const data = useInitialData<AssistantData>() ?? { tools: [], toolsBaseUrl: '', subagents: [], workspaceDir: '' };
+  const data = useInitialData<AssistantData>() ?? { runId: '', tools: [], toolsBaseUrl: '', subagents: [], workspaceDir: '' };
   useModel('koan/default', { compaction: compactionOf(data.context) });
+  // The stores a fold asked for between turns needs, taken while a render
+  // holds them (compaction.ts).
+  useAgentStart(({ harness }) => {
+    noteInstanceStores(data.runId, harness);
+  });
   useRunTools(data.tools, data.toolsBaseUrl);
   useReadFileTool(data.workspaceDir);
   useRunSubagents(data.subagents, data.tools, data.toolsBaseUrl, data.workspaceDir);

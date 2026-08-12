@@ -8,4 +8,4 @@ Nothing else follows from a refused fold. Whether the agent carries on — it ma
 
 A fold may also sit straight after a refused one, which is an agent asking again for what it did not get. Everywhere else the rule is unchanged: a fold belongs at the start of a later turn, the one position where every implementation has run out of room to defer it.
 
-`examples/flue` skips the new koan for the same reason it skips `030-compaction-on-request`: the fold this koan refuses is one the caller asked for, and Flue has nothing there for a caller to reach.
+Both bundled examples walk a branch of the new koan: `examples/vanilla-ts` ends the run on the refusal, `examples/flue` carries on. That is the branching this koan exists for.

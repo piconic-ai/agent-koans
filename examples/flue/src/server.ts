@@ -7,6 +7,7 @@ import { AgentRunError, type AgentInstanceHandle, init, observe } from '@flue/ru
 import { start } from '@flue/runtime/node';
 import { Assistant, type AssistantData, type RunContext } from './agents/assistant.js';
 import { armBudget, budgetTripped } from './budget.js';
+import { compactConversation } from './compaction.js';
 import { loadConfig } from './config.js';
 import { createKoanProvider } from './provider.js';
 import type { RunSubagentDef } from './subagents.js';
@@ -115,6 +116,7 @@ function startRun(
   handles.set(run.run_id, agent);
   runsByInstance.set(agent.id, run);
   const initialData: AssistantData = {
+    runId: run.run_id,
     tools,
     toolsBaseUrl: config.tools.baseUrl,
     subagents,
@@ -142,6 +144,24 @@ function sendPrompt(runId: string, prompt: string): boolean {
   run.output = undefined;
   run.error = undefined;
   runTurn(run, agent, prompt);
+  return true;
+}
+
+/**
+ * Fold this run's conversation down, because its caller asked (SPEC.md
+ * §3). Returns `false` when `runId` is unknown, so the caller can answer
+ * 404. A fold that fails is not an error at the asking: the run reports it
+ * through `events`, which is what its caller reads to decide whether to
+ * ask again.
+ */
+async function compactRun(runId: string): Promise<boolean> {
+  const agent = handles.get(runId);
+  if (!agent) return false;
+  try {
+    await compactConversation(runId, agent.id);
+  } catch {
+    // Reported through the compaction events the observer above records.
+  }
   return true;
 }
 
@@ -195,6 +215,12 @@ app.post('/runs/:id/prompts', async (c) => {
     return c.json({ error: 'prompt is required' }, 400);
   }
   const known = sendPrompt(c.req.param('id'), prompt);
+  if (!known) return c.json({ error: 'run not found' }, 404);
+  return c.json({}, 202);
+});
+
+app.post('/runs/:id/compact', async (c) => {
+  const known = await compactRun(c.req.param('id'));
   if (!known) return c.json({ error: 'run not found' }, 404);
   return c.json({}, 202);
 });

@@ -44,7 +44,7 @@ turns:
       - request: compaction
         response: "Earlier: incident INC-4407 has operator code K-9-4471."
         used_tokens: 20000
-        report: completed
+        compaction: completed
       - request: model
         response: "The operator code is K-9-4471."
     then:

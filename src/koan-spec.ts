@@ -126,19 +126,20 @@ export type Step =
    * reached `given.context.compaction` down to a summary. Everything a
    * fold does is written on it: `summary` is what the mock replies, and
    * the conversation's next request must carry that reply; `used_tokens`
-   * is what the conversation shrank to; `report` is how the run told its
-   * caller the fold ended. The request itself is the fold beginning, so
-   * only its ending is written.
+   * is what the conversation shrank to; `compaction` is how the run
+   * reported the fold's ending to its caller, named after the event it
+   * has to appear as. The request itself is the fold beginning, so only
+   * its ending is written.
    *
    * A step of its own, not an annotation on the model step after it: an
    * agent that never folds then has no step to consume here, and one that
    * folds where no koan scripted it none to consume there, so the trace
    * stays the assertion.
    */
-  | { kind: 'compaction'; summary: string; used_tokens: number; report: CompactionReport };
+  | { kind: 'compaction'; summary: string; used_tokens: number; compaction: CompactionReport };
 
 /**
- * How a fold ended, as its run reported it to the caller. One word today:
+ * How a fold ended, as its run reported it to its caller. One word today:
  * a fold that fails is not scriptable until the contract says what an
  * agent owes a run whose fold did not happen, and `failed` joins this
  * vocabulary with it.

@@ -96,8 +96,8 @@ export interface ModelTurn {
    * fold forever.
    */
   usedTokens: number;
-  /** Set on the auxiliary request that folds the conversation down; `reply` is the summary served to it. */
-  compaction?: { report: CompactionReport };
+  /** Set on the auxiliary request that folds the conversation down: how the run reported its ending. `reply` is the summary served to it. */
+  compaction?: CompactionReport;
   /** This turn's tool-call instruction(s); more than one means a parallel group. */
   call_tools?: CallToolInstruction[];
   /** This turn's delegation instruction(s), each scripted by a following subagent block. */
@@ -337,7 +337,7 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
       case 'compaction': {
         // `openCalls` survives: folding a conversation down is not what
         // closes a call, so one still open across it stays open.
-        conv.turns.push({ reply: step.summary, usedTokens: step.used_tokens, compaction: { report: step.report } });
+        conv.turns.push({ reply: step.summary, usedTokens: step.used_tokens, compaction: step.compaction });
         break;
       }
       case 'tool': {

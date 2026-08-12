@@ -163,7 +163,7 @@ function judgeReportedFolds(trace: Trace, run: RunState): string[] {
   const reported = (run.events ?? []).filter((e) => e.type === 'compaction');
   // A fold's beginning is the request itself; the koan writes only how it
   // ended, so that is the only phase read off the trace.
-  const expected = folds.flatMap((t) => ['started', t.compaction!.report]);
+  const expected = folds.flatMap((t) => ['started', t.compaction as string]);
   const actual = reported.map((e) => String(e.phase));
   if (actual.length === expected.length && actual.every((phase, i) => phase === expected[i])) return [];
   const detail = reported.map((e) => `${e.phase}${e.error ? ` (${e.error})` : ''}`).join(', ') || 'nothing';

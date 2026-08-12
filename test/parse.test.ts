@@ -500,7 +500,7 @@ const rows: Row[] = [
           intercept: p
     `),
     message:
-      'when[0] has unknown key "intercept" — a trace step carries only "request", "response", "used_tokens", and, on a tool step, "prompt" (on a compaction request, "report")',
+      `when[0] has unknown key "intercept" — a trace step carries only "request", "response", "used_tokens", a tool step's "prompt", and a compaction request's "compaction"`,
   },
   {
     rule: 'a mid-run "prompt" belongs on a tool step',
@@ -1038,7 +1038,7 @@ const rows: Row[] = [
         - request: compaction
           response: "so far"
           used_tokens: 10
-          report: completed
+          compaction: completed
         - request: model
           response: ok
     `),
@@ -1103,7 +1103,7 @@ const rows: Row[] = [
             - request: compaction
               response: "so far"
               used_tokens: 10
-              report: completed
+              compaction: completed
             - request: model
               response: ok
     `)}`,
@@ -1127,7 +1127,7 @@ const rows: Row[] = [
           when:
             - request: compaction
               response: "so far"
-              report: completed
+              compaction: completed
             - request: model
               response: ok
     `)}`,
@@ -1156,7 +1156,7 @@ const rows: Row[] = [
               response: ok
     `)}`,
     message:
-      'turns[1].when[0] needs "report: completed" — how the run told its caller the fold ended. A fold that ends any other way is not scriptable yet',
+      'turns[1].when[0] needs "compaction: completed" — how the run reported this fold\'s ending to its caller. A fold that ends any other way is not scriptable yet',
   },
   {
     rule: 'a trace fits the model-request budget',

@@ -415,20 +415,20 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     // that can be dropped hurt most: a mistyped `prompt` leaves a koan
     // that still passes while scripting no delivery at all.
     for (const key of Object.keys(entry as Record<string, unknown>)) {
-      if (key !== 'request' && key !== 'response' && key !== 'prompt' && key !== 'used_tokens' && key !== 'report') {
+      if (key !== 'request' && key !== 'response' && key !== 'prompt' && key !== 'used_tokens' && key !== 'compaction') {
         return problem(
-          `${at_i} has unknown key "${key}" — a trace step carries only "request", "response", "used_tokens", and, on a tool step, "prompt" (on a compaction request, "report")`,
+          `${at_i} has unknown key "${key}" — a trace step carries only "request", "response", "used_tokens", a tool step's "prompt", and a compaction request's "compaction"`,
         );
       }
     }
-    const rawReport = (entry as Record<string, unknown>).report;
+    const rawReport = (entry as Record<string, unknown>).compaction;
     const rawUsed = (entry as Record<string, unknown>).used_tokens;
     if (rawUsed !== undefined && (!Number.isInteger(rawUsed) || (rawUsed as number) < 0)) {
       return problem(`${at_i}.used_tokens must be a non-negative integer — the size this response reports the conversation to have reached`);
     }
 
     if (rawReport !== undefined && req !== 'compaction') {
-      return problem(`${at_i}: "report" belongs on a compaction request — it says how the run told its caller a fold ended`);
+      return problem(`${at_i}: "compaction" belongs on a compaction request — it says how the run reported that fold's ending`);
     }
 
     if (req === 'model') {
@@ -520,10 +520,10 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       }
       if (rawReport !== 'completed') {
         return problem(
-          `${at_i} needs "report: completed" — how the run told its caller the fold ended. A fold that ends any other way is not scriptable yet`,
+          `${at_i} needs "compaction: completed" — how the run reported this fold's ending to its caller. A fold that ends any other way is not scriptable yet`,
         );
       }
-      steps.push({ kind: 'compaction', summary: res, used_tokens: rawUsed as number, report: 'completed' });
+      steps.push({ kind: 'compaction', summary: res, used_tokens: rawUsed as number, compaction: 'completed' });
     } else {
       return problem(`${at_i}.request must be "model", "compaction", or { tool: <name> }`);
     }

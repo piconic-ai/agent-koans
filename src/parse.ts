@@ -42,6 +42,8 @@ import type {
   AbortKind,
   Args,
   Body,
+  Compaction,
+  ContextSetup,
   Given,
   Instruction,
   Judgment,
@@ -160,7 +162,43 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
     limits = { max_model_requests: max as number };
   }
 
-  return { tools: tools as Record<string, ToolDef>, files, limits };
+  const context = parseContext(g.context);
+  if (isProblem(context)) return context;
+
+  return { tools: tools as Record<string, ToolDef>, files, limits, context };
+}
+
+// Both keys are required once the block is written: a window with no
+// policy leaves "what happens when it fills" to the implementation, which
+// is the one thing this block exists to pin down, and a policy with no
+// window has nothing to be a share of.
+function parseContext(raw: unknown): Parsed<ContextSetup | undefined> {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return problem('"given.context" must be a mapping (keys: window, compaction)');
+  }
+  const c = raw as Record<string, unknown>;
+  for (const key of Object.keys(c)) {
+    if (key !== 'window' && key !== 'compaction') {
+      return problem(`"given.context" has unknown key "${key}" (allowed: window, compaction)`);
+    }
+  }
+  if (!Number.isInteger(c.window) || (c.window as number) < 1) {
+    return problem('"given.context.window" must be a positive integer (the window in tokens)');
+  }
+  const compaction = parseCompaction(c.compaction);
+  if (isProblem(compaction)) return compaction;
+  return { window: c.window as number, compaction };
+}
+
+function parseCompaction(raw: unknown): Parsed<Compaction> {
+  if (raw === 'off') return { kind: 'off' };
+  const match = typeof raw === 'string' ? /^(\d{1,3})%$/.exec(raw) : null;
+  const percent = match ? Number(match[1]) : NaN;
+  if (!Number.isInteger(percent) || percent < 1 || percent > 100) {
+    return problem('"given.context.compaction" must be "off" or a percentage of the window, like "90%"');
+  }
+  return { kind: 'threshold', percent };
 }
 
 // A `turns:` koan replaces the top-level `prompt` and `when`/`one_of`;
@@ -367,6 +405,32 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       continue;
     }
 
+    if (typeof item === 'object' && item !== null && 'compaction' in item) {
+      const block = item as Record<string, unknown>;
+      for (const key of Object.keys(block)) {
+        if (key !== 'compaction') {
+          return problem(`${at_i} has unknown key "${key}" — a compaction step carries only "compaction", the summary served to it`);
+        }
+      }
+      // The one place a compaction is scripted at all. An agent folds the
+      // conversation down by the start of the next turn (SPEC.md §3), and
+      // where inside a turn it does so is its own: some fold before the
+      // next request of a turn already running, some when the turn that
+      // crossed the threshold settles. Both satisfy the contract, so a
+      // compaction written anywhere but a turn's first step would pin down
+      // one of them and the trace would stop being decidable.
+      if (!inTurns || i !== 0) {
+        return problem(
+          `${at_i}: a compaction step belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn's first model request goes out, and where inside the turn before it is the agent's own business`,
+        );
+      }
+      if (typeof block.compaction !== 'string' || block.compaction.trim().length === 0) {
+        return problem(`${at_i}.compaction must be a non-empty string — the summary the mock serves the compaction request`);
+      }
+      steps.push({ kind: 'compaction', summary: block.compaction });
+      continue;
+    }
+
     const entry = item as { request?: unknown; response?: unknown; prompt?: unknown } | null;
     const req = entry?.request;
     const res = entry?.response;
@@ -378,11 +442,15 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     // that can be dropped hurt most: a mistyped `prompt` leaves a koan
     // that still passes while scripting no delivery at all.
     for (const key of Object.keys(entry as Record<string, unknown>)) {
-      if (key !== 'request' && key !== 'response' && key !== 'prompt') {
+      if (key !== 'request' && key !== 'response' && key !== 'prompt' && key !== 'used_tokens') {
         return problem(
-          `${at_i} has unknown key "${key}" — a trace step carries only "request", "response", and, on a tool step, "prompt"`,
+          `${at_i} has unknown key "${key}" — a trace step carries only "request", "response", "used_tokens", and, on a tool step, "prompt"`,
         );
       }
+    }
+    const rawUsed = (entry as Record<string, unknown>).used_tokens;
+    if (rawUsed !== undefined && (!Number.isInteger(rawUsed) || (rawUsed as number) < 0)) {
+      return problem(`${at_i}.used_tokens must be a non-negative integer — the size this response reports the conversation to have reached`);
     }
 
     if (req === 'model') {
@@ -414,7 +482,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       }
       const response = parseModelResponse(into(ctx, `[${i}]`, res), inSubagent);
       if (isProblem(response)) return response;
-      steps.push({ kind: 'model', response });
+      steps.push({ kind: 'model', response, ...(rawUsed !== undefined ? { used_tokens: rawUsed as number } : {}) });
     } else if (typeof req === 'object' && req !== null && typeof (req as Record<string, unknown>).tool === 'string') {
       const reqTool = (req as Record<string, unknown>).tool as string;
       // No shape check on the request's own args: it is a declared
@@ -425,6 +493,11 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         return problem(`${at_i}.response needs a numeric "status" for a tool request`);
       }
       const r = res as { status: number; body?: unknown };
+      if (rawUsed !== undefined) {
+        return problem(
+          `${at_i}: "used_tokens" belongs on a model step — it is what a model response reports, not something a tool request carries`,
+        );
+      }
       if (rawPrompt !== undefined) {
         if (inTurns) {
           return problem(
@@ -461,6 +534,14 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     return problem(
       `${at}: a trace carries either "abort" or a mid-run "prompt", not both — cancelling a held invocation is not scripted yet`,
     );
+  }
+  // The summary has to land somewhere: it is folded into the conversation
+  // it summarized, and the request carrying it is what shows that.
+  for (let i = 0; i < steps.length; i++) {
+    if (steps[i].kind !== 'compaction') continue;
+    if (steps[i + 1]?.kind !== 'model') {
+      return problem(`${at}[${i}]: a compaction step needs a model request after it — otherwise no request carries its summary`);
+    }
   }
   if (sentPromptAt !== -1 && !steps.slice(sentPromptAt + 1).some((s) => s.kind === 'model')) {
     return problem(
@@ -662,6 +743,8 @@ const constraints: Constraint[] = [
   eachSubagentIsDelegatedToOnce,
   openingsAreDistinct,
   theTraceFitsTheModelRequestBudget,
+  usedTokensFitTheWindow,
+  compactionMatchesTheDeclaredThreshold,
 ];
 
 /**
@@ -773,6 +856,10 @@ function checkToolMatching(steps: Step[], at: string): Problem | undefined {
       if (found) return found;
       continue;
     }
+    // Folding the conversation down neither opens nor closes a call: a
+    // call still open across it stays open, and its tool request may
+    // still come.
+    if (step.kind === 'compaction') continue;
 
     if (pending === undefined) {
       return problem(`${at_i}: a tool request must follow a model response containing a tool-call instruction`);
@@ -893,8 +980,9 @@ function collectBriefings(steps: Step[], out: Array<{ label: string; text: strin
   }
 }
 
-// Subagent conversations count too: the budget counts HTTP requests at the model
-// endpoint, and a delegate's requests arrive there as well.
+// Subagent conversations and compactions count too: the budget counts HTTP
+// requests at the model endpoint, and a delegate's requests — and the one
+// that asks for a summary — arrive there as well.
 function theTraceFitsTheModelRequestBudget(koan: KoanFile): Problem | undefined {
   const maxRequests = koan.given.limits?.max_model_requests;
   if (maxRequests === undefined) return undefined;
@@ -907,10 +995,159 @@ function theTraceFitsTheModelRequestBudget(koan: KoanFile): Problem | undefined 
   return undefined;
 }
 
+/** One conversation of a scripted trace, split where a new turn begins. */
+type ScriptedConversation = Array<{ steps: Step[]; at: string }>;
+
+// The sizes a step reports belong to one conversation, and the point a
+// compaction may sit at is a turn's start, so the two rules below walk
+// conversations turn by turn rather than walking traces: a subagent
+// block's steps are the child's, the child's conversation starts empty
+// however full the parent's is, and only a `turns:` koan's main
+// conversation has more than one turn to speak of.
+function scriptedConversations(koan: KoanFile): ScriptedConversation[] {
+  const found: ScriptedConversation[] = [];
+
+  const addSubagents = (steps: Step[], at: string): void => {
+    for (const [i, step] of steps.entries()) {
+      if (step.kind !== 'subagent') continue;
+      const nested = `${at}[${i}].when`;
+      found.push([{ steps: step.trace.steps, at: nested }]);
+      addSubagents(step.trace.steps, nested);
+    }
+  };
+
+  const body = koan.body;
+  if (body.kind === 'turns') {
+    found.push(body.turns.map((t, i) => ({ steps: t.trace.steps, at: `turns[${i}].when` })));
+    for (const [i, t] of body.turns.entries()) addSubagents(t.trace.steps, `turns[${i}].when`);
+    return found;
+  }
+
+  const traces =
+    body.kind === 'single'
+      ? [{ steps: body.trace.steps, at: 'when' }]
+      : Object.entries(body.variants).map(([name, trace]) => ({ steps: trace.steps, at: `one_of.${name}` }));
+  for (const trace of traces) {
+    found.push([trace]);
+    addSubagents(trace.steps, trace.at);
+  }
+  return found;
+}
+
+/**
+ * A conversation grows into the declared window and only a compaction
+ * folds it back down. Written sizes are checked against the window here
+ * rather than while parsing a step, since the window lives in `given` and
+ * a single step cannot see it.
+ */
+function usedTokensFitTheWindow(koan: KoanFile): Problem | undefined {
+  const context = koan.given.context;
+  for (const conv of scriptedConversations(koan)) {
+    let used = 0;
+    let compacted = false;
+    for (const turn of conv) {
+      for (const [i, step] of turn.steps.entries()) {
+        if (step.kind === 'compaction') {
+          compacted = true;
+          continue;
+        }
+        if (step.kind !== 'model') continue;
+        const written = step.used_tokens;
+        if (written !== undefined) {
+          if (context === undefined) {
+            return problem(`${turn.at}[${i}]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of`);
+          }
+          if (written > context.window) {
+            return problem(`${turn.at}[${i}]: used_tokens (${written}) is larger than given.context.window (${context.window})`);
+          }
+          if (written < used && !compacted) {
+            return problem(
+              `${turn.at}[${i}]: used_tokens falls from ${used} to ${written} — a conversation shrinks only where a compaction step folds it down`,
+            );
+          }
+          used = written;
+        }
+        compacted = false;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Where a compaction step may sit, given the declared threshold. Two rules
+ * meet here, and between them they leave exactly one place to write one.
+ *
+ * A turn that has reached the threshold cannot ask for another model
+ * request: the agent may fold the conversation down before it or after the
+ * turn settles, so the trace could not say which. And a turn that begins
+ * with the threshold already reached must open with the fold, because by
+ * its first request the agent has run out of room to defer it.
+ */
+function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefined {
+  const context = koan.given.context;
+  const compaction = context?.compaction;
+  const threshold =
+    context !== undefined && compaction?.kind === 'threshold'
+      ? Math.ceil((context.window * compaction.percent) / 100)
+      : undefined;
+
+  for (const conv of scriptedConversations(koan)) {
+    let used = 0;
+    for (const turn of conv) {
+      let folding = false;
+      let over = threshold !== undefined && used >= threshold;
+      if (over && turn.steps[0].kind !== 'compaction') {
+        return problem(
+          `${turn.at}[0]: the conversation carries ${used} of ${context!.window} tokens into this turn, at or above the threshold of ${threshold} — it must open with a compaction step`,
+        );
+      }
+      for (const [i, step] of turn.steps.entries()) {
+        if (step.kind === 'compaction') {
+          if (threshold === undefined) {
+            return problem(
+              `${turn.at}[${i}]: a compaction step needs "given.context.compaction" to name a threshold — with "off", or with no "given.context" at all, the agent must not compact`,
+            );
+          }
+          if (!over) {
+            return problem(
+              `${turn.at}[${i}]: the conversation is at ${used} tokens, below the threshold of ${threshold} — nothing has asked the agent to fold it down here`,
+            );
+          }
+          folding = true;
+          over = false;
+          continue;
+        }
+        if (step.kind !== 'model') continue;
+        if (folding) {
+          // Written, never derived: the koan says how much room folding
+          // the conversation down won, and a reader sees it fall.
+          if (step.used_tokens === undefined) {
+            return problem(`${turn.at}[${i}]: the model request after a compaction must write "used_tokens" — what the conversation shrank to`);
+          }
+          if (step.used_tokens >= threshold!) {
+            return problem(
+              `${turn.at}[${i}]: used_tokens (${step.used_tokens}) is still at or above the threshold of ${threshold} — the agent would fold the conversation down again immediately`,
+            );
+          }
+        } else if (over) {
+          return problem(
+            `${turn.at}[${i}]: the conversation reached ${used} of ${context!.window} tokens, at or above the threshold of ${threshold}, earlier in this turn — a turn cannot ask for another model request past its threshold, since when the agent folds it down before the next turn is the agent's own business`,
+          );
+        }
+        if (step.used_tokens !== undefined) used = step.used_tokens;
+        over = threshold !== undefined && used >= threshold;
+        folding = false;
+      }
+    }
+  }
+  return undefined;
+}
+
 function countModelRequests(steps: Step[]): number {
   let n = 0;
   for (const step of steps) {
-    if (step.kind === 'model') n++;
+    if (step.kind === 'model' || step.kind === 'compaction') n++;
     else if (step.kind === 'subagent') n += countModelRequests(step.trace.steps);
   }
   return n;

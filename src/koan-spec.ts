@@ -18,7 +18,9 @@
 // it can build a value these types will accept — the type removes the
 // question of what a *valid* file looks like, not the duty to reject an
 // invalid one. What remains for parse.ts beyond that duty is the rules no
-// type can carry at all: uniqueness, cross-references, and budgets.
+// type can carry at all: uniqueness, cross-references, budgets, and where
+// a `compaction` step may sit — a question only the declared threshold and
+// the sizes the surrounding steps report can answer.
 
 /** A tool as declared in `given.tools`; `input_schema` is JSON Schema. */
 export interface ToolDef {
@@ -42,7 +44,36 @@ export interface Given {
   /** Relative path → content, materialized into `KOAN_WORKSPACE` (§2). */
   files?: Record<string, string>;
   limits?: { max_model_requests: number };
+  /** The window the conversation grows into, and when to fold it down. */
+  context?: ContextSetup;
 }
+
+/**
+ * The model's context window for the run, and what the agent does as the
+ * conversation fills it. Part of `given` rather than `limits`: `limits`
+ * bounds what the caller lets the agent spend, while this describes the
+ * world the run is given — how much room the model has, and the policy the
+ * caller chose for using it up.
+ */
+export interface ContextSetup {
+  /** The window in tokens; a step's `used_tokens` is measured against it. */
+  window: number;
+  compaction: Compaction;
+}
+
+/**
+ * When the agent compacts, as a share of the window. `off` is written
+ * rather than left out so that a koan testing "never compact" states that
+ * policy instead of relying on a default; a koan with no `given.context`
+ * at all means the same thing, which is why every koan written before this
+ * existed keeps its meaning.
+ *
+ * A percentage, not a token count: the threshold that matters is relative
+ * to the window, and writing it that way leaves the two numbers a koan
+ * carries — the window and the usage — free of a third that must agree
+ * with both.
+ */
+export type Compaction = { kind: 'off' } | { kind: 'threshold'; percent: number };
 
 /**
  * The three ways to script a run, as a union: a koan is exactly one of
@@ -85,10 +116,30 @@ export type AbortKind = 'live' | 'late';
  * that could legally add zero new steps — see parse.ts's header).
  */
 export type Step =
-  | { kind: 'model'; response: ModelResponse }
+  /**
+   * `used_tokens` is what this response reports the conversation to have
+   * grown to. It holds until another step writes one, so a koan states a
+   * size once rather than on every step that keeps it; the conversation
+   * starts at zero, and only a `compaction` step lets the number fall.
+   */
+  | { kind: 'model'; response: ModelResponse; used_tokens?: number }
   /** `prompt` is one the caller sends while this invocation is held open. */
   | { kind: 'tool'; tool: string; args?: ParsedArgs; response: ToolResponse; prompt?: string }
-  | { kind: 'subagent'; name: string; trace: Trace };
+  | { kind: 'subagent'; name: string; trace: Trace }
+  /**
+   * The extra model request an agent makes to fold a conversation that has
+   * reached `given.context.compaction` down to a summary — `summary` is
+   * what the mock replies to it, and the conversation's next request must
+   * carry that reply.
+   *
+   * Its own step rather than an annotation on the model step it precedes:
+   * it is a request the agent makes, so it occupies a place in the trace
+   * the same way every other request does, and the trace stays the
+   * assertion — an agent that does not compact has no step to consume
+   * here, and one that compacts where no koan scripted it has no step to
+   * consume there.
+   */
+  | { kind: 'compaction'; summary: string };
 
 /**
  * What the mock LLM serves for a model request. A tool-call instruction and

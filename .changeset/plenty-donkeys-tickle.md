@@ -1,0 +1,9 @@
+---
+'agent-koans': minor
+---
+
+Context pressure is now part of the contract. A run may declare the model's context window and the share of it at which the agent compacts — `POST /runs` gains `context: { window, compaction: { at_percent } }` — and a koan declares the same thing as `given.context: { window, compaction: 90% }`. Where a run declares no threshold, and where it declares no context at all, the agent must not compact, which is what every koan written before this one silently assumed and SPEC.md now says. Where it declares one, the size to compare against is the last `usage.prompt_tokens` the model endpoint reported for that conversation, and the fold must have happened by the time the conversation's next turn issues its first model request.
+
+Whether to compact is the caller's setting, not the agent's own policy, so the suite verifies both positions of it. `028-context-compaction` fills the window past the threshold in one turn and requires the next turn to open on a folded conversation: one extra model request, answered with a summary, and that summary carried back in with what the task still needs. `029-compaction-off` scripts the same pressure with compaction off and requires the conversation to be carried as it stands.
+
+Where inside a turn the fold happens is deliberately left open, because implementations differ on purpose: some compact before the running turn's next request, some once the turn settles. Both conform, so a compaction step may only be written at the start of a later turn — the one position where every implementation has run out of room to defer it. A koan scripts the sizes the model reports with `used_tokens` on a model step, which holds until another step writes one and may fall only across a fold.

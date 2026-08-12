@@ -5,7 +5,7 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { AgentRunError, type AgentInstanceHandle, init } from '@flue/runtime';
 import { start } from '@flue/runtime/node';
-import { Assistant, type AssistantData } from './agents/assistant.js';
+import { Assistant, type AssistantData, type RunContext } from './agents/assistant.js';
 import { armBudget, budgetTripped } from './budget.js';
 import { loadConfig } from './config.js';
 import { createKoanProvider } from './provider.js';
@@ -64,7 +64,13 @@ function runTurn(run: Run, agent: AgentInstanceHandle, prompt: string, initialDa
   })();
 }
 
-function startRun(prompt: string, tools: RunToolDef[], subagents: RunSubagentDef[], limits?: RunLimits): Run {
+function startRun(
+  prompt: string,
+  tools: RunToolDef[],
+  subagents: RunSubagentDef[],
+  limits?: RunLimits,
+  context?: RunContext,
+): Run {
   const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
   runs.set(run.run_id, run);
   armBudget(limits?.max_model_requests);
@@ -77,6 +83,7 @@ function startRun(prompt: string, tools: RunToolDef[], subagents: RunSubagentDef
     toolsBaseUrl: config.tools.baseUrl,
     subagents,
     workspaceDir: config.workspace.dir,
+    context,
   };
   runTurn(run, agent, prompt, initialData);
   return run;
@@ -127,6 +134,7 @@ app.post('/runs', async (c) => {
       tools?: RunToolDef[];
       subagents?: RunSubagentDef[];
       limits?: RunLimits;
+      context?: RunContext;
     }>()
     .catch(() => null);
   const prompt = body?.prompt;
@@ -134,7 +142,7 @@ app.post('/runs', async (c) => {
     return c.json({ error: 'prompt is required' }, 400);
   }
   // The run executes asynchronously; the caller polls GET /runs/{id}.
-  const run = startRun(prompt, body?.tools ?? [], body?.subagents ?? [], body?.limits);
+  const run = startRun(prompt, body?.tools ?? [], body?.subagents ?? [], body?.limits, body?.context);
   return c.json({ run_id: run.run_id }, 202);
 });
 

@@ -83,7 +83,7 @@ run's state must *do*.
 | Endpoint | Purpose |
 | -------- | ------- |
 | `GET /health` | Readiness. `200` once you can accept runs |
-| `POST /runs` | Submit a prompt, plus the run's tools, subagents, and limits |
+| `POST /runs` | Submit a prompt, plus the run's tools, subagents, limits, and context settings |
 | `GET /runs/{run_id}` | Poll the run's state |
 | `POST /runs/{run_id}/abort` | Cancel a run |
 | `POST /runs/{run_id}/prompts` | Continue a run's conversation |
@@ -103,7 +103,8 @@ rewrites a committed result, and repeated aborts are idempotent.
 **Follow-up prompts.** A prompt sent to a settled run MUST re-open it:
 `status` returns to `running`, the run reaches a terminal state again, and
 `output` carries the new turn's answer. The conversation MUST carry every
-earlier turn into this turn's model requests.
+earlier turn into this turn's model requests — verbatim, unless the run
+asked you to compact and you folded them into a summary (below).
 
 A prompt sent to a run still `running` MUST be accepted too, and MUST NOT
 then be dropped: the run MUST reach a terminal state carrying an answer to
@@ -112,6 +113,19 @@ boundary, or waits and runs as its own turn once that one settles, is
 yours to choose — both conform. A queueing agent MAY report a terminal
 state in between, since that is the earlier submission settling, and a
 prompt sent to a settled run re-opens it.
+
+**Context.** A run MAY declare the model's context window and the share of
+it at which the agent compacts — folds the conversation into a summary and
+carries on from it. Where a run declares no threshold, and where it
+declares no context at all, you MUST NOT compact. Where it declares one,
+the size to compare against is the last `usage.prompt_tokens` the model
+endpoint reported for that conversation, not an estimate of your own. Once
+that size reaches the threshold, you MUST have compacted by the time the
+conversation's next turn issues its first model request — whether you fold
+it down before the running turn's next request, or once that turn settles,
+is yours. Summarizing is an ordinary request to the same endpoint; what it
+carries is yours to choose, and its reply MUST reach the conversation it
+summarized.
 
 ## 4. Talking to the model
 
@@ -221,6 +235,8 @@ it cannot drift from the contract it indexes.
 | [025-subagent-budget](./koans/025-subagent-budget.yaml) | A delegate's model requests draw from the same budget as the main conversation, not a fresh one of its own. The budget is exhausted by the main request plus the child's two, right as the child answers — so the parent never gets to make its own next request to report that answer, and the whole run must end aborted. |
 | [026-workspace-read](./koans/026-workspace-read.yaml) | The main conversation reads a workspace file directly, with no subagent involved. "read_file" names a tool the run did not declare, so it must not reach the tool server; naming a given.files entry as args.path marks it instead as the agent's own internal read, whose content must flow into the conversation's next model request and the final answer. |
 | [027-prompt-while-running](./koans/027-prompt-while-running.yaml) | A second prompt is delivered while the run is still running — during a tool invocation the mock holds open, so the run provably has not settled. The agent must accept it, must not lose it, and must still settle with an answer to it. Two processes are acceptable, and the koan is silent about which: join the live conversation at the next turn boundary, or queue the prompt as its own turn once the first submission settles. Either way the held tool call is still closed. A delivery at any other moment of a run is not covered. |
+| [028-context-compaction](./koans/028-context-compaction.yaml) | The run declares the model's context window and the share of it at which the agent compacts. The first turn fills the window past that share, so the second turn cannot open with the conversation as it stands: by its first model request the agent must have folded it into a summary — one extra model request, answered with one. The summary must come back into the conversation carrying what the second turn asks for, an operator code looked up before the fold. Where inside the first turn the agent folds is not covered: before its next request, or once it settles. |
+| [029-compaction-off](./koans/029-compaction-off.yaml) | The same pressure as 028, with compaction switched off. The conversation fills the declared window and the agent must leave it alone: no extra model request, no summary, the history carried as it stands — the trace has no compaction step for one to consume. Being nearly out of room is not itself a reason to end the run, which still completes. |
 
 <!-- koan-index:end -->
 

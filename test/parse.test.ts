@@ -500,7 +500,7 @@ const rows: Row[] = [
           intercept: p
     `),
     message:
-      'when[0] has unknown key "intercept" — a trace step carries only "request", "response", and, on a tool step, "prompt"',
+      'when[0] has unknown key "intercept" — a trace step carries only "request", "response", "used_tokens", and, on a tool step, "prompt"',
   },
   {
     rule: 'a mid-run "prompt" belongs on a tool step',
@@ -967,6 +967,166 @@ const rows: Row[] = [
           response: ok
     `),
     message: `when: prompt and the briefing of subagent "r" are not distinct — no briefing may equal or contain another briefing or the prompt, since requests are attributed to conversations by their opening`,
+  },
+  {
+    rule: '"given.context" needs both a window and a policy',
+    yaml: koan(`
+      given:
+        context:
+          window: 100
+      when:
+        - request: model
+          response: ok
+    `),
+    message: '"given.context.compaction" must be "off" or a percentage of the window, like "90%"',
+  },
+  {
+    rule: '"used_tokens" needs a declared window',
+    yaml: koan(`
+      when:
+        - request: model
+          used_tokens: 50
+          response: ok
+    `),
+    message: 'when[0]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of',
+  },
+  {
+    rule: '"used_tokens" fits the window',
+    yaml: koan(`
+      given:
+        context:
+          window: 100
+          compaction: "off"
+      when:
+        - request: model
+          used_tokens: 101
+          response: ok
+    `),
+    message: 'when[0]: used_tokens (101) is larger than given.context.window (100)',
+  },
+  {
+    rule: 'a conversation shrinks only where a compaction folds it down',
+    yaml: koan(`
+      given:
+        context:
+          window: 100
+          compaction: "off"
+      when:
+        - request: model
+          used_tokens: 50
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - request: model
+          used_tokens: 10
+          response: ok
+    `),
+    message:
+      'when[2]: used_tokens falls from 50 to 10 — a conversation shrinks only where a compaction step folds it down',
+  },
+  {
+    rule: 'a compaction belongs at the start of a later turn',
+    yaml: koan(`
+      given:
+        context:
+          window: 100
+          compaction: "90%"
+      when:
+        - request: model
+          used_tokens: 95
+          response: { tool: x, args: {} }
+        - compaction: "so far"
+        - request: model
+          used_tokens: 10
+          response: ok
+    `),
+    message:
+      'when[1]: a compaction step belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn\'s first model request goes out, and where inside the turn before it is the agent\'s own business',
+  },
+  {
+    rule: 'a turn past the threshold asks for no further model request',
+    yaml: koan(`
+      given:
+        context:
+          window: 100
+          compaction: "90%"
+      when:
+        - request: model
+          used_tokens: 95
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - request: model
+          response: ok
+    `),
+    message:
+      'when[2]: the conversation reached 95 of 100 tokens, at or above the threshold of 90, earlier in this turn — a turn cannot ask for another model request past its threshold, since when the agent folds it down before the next turn is the agent\'s own business',
+  },
+  {
+    rule: 'a turn opening past the threshold opens with a compaction',
+    yaml: `name: x\n${dedent(`
+      given:
+        context:
+          window: 100
+          compaction: "90%"
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              used_tokens: 95
+              response: ok
+        - prompt: b
+          when:
+            - request: model
+              response: ok
+    `)}`,
+    message:
+      'turns[1].when[0]: the conversation carries 95 of 100 tokens into this turn, at or above the threshold of 90 — it must open with a compaction step',
+  },
+  {
+    rule: 'a compaction needs a threshold to have been declared',
+    yaml: `name: x\n${dedent(`
+      given:
+        context:
+          window: 100
+          compaction: "off"
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              used_tokens: 95
+              response: ok
+        - prompt: b
+          when:
+            - compaction: "so far"
+            - request: model
+              used_tokens: 10
+              response: ok
+    `)}`,
+    message:
+      'turns[1].when[0]: a compaction step needs "given.context.compaction" to name a threshold — with "off", or with no "given.context" at all, the agent must not compact',
+  },
+  {
+    rule: 'the request after a compaction says what the conversation shrank to',
+    yaml: `name: x\n${dedent(`
+      given:
+        context:
+          window: 100
+          compaction: "90%"
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              used_tokens: 95
+              response: ok
+        - prompt: b
+          when:
+            - compaction: "so far"
+            - request: model
+              response: ok
+    `)}`,
+    message:
+      'turns[1].when[1]: the model request after a compaction must write "used_tokens" — what the conversation shrank to',
   },
   {
     rule: 'a trace fits the model-request budget',

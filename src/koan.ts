@@ -11,6 +11,7 @@ import { parse } from 'yaml';
 import { deepEqual } from './pending.js';
 import type {
   Args,
+  ContextSetup,
   Instruction,
   Judgment as ParsedJudgment,
   KoanFile,
@@ -81,6 +82,22 @@ export interface DelegationInstruction {
 /** One compiled model turn of a trace. */
 export interface ModelTurn {
   reply?: string;
+  /**
+   * What this response reports the conversation to have grown to, resolved
+   * from the trace: a step that writes no `used_tokens` reports whatever
+   * the one before it did.
+   *
+   * A compaction's own response reports the size the fold leaves behind,
+   * not the larger one it was handed. Reporting the pre-fold size would be
+   * closer to what a real summarizing request costs, but it would also
+   * decide, for every implementation, how the auxiliary exchange's usage
+   * must be booked: one that reads the size off the last response it saw
+   * would find itself over the threshold again and compact forever. That
+   * is exactly the internal this suite must not pin down.
+   */
+  usedTokens: number;
+  /** Set on the auxiliary request that folds the conversation down; `reply` is the summary served to it. */
+  compaction?: true;
   /** This turn's tool-call instruction(s); more than one means a parallel group. */
   call_tools?: CallToolInstruction[];
   /** This turn's delegation instruction(s), each scripted by a following subagent block. */
@@ -140,6 +157,18 @@ export interface RunLimits {
   max_model_requests?: number;
 }
 
+/**
+ * The run's context window and compaction policy, as the run submission
+ * carries them. `off` compiles to an absent threshold rather than to a
+ * word of its own: an agent that finds no threshold has nothing to compact
+ * at, which is the same instruction, and it keeps every run submitted
+ * before this existed meaning what it meant.
+ */
+export interface RunContext {
+  window: number;
+  compaction?: { at_percent: number };
+}
+
 /** A koan's judgment on a run's outcome (top-level, or one turn's). */
 export interface Judgment {
   status?: string;
@@ -163,6 +192,7 @@ export interface Koan {
     /** Relative path → content, materialized into `KOAN_WORKSPACE` before the run (SPEC.md §2). */
     files?: Record<string, string>;
     limits?: RunLimits;
+    context?: RunContext;
   };
   /** The run's initial prompt (top-level `prompt:`); undefined for a `turns:` koan. */
   prompt?: string;
@@ -218,20 +248,21 @@ function compileDelegationInstruction(instr: DelegateInstruction): DelegationIns
   return { subagent: instr.subagent, prompt: instr.prompt, final: '' };
 }
 
-function compileModelTurn(response: ModelResponse): ModelTurn {
+function compileModelTurn(response: ModelResponse, usedTokens: number): ModelTurn {
   switch (response.kind) {
     case 'reply':
-      return { reply: response.text };
+      return { reply: response.text, usedTokens };
     case 'instructions': {
       const call_tools = response.instructions.filter(isCall).map(compileCallTool);
       const delegations = response.instructions.filter(isDelegate).map(compileDelegationInstruction);
       return {
+        usedTokens,
         ...(call_tools.length > 0 ? { call_tools } : {}),
         ...(delegations.length > 0 ? { delegations } : {}),
       };
     }
     case 'api-failure':
-      return { fails: { status: response.status, body: response.body } };
+      return { fails: { status: response.status, body: response.body }, usedTokens };
     default:
       return assertNever(response);
   }
@@ -273,11 +304,15 @@ function matchOpenCall(openCalls: OpenCall[], tool: string, args: ParsedArgs | u
 function compileSteps(steps: Step[], conv: Conversation, conversations: Conversation[]): void {
   const delegationBySubagent = new Map<string, DelegationInstruction>();
   let openCalls: OpenCall[] = [];
+  // Read off the conversation, not a local: a `turns:` koan compiles each
+  // turn's steps with a fresh call to this function, into the same
+  // conversation, and the size a turn ends at is where the next one starts.
+  const carried = () => conv.turns.at(-1)?.usedTokens ?? 0;
 
-  for (const step of steps) {
+  for (const [i, step] of steps.entries()) {
     switch (step.kind) {
       case 'model': {
-        const turn = compileModelTurn(step.response);
+        const turn = compileModelTurn(step.response, step.used_tokens ?? carried());
         conv.turns.push(turn);
         for (const d of turn.delegations ?? []) delegationBySubagent.set(d.subagent, d);
         openCalls =
@@ -298,6 +333,15 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
         // final reply is what returns to the parent.
         delegationBySubagent.get(step.name)!.final = child.turns.at(-1)!.reply!;
         openCalls = [];
+        break;
+      }
+      case 'compaction': {
+        // The size the fold leaves behind, which parse.ts required the
+        // model step after it to write. Not a turn boundary and not an
+        // answer to anything: the open calls stay open, since folding the
+        // conversation down is not what closes them.
+        const next = steps.slice(i + 1).find((s) => s.kind === 'model') as Extract<Step, { kind: 'model' }>;
+        conv.turns.push({ reply: step.summary, usedTokens: next.used_tokens!, compaction: true });
         break;
       }
       case 'tool': {
@@ -330,7 +374,10 @@ function promptBoundary(conv: Conversation): TurnBoundary | undefined {
   }
   if (prompt === undefined) return undefined;
   for (let s = held + 1; s < conv.turns.length; s++) {
-    if (conv.turns[s - 1].reply !== undefined) return { start: s, prompt };
+    // A compaction's summary is a reply the mock served, not the run's own
+    // answer, so it never marks the seam a queued prompt re-opens.
+    const before = conv.turns[s - 1];
+    if (before.reply !== undefined && !before.compaction) return { start: s, prompt };
   }
   // parse.ts requires a model request after a mid-run prompt, so this exists.
   return { start: held + 1, prompt, joined: true };
@@ -402,11 +449,20 @@ function markInternalReads(trace: Trace, files: Record<string, string>): void {
   }
 }
 
+function compileContext(context: ContextSetup | undefined): RunContext | undefined {
+  if (context === undefined) return undefined;
+  return {
+    window: context.window,
+    ...(context.compaction.kind === 'threshold' ? { compaction: { at_percent: context.compaction.percent } } : {}),
+  };
+}
+
 function compileKoan(parsed: KoanFile): Koan {
   const given = {
     tools: parsed.given.tools as Record<string, ToolDef>,
     files: parsed.given.files,
     limits: parsed.given.limits,
+    context: compileContext(parsed.given.context),
   };
 
   let prompt: string | undefined;

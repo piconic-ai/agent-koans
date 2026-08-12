@@ -1,0 +1,44 @@
+name: compaction-off
+description: >
+  The same pressure as 028, with compaction switched off. The conversation
+  fills the declared window and the agent must leave it alone: no extra
+  model request, no summary, the history carried as it stands — the trace
+  has no compaction step for one to consume. Being nearly out of room is
+  not itself a reason to end the run, which still completes.
+
+given:
+  context:
+    window: 100000
+    compaction: off
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+    check_status:
+      description: "Report the current system status"
+      input_schema:
+        type: object
+        properties: {}
+
+prompt: "Look up incident INC-4407, check the system status, then report the operator code."
+
+when:
+  - request: model
+    response: { tool: lookup_incident, args: { id: "INC-4407" } }
+  - request: { tool: lookup_incident }
+    response: { status: 200, body: { operator_code: "K-9-4471" } }
+  - request: model
+    used_tokens: 95000
+    response: { tool: check_status, args: {} }
+  - request: { tool: check_status }
+    response: { status: 200, body: { load: "high" } }
+  - request: model
+    response: "Operator code K-9-4471; the system load is high."
+
+then:
+  status: completed
+  output: { contains: "K-9-4471" }

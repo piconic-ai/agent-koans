@@ -1,0 +1,49 @@
+name: context-compaction
+description: >
+  The run declares the model's context window and the share of it at which
+  the agent compacts. The first turn fills the window past that share, so
+  the second turn cannot open with the conversation as it stands: by its
+  first model request the agent must have folded it into a summary — one
+  extra model request, answered with one. The summary must come back into
+  the conversation carrying what the second turn asks for, an operator
+  code looked up before the fold. Where inside the first turn the agent
+  folds is not covered: before its next request, or once it settles.
+
+given:
+  context:
+    window: 100000
+    compaction: 90%
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+turns:
+  - prompt: "Look up incident INC-4407 and confirm it is logged."
+    when:
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-4407" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-9-4471" } }
+      # 95000 of the declared 100000 is past the 90% the run compacts at,
+      # so nothing more may be asked of the model until it is folded down.
+      - request: model
+        used_tokens: 95000
+        response: "Incident INC-4407 is logged."
+
+  - prompt: "What was that incident's operator code?"
+    when:
+      # The summary is the mock's own. The request after it must carry the
+      # operator code — whether the agent kept it verbatim or folded it in
+      # here is its own business.
+      - compaction: "Earlier: incident INC-4407 has operator code K-9-4471."
+      - request: model
+        used_tokens: 20000
+        response: "The operator code is K-9-4471."
+    then:
+      status: completed
+      output: { contains: "K-9-4471" }

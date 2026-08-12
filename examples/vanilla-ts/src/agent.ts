@@ -57,6 +57,13 @@ export interface RunLimits {
   max_model_requests?: number;
 }
 
+/** The window the run's conversations grow into, and when to fold one down (SPEC.md §3). */
+export interface RunContext {
+  window: number;
+  /** Absent means never: the conversation is carried as it stands. */
+  compaction?: { at_percent: number };
+}
+
 /** A delegate declared by the run (SPEC.md §3). */
 export interface SubagentDef {
   name: string;
@@ -99,6 +106,11 @@ function subagentToolDef(subagents: SubagentDef[]): ToolDef {
 // rather than each conversation getting its own.
 interface Budget {
   max: number;
+  used: number;
+}
+
+/** One conversation's last reported size, shared with the loop that reads it. */
+interface ConversationSize {
   used: number;
 }
 
@@ -145,6 +157,16 @@ interface RunSession {
   tools: ToolDef[];
   subagents: SubagentDef[];
   budget: Budget;
+  /** Absent when the run declared none: the conversation then grows unbounded and is never folded down. */
+  context?: RunContext;
+  /**
+   * What the endpoint last reported this conversation to have reached
+   * (SPEC.md §3). On the session rather than on the turn: the size a turn
+   * ends at is what decides whether the next one may open on the
+   * conversation as it stands, and a turn that starts over from zero would
+   * carry a full window into it.
+   */
+  size: ConversationSize;
   /**
    * Prompts that arrived mid-turn. Not appended to `messages` until their
    * turn starts: the running turn would otherwise send unanswered
@@ -163,7 +185,13 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
   // this process.
   const controllers = new Map<string, AbortController>();
 
-  function startRun(prompt: string, tools: ToolDef[], subagents: SubagentDef[], limits?: RunLimits): Run {
+  function startRun(
+    prompt: string,
+    tools: ToolDef[],
+    subagents: SubagentDef[],
+    limits?: RunLimits,
+    context?: RunContext,
+  ): Run {
     const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
     runs.set(run.run_id, run);
     const session: RunSession = {
@@ -171,6 +199,8 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
       tools,
       subagents,
       budget: { max: Math.min(MAX_STEPS, limits?.max_model_requests ?? MAX_STEPS), used: 0 },
+      context,
+      size: { used: 0 },
       queued: [],
       busy: false,
     };
@@ -252,7 +282,15 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
 
   async function executeTurn(run: Run, session: RunSession, signal: AbortSignal): Promise<void> {
     try {
-      const text = await runConversation(session.messages, session.tools, session.subagents, session.budget, signal);
+      const text = await runConversation(
+        session.messages,
+        session.tools,
+        session.subagents,
+        session.budget,
+        session.context,
+        session.size,
+        signal,
+      );
       if (text === undefined) {
         // Thrifty on the last permitted request: a result obtained now
         // could never be reported back, so the run ends here instead.
@@ -284,20 +322,35 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     tools: ToolDef[],
     subagents: SubagentDef[],
     budget: Budget,
+    context: RunContext | undefined,
+    size: ConversationSize,
     signal: AbortSignal,
   ): Promise<string | undefined> {
     for (;;) {
+      if (reachedThreshold(size.used, context)) {
+        if (budget.used >= budget.max) return undefined;
+        budget.used += 1;
+        await compact(messages, signal);
+        // Not the summarizing request's own usage: this conversation's
+        // size is unknown again until its next reply reports it, and
+        // carrying that number over would trip the threshold a second
+        // time and fold the conversation down forever.
+        size.used = 0;
+      }
+
       if (budget.used >= budget.max) return undefined;
       budget.used += 1;
       const isLastPermitted = budget.used === budget.max;
 
-      const message = await callModel(messages, tools, subagents, signal);
+      const reply = await callModel(messages, tools, subagents, signal);
+      const message = reply.message;
+      size.used = reply.used;
 
       if (message.tool_calls && message.tool_calls.length > 0) {
         if (isLastPermitted) return undefined;
         messages.push(message);
         for (const call of message.tool_calls) {
-          const content = await executeToolCall(call, tools, subagents, budget, signal);
+          const content = await executeToolCall(call, tools, subagents, context, budget, signal);
           messages.push({ role: 'tool', tool_call_id: call.id, content });
         }
         continue;
@@ -316,6 +369,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     call: ToolCall,
     tools: ToolDef[],
     subagents: SubagentDef[],
+    context: RunContext | undefined,
     budget: Budget,
     signal: AbortSignal,
   ): Promise<string> {
@@ -323,7 +377,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     // mock tool server (SPEC.md §2): a delegation hands the briefing to
     // a subagent conversation, a file read resolves against KOAN_WORKSPACE.
     if (call.function.name === SUBAGENT_TOOL) {
-      return runDelegation(call, tools, subagents, budget, signal);
+      return runDelegation(call, tools, subagents, context, budget, signal);
     }
     if (call.function.name === READ_FILE_TOOL) {
       return runReadFile(call);
@@ -361,6 +415,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     call: ToolCall,
     tools: ToolDef[],
     subagents: SubagentDef[],
+    context: RunContext | undefined,
     budget: Budget,
     signal: AbortSignal,
   ): Promise<string> {
@@ -377,7 +432,9 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     // A fresh conversation every time: a subagent conversation cannot be
     // continued yet.
     const childMessages: ChatMessage[] = [{ role: 'user', content: prompt }];
-    const text = await runConversation(childMessages, tools, subagents, budget, signal);
+    // A conversation of its own, so a size of its own: however full the
+    // caller's is, the child's starts empty.
+    const text = await runConversation(childMessages, tools, subagents, budget, context, { used: 0 }, signal);
     return text ?? `Error: subagent "${name}" did not finish before the model-request budget ran out`;
   }
 
@@ -403,29 +460,74 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     tools: ToolDef[],
     subagents: SubagentDef[],
     signal: AbortSignal,
-  ): Promise<ChatMessage> {
+  ): Promise<{ message: ChatMessage; used: number }> {
     const wireTools = [...tools, READ_FILE_TOOL_DEF, ...(subagents.length > 0 ? [subagentToolDef(subagents)] : [])];
+    return post(
+      messages,
+      wireTools.map((t) => ({
+        type: 'function',
+        function: { name: t.name, description: t.description, parameters: t.input_schema },
+      })),
+      signal,
+    );
+  }
+
+  async function post(
+    messages: ChatMessage[],
+    tools: unknown[],
+    signal: AbortSignal,
+  ): Promise<{ message: ChatMessage; used: number }> {
     const res = await fetch(`${config.model.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${config.model.apiKey}`,
       },
-      body: JSON.stringify({
-        model: config.model.model,
-        messages,
-        tools: wireTools.map((t) => ({
-          type: 'function',
-          function: { name: t.name, description: t.description, parameters: t.input_schema },
-        })),
-      }),
+      body: JSON.stringify({ model: config.model.model, messages, tools }),
       signal,
     });
     if (!res.ok) {
       throw new Error(`model call failed with status ${res.status}: ${await res.text()}`);
     }
-    const data = (await res.json()) as { choices: Array<{ message: ChatMessage }> };
-    return data.choices[0].message;
+    const data = (await res.json()) as {
+      choices: Array<{ message: ChatMessage }>;
+      usage?: { prompt_tokens?: number };
+    };
+    return { message: data.choices[0].message, used: data.usage?.prompt_tokens ?? 0 };
+  }
+
+  function reachedThreshold(used: number, context: RunContext | undefined): boolean {
+    if (context?.compaction === undefined) return false;
+    return used >= Math.ceil((context.window * context.compaction.at_percent) / 100);
+  }
+
+  /**
+   * Fold a conversation that has reached the run's threshold down to a
+   * summary: one model request outside the conversation's own exchange,
+   * whose reply replaces the middle of it. `messages` is rewritten in
+   * place, so the caller's history — the session's, or a delegate's — is
+   * the compacted one from here on.
+   *
+   * Two things survive verbatim rather than being summarized with
+   * everything else. The opening prompt, because it is the task and the
+   * whole point of the fold is to keep working on it. And any trailing
+   * prompt the caller has sent but the model has not answered yet: that is
+   * not history, it is the question this turn still owes an answer to.
+   */
+  async function compact(messages: ChatMessage[], signal: AbortSignal): Promise<void> {
+    const opening = messages[0];
+    let answered = messages.length;
+    while (answered > 1 && messages[answered - 1].role === 'user') answered -= 1;
+    const unanswered = messages.slice(answered);
+
+    const { message } = await post(
+      [...messages, { role: 'user', content: 'Summarize the conversation so far, keeping every detail the task still needs.' }],
+      [],
+      signal,
+    );
+    const summary = message.content ?? '';
+    messages.length = 0;
+    messages.push(opening, { role: 'user', content: `Summary of the conversation so far: ${summary}` }, ...unanswered);
   }
 
   return { startRun, getRun, sendPrompt, abortRun };

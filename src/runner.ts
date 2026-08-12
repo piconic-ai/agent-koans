@@ -38,6 +38,7 @@ interface RunState {
   status?: string;
   output?: string;
   error?: string;
+  events?: Array<{ type?: string; phase?: string; error?: string }>;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -154,6 +155,24 @@ function judge(then: Judgment, run: RunState): string[] {
   return failures;
 }
 
+// What the caller was told about the folds the trace scripts (SPEC.md
+// §3). Read from the settled run rather than watched as it happens: a
+// client polls, so the record has to survive the activity it describes.
+function judgeReportedFolds(trace: Trace, run: RunState): string[] {
+  const folds = trace.conversations.flatMap((c) => c.turns.filter((t) => t.compaction));
+  const reported = (run.events ?? []).filter((e) => e.type === 'compaction');
+  // A fold's beginning is the request itself; the koan writes only how it
+  // ended, so that is the only phase read off the trace.
+  const expected = folds.flatMap((t) => ['started', t.compaction as string]);
+  const actual = reported.map((e) => String(e.phase));
+  if (actual.length === expected.length && actual.every((phase, i) => phase === expected[i])) return [];
+  const detail = reported.map((e) => `${e.phase}${e.error ? ` (${e.error})` : ''}`).join(', ') || 'nothing';
+  return [
+    `the run reported ${detail} to its caller, but the trace folds the conversation down ${folds.length} time(s): ` +
+      `GET /runs/{run_id} must carry a "compaction" event when a fold starts and one when it ends`,
+  ];
+}
+
 /**
  * Run a koan against an agent: once per trace variant, until one passes.
  * Resolves on conformance; throws with every variant's failures otherwise.
@@ -233,6 +252,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
           tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
           ...(subagentNames.length > 0 ? { subagents: subagentNames.map((name) => ({ name })) } : {}),
           ...(koan.given.limits ? { limits: koan.given.limits } : {}),
+          ...(koan.given.context ? { context: koan.given.context } : {}),
         }),
       });
       if (submitRes.status !== 201 && submitRes.status !== 202) {
@@ -354,6 +374,8 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       }
 
       failures.push(...llm.state.violations, ...tools.state.violations);
+
+      failures.push(...judgeReportedFolds(trace, run));
 
       // Underruns only: overruns are already recorded by the mocks.
       for (const conv of trace.conversations) {

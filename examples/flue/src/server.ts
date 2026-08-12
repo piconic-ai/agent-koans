@@ -3,9 +3,9 @@
 // Hono is used for HTTP routing only.
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { AgentRunError, type AgentInstanceHandle, init } from '@flue/runtime';
+import { AgentRunError, type AgentInstanceHandle, init, observe } from '@flue/runtime';
 import { start } from '@flue/runtime/node';
-import { Assistant, type AssistantData } from './agents/assistant.js';
+import { Assistant, type AssistantData, type RunContext } from './agents/assistant.js';
 import { armBudget, budgetTripped } from './budget.js';
 import { loadConfig } from './config.js';
 import { createKoanProvider } from './provider.js';
@@ -29,9 +29,34 @@ interface Run {
   status: 'running' | 'completed' | 'failed' | 'aborted';
   output?: string;
   error?: string;
+  /** What the run did that its caller has to be able to show (SPEC.md §3). */
+  events: Array<{ type: 'compaction'; phase: 'started' | 'completed' | 'failed'; error?: string }>;
 }
 
 const runs = new Map<string, Run>();
+// Flue names the agent instance, the conformance contract names the run;
+// this is the join between them, so a runtime event can be attributed to
+// the run whose caller has to see it.
+const runsByInstance = new Map<string, Run>();
+
+// Flue reports a fold as `compaction_start` followed by exactly one
+// terminal `compaction`, which is the shape SPEC.md §3 asks a run to
+// expose — so this listener only forwards it, and does not have to know
+// when the runtime decided to fold.
+observe((observation, ctx) => {
+  const run = ctx.id === undefined ? undefined : runsByInstance.get(ctx.id);
+  if (!run) return;
+  if (observation.type === 'compaction_start') {
+    run.events.push({ type: 'compaction', phase: 'started' });
+  } else if (observation.type === 'compaction') {
+    const failed = observation.isError === true;
+    run.events.push({
+      type: 'compaction',
+      phase: failed ? 'failed' : 'completed',
+      ...(failed ? { error: String(observation.error ?? 'compaction failed') } : {}),
+    });
+  }
+});
 // The per-run agent handle, kept for the run's whole process lifetime —
 // not just while a turn is in flight. The abort endpoint needs it to call
 // the handle's own abort(); a follow-up prompt (SPEC.md §3) needs it to
@@ -64,19 +89,27 @@ function runTurn(run: Run, agent: AgentInstanceHandle, prompt: string, initialDa
   })();
 }
 
-function startRun(prompt: string, tools: RunToolDef[], subagents: RunSubagentDef[], limits?: RunLimits): Run {
-  const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running' };
+function startRun(
+  prompt: string,
+  tools: RunToolDef[],
+  subagents: RunSubagentDef[],
+  limits?: RunLimits,
+  context?: RunContext,
+): Run {
+  const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running', events: [] };
   runs.set(run.run_id, run);
   armBudget(limits?.max_model_requests);
   // No id passed to init(): each run gets an isolated conversation, never
   // reusing another run's state.
   const agent = init(Assistant);
   handles.set(run.run_id, agent);
+  runsByInstance.set(agent.id, run);
   const initialData: AssistantData = {
     tools,
     toolsBaseUrl: config.tools.baseUrl,
     subagents,
     workspaceDir: config.workspace.dir,
+    context,
   };
   runTurn(run, agent, prompt, initialData);
   return run;
@@ -127,6 +160,7 @@ app.post('/runs', async (c) => {
       tools?: RunToolDef[];
       subagents?: RunSubagentDef[];
       limits?: RunLimits;
+      context?: RunContext;
     }>()
     .catch(() => null);
   const prompt = body?.prompt;
@@ -134,7 +168,7 @@ app.post('/runs', async (c) => {
     return c.json({ error: 'prompt is required' }, 400);
   }
   // The run executes asynchronously; the caller polls GET /runs/{id}.
-  const run = startRun(prompt, body?.tools ?? [], body?.subagents ?? [], body?.limits);
+  const run = startRun(prompt, body?.tools ?? [], body?.subagents ?? [], body?.limits, body?.context);
   return c.json({ run_id: run.run_id }, 202);
 });
 

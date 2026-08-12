@@ -258,6 +258,28 @@ function checkCoherence(
   }
 }
 
+// Asks for less than `checkTurnBoundary` does — the new turn's prompt and
+// the summary, but not the earlier turns' values verbatim: carrying those
+// is what the fold was asked to stop doing.
+function checkCompacted(
+  summary: string,
+  boundary: TurnBoundary | undefined,
+  requestNo: number,
+  messages: ChatMessage[],
+  violations: string[],
+): void {
+  const text = requestText(messages);
+  if (!text.includes(summary)) {
+    violations.push(
+      `request #${requestNo}: the compaction's summary did not reach the conversation it summarized — ` +
+        `the reply to a compaction request must be folded back in`,
+    );
+  }
+  if (boundary !== undefined && !text.includes(boundary.prompt)) {
+    violations.push(`request #${requestNo}: the new turn's prompt is missing from the request`);
+  }
+}
+
 // A conversation's first request needs no content check beyond this: the
 // opening briefing is what routed the request here (see `route`, below),
 // so re-asserting its presence would be redundant.
@@ -366,7 +388,15 @@ export function startMockLlm(
   // verbatim as the child's first user message is measured behavior.
   const route = (messages: ChatMessage[]): ConversationScript | undefined => {
     const opening = firstUserText(messages);
-    return scripts.find((s) => opening.includes(s.conv.briefing));
+    const byOpening = scripts.find((s) => opening.includes(s.conv.briefing));
+    if (byOpening) return byOpening;
+    // A folded conversation need not still open with the task, so from
+    // the fold on its summary identifies it instead — which the contract
+    // already requires the next request to carry.
+    const text = requestText(messages);
+    return scripts.find((s) =>
+      s.conv.turns.slice(0, s.served).some((t) => t.compaction !== undefined && text.includes(t.reply as string)),
+    );
   };
 
   const server = http.createServer(async (req, res) => {
@@ -394,7 +424,8 @@ export function startMockLlm(
     const script = route(messages);
     if (!script) {
       state.violations.push(
-        `request #${requestNo} matches no scripted conversation — its first user message carries neither the task nor any briefing`,
+        `request #${requestNo} matches no scripted conversation — its first user message carries neither the task nor any briefing, ` +
+          `and it carries no summary of a conversation already folded down`,
       );
       return respond(400, { error: { message: 'mock LLM: request matches no scripted conversation' } });
     }
@@ -419,7 +450,9 @@ export function startMockLlm(
     script.served += 1;
     state.served[conv.name] = script.served;
 
-    if (givenToolNames.length > 0) {
+    // Not asked of a compaction request: it asks the model to summarize
+    // rather than to act, so whether it offers tools is not the suite's.
+    if (givenToolNames.length > 0 && !entry.compaction) {
       const offered = new Set(
         (body.tools ?? []).map((t) => t.function?.name).filter(Boolean),
       );
@@ -442,8 +475,18 @@ export function startMockLlm(
       }
     }
 
-    if (index === 0) {
+    const previous = conv.turns[index - 1];
+    if (entry.compaction) {
+      // No content check: what a framework hands its summarizer is its
+      // own, since some fold only the older part and keep the rest
+      // verbatim. What a fold must not lose is checked one request later.
+    } else if (index === 0) {
       checkConversationStart(conv, requestNo, messages, state.violations);
+    } else if (previous?.compaction) {
+      // A turn that opens with a fold spends its first request on it, so
+      // the new turn's prompt is owed by the one after — here.
+      const folded = conv.followUps?.find((f) => f.start === index - 1);
+      checkCompacted(previous.reply as string, folded, requestNo, messages, state.violations);
     } else if (followUp) {
       checkTurnBoundary(conv, followUp, requestNo, messages, state.violations);
       // A joined prompt rides the request that closes the held call, so
@@ -527,7 +570,14 @@ export function startMockLlm(
     }
 
     const id = `chatcmpl-koan-${requestNo}`;
-    const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+    // The size the trace declares, not the wire's own: the mock's messages
+    // are a few hundred bytes against the six-figure numbers a pressure
+    // koan scripts (SPEC.md §3).
+    const usage = {
+      prompt_tokens: entry.usedTokens,
+      completion_tokens: 0,
+      total_tokens: entry.usedTokens,
+    };
 
     if (body.stream) {
       res.writeHead(200, {

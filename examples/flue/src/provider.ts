@@ -8,6 +8,14 @@ import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completio
 import { noteModelRequest } from './budget.js';
 import type { Config } from './config.js';
 
+/**
+ * The window the registered model claims. Exported because Flue expresses
+ * a compaction threshold as headroom left in this number, so an agent
+ * honoring a run's own declared threshold has to convert against it
+ * (agents/assistant.ts).
+ */
+export const CONTEXT_WINDOW = 128_000;
+
 export function createKoanProvider(model: Config['model']) {
   const api = openAICompletionsApi();
   return createProvider({
@@ -29,7 +37,7 @@ export function createKoanProvider(model: Config['model']) {
         reasoning: false,
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
+        contextWindow: CONTEXT_WINDOW,
         maxTokens: 8192,
       },
     ],

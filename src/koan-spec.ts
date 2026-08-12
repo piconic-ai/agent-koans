@@ -18,7 +18,9 @@
 // it can build a value these types will accept — the type removes the
 // question of what a *valid* file looks like, not the duty to reject an
 // invalid one. What remains for parse.ts beyond that duty is the rules no
-// type can carry at all: uniqueness, cross-references, and budgets.
+// type can carry at all: uniqueness, cross-references, budgets, and where
+// a `compaction` step may sit — a question only the declared threshold and
+// the sizes the surrounding steps report can answer.
 
 /** A tool as declared in `given.tools`; `input_schema` is JSON Schema. */
 export interface ToolDef {
@@ -42,7 +44,31 @@ export interface Given {
   /** Relative path → content, materialized into `KOAN_WORKSPACE` (§2). */
   files?: Record<string, string>;
   limits?: { max_model_requests: number };
+  /** The window the conversation grows into, and when to fold it down. */
+  context?: ContextSetup;
 }
+
+/**
+ * The model's context window for the run, and what the agent does as the
+ * conversation fills it. Not part of `limits`: that block bounds what the
+ * caller lets the agent spend, and a window is not a budget but the size
+ * of the world the run is given.
+ */
+export interface ContextSetup {
+  /** The window in tokens; a step's `used_tokens` is measured against it. */
+  window: number;
+  compaction: Compaction;
+}
+
+/**
+ * When the agent compacts, as a share of the window. `off` is a word a
+ * koan writes rather than a field it leaves out, so that a koan testing
+ * "never compact" states the policy instead of leaning on the default —
+ * which a koan with no `given.context` at all leans on, and means the
+ * same. A share rather than a token count: a third number to keep in
+ * agreement with the window and the usage would be one too many.
+ */
+export type Compaction = { kind: 'off' } | { kind: 'threshold'; percent: number };
 
 /**
  * The three ways to script a run, as a union: a koan is exactly one of
@@ -83,12 +109,49 @@ export type AbortKind = 'live' | 'late';
  * the shape rather than a rule parse.ts has to check (the old form, which
  * absorbed a tool result into its instruction, produced a turn boundary
  * that could legally add zero new steps — see parse.ts's header).
+ *
+ * A step is written as a `request` and its `response`, and whatever
+ * qualifies either sits inside it — `{ type: model, purpose: compaction }`
+ * on the one side, `{ body, used_tokens }` on the other — with a plain
+ * scalar on the sides that qualify nothing, which is most of them. These
+ * types are flat: the grouping says where a detail is written, which is
+ * not something a shape has to enforce.
  */
 export type Step =
-  | { kind: 'model'; response: ModelResponse }
+  /**
+   * `used_tokens` is what this response reported the conversation to have
+   * grown to. It holds until another step writes one — a koan states a
+   * size, not every step that keeps it — starts at zero, and falls only
+   * across a compaction.
+   */
+  | { kind: 'model'; response: ModelResponse; used_tokens?: number }
   /** `prompt` is one the caller sends while this invocation is held open. */
   | { kind: 'tool'; tool: string; args?: ParsedArgs; response: ToolResponse; prompt?: string }
-  | { kind: 'subagent'; name: string; trace: Trace };
+  | { kind: 'subagent'; name: string; trace: Trace }
+  /**
+   * The extra model request an agent makes to fold a conversation that has
+   * reached `given.context.compaction` down to a summary — written as a
+   * model request with `purpose: compaction`, since that is what it is.
+   * Its response carries everything the fold produced: `summary` (written
+   * `body`) is what the mock replies, and the conversation's next request
+   * must carry that reply; `used_tokens` is what the conversation shrank
+   * to; `report` (written `compaction`) is how the run reported the fold's
+   * ending to its caller. The request itself is the fold beginning, so
+   * only its ending is written.
+   *
+   * A shape of its own rather than a `model` step carrying two optional
+   * fields: a fold's response is a summary and never a tool call, and its
+   * three fields are required, none of which a shared shape could say.
+   */
+  | { kind: 'compaction'; summary: string; used_tokens: number; report: CompactionReport };
+
+/**
+ * How a fold ended, as its run reported it to its caller. One word today:
+ * a fold that fails is not scriptable until the contract says what an
+ * agent owes a run whose fold did not happen, and `failed` joins this
+ * vocabulary with it.
+ */
+export type CompactionReport = 'completed';
 
 /**
  * What the mock LLM serves for a model request. A tool-call instruction and

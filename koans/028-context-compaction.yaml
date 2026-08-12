@@ -1,0 +1,56 @@
+name: context-compaction
+description: >
+  The run declares the model's context window and the share of it at which
+  the agent compacts. The first turn fills the window past that share, so
+  the second turn cannot open with the conversation as it stands: by its
+  first model request the agent must have folded it into a summary — one
+  extra model request, answered with one. The summary must come back into
+  the conversation carrying what the second turn asks for, an operator
+  code looked up before the fold, and the run must report the fold to its
+  caller, who has a user to explain it to. Where inside the first turn the
+  agent folds is not covered: before its next request, or once it settles.
+
+given:
+  context:
+    window: 100000
+    compaction: 90%
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+turns:
+  - prompt: "Look up incident INC-4407 and confirm it is logged."
+    when:
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-4407" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-9-4471" } }
+      # 95000 of the declared 100000 is past the 90% the run compacts at.
+      - request: model
+        response:
+          body: "Incident INC-4407 is logged."
+          used_tokens: 95000
+
+  - prompt: "What was that incident's operator code?"
+    when:
+      # The fold: everything above becomes this summary, and 95000 tokens
+      # of conversation become 20000. The summary must come back — the
+      # request after it has to carry the operator code, and after the
+      # fold nothing else is left carrying it.
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          body: "Earlier: incident INC-4407 has operator code K-9-4471."
+          used_tokens: 20000
+          compaction: completed
+      - request: model
+        response: "The operator code is K-9-4471."
+    then:
+      status: completed
+      output: { contains: "K-9-4471" }

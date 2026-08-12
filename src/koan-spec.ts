@@ -109,14 +109,14 @@ export type AbortKind = 'live' | 'late';
  * the shape rather than a rule parse.ts has to check (the old form, which
  * absorbed a tool result into its instruction, produced a turn boundary
  * that could legally add zero new steps — see parse.ts's header).
+ *
+ * A step is written as a `request` and its `response`, and whatever
+ * qualifies either sits inside it — `{ type: model, purpose: compaction }`
+ * on the one side, `{ body, used_tokens }` on the other — with a plain
+ * scalar on the sides that qualify nothing, which is most of them. These
+ * types are flat: the grouping says where a detail is written, which is
+ * not something a shape has to enforce.
  */
-//
-// A step is written as a `request` and its `response`, and anything
-// qualifying either sits inside it — `{ type: model, purpose: compaction }`
-// on the one side, `{ body, used_tokens }` on the other. Both take a plain
-// scalar when there is nothing to qualify, which is most steps. These
-// types are flat because the grouping is where a detail is written, not
-// something a shape has to enforce.
 export type Step =
   /**
    * `used_tokens` is what this response reported the conversation to have

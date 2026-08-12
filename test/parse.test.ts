@@ -500,7 +500,7 @@ const rows: Row[] = [
           intercept: p
     `),
     message:
-      'when[0] has unknown key "intercept" — a trace step carries only "request", "response", "used_tokens", and, on a tool step, "prompt"',
+      'when[0] has unknown key "intercept" — a trace step carries only "request", "response", "used_tokens", and, on a tool step, "prompt" (on a compaction request, "report")',
   },
   {
     rule: 'a mid-run "prompt" belongs on a tool step',
@@ -1036,8 +1036,9 @@ const rows: Row[] = [
           used_tokens: 95
           response: { tool: x, args: {} }
         - request: compaction
-          used_tokens: 10
           response: "so far"
+          used_tokens: 10
+          report: completed
         - request: model
           response: ok
     `),
@@ -1100,8 +1101,9 @@ const rows: Row[] = [
         - prompt: b
           when:
             - request: compaction
-              used_tokens: 10
               response: "so far"
+              used_tokens: 10
+              report: completed
             - request: model
               response: ok
     `)}`,
@@ -1125,11 +1127,36 @@ const rows: Row[] = [
           when:
             - request: compaction
               response: "so far"
+              report: completed
             - request: model
               response: ok
     `)}`,
     message:
       'turns[1].when[0] needs "used_tokens" — what the conversation shrank to, which is half of what a fold does',
+  },
+  {
+    rule: 'a compaction says how the run reported its ending',
+    yaml: `name: x\n${dedent(`
+      given:
+        context:
+          window: 100
+          compaction: "90%"
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              used_tokens: 95
+              response: ok
+        - prompt: b
+          when:
+            - request: compaction
+              response: "so far"
+              used_tokens: 10
+            - request: model
+              response: ok
+    `)}`,
+    message:
+      'turns[1].when[0] needs "report: completed" — how the run told its caller the fold ended. A fold that ends any other way is not scriptable yet',
   },
   {
     rule: 'a trace fits the model-request budget',

@@ -159,14 +159,16 @@ function judge(then: Judgment, run: RunState): string[] {
 // §3). Read from the settled run rather than watched as it happens: a
 // client polls, so the record has to survive the activity it describes.
 function judgeReportedFolds(trace: Trace, run: RunState): string[] {
-  const folds = trace.conversations.reduce((n, c) => n + c.turns.filter((t) => t.compaction).length, 0);
+  const folds = trace.conversations.flatMap((c) => c.turns.filter((t) => t.compaction));
   const reported = (run.events ?? []).filter((e) => e.type === 'compaction');
-  const expected = Array.from({ length: folds }, () => ['started', 'completed']).flat();
+  // A fold's beginning is the request itself; the koan writes only how it
+  // ended, so that is the only phase read off the trace.
+  const expected = folds.flatMap((t) => ['started', t.compaction!.report]);
   const actual = reported.map((e) => String(e.phase));
   if (actual.length === expected.length && actual.every((phase, i) => phase === expected[i])) return [];
   const detail = reported.map((e) => `${e.phase}${e.error ? ` (${e.error})` : ''}`).join(', ') || 'nothing';
   return [
-    `the run reported ${detail} to its caller, but the trace folds the conversation down ${folds} time(s): ` +
+    `the run reported ${detail} to its caller, but the trace folds the conversation down ${folds.length} time(s): ` +
       `GET /runs/{run_id} must carry a "compaction" event when a fold starts and one when it ends`,
   ];
 }

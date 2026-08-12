@@ -123,18 +123,27 @@ export type Step =
   | { kind: 'subagent'; name: string; trace: Trace }
   /**
    * The extra model request an agent makes to fold a conversation that has
-   * reached `given.context.compaction` down to a summary. Both of a fold's
-   * effects are written on it: `summary` is what the mock replies, and the
-   * conversation's next request must carry that reply; `used_tokens` is
-   * what the conversation shrank to, which is required here rather than
-   * derived, so that the drop is read where it happens.
+   * reached `given.context.compaction` down to a summary. Everything a
+   * fold does is written on it: `summary` is what the mock replies, and
+   * the conversation's next request must carry that reply; `used_tokens`
+   * is what the conversation shrank to; `report` is how the run told its
+   * caller the fold ended. The request itself is the fold beginning, so
+   * only its ending is written.
    *
    * A step of its own, not an annotation on the model step after it: an
    * agent that never folds then has no step to consume here, and one that
    * folds where no koan scripted it none to consume there, so the trace
    * stays the assertion.
    */
-  | { kind: 'compaction'; summary: string; used_tokens: number };
+  | { kind: 'compaction'; summary: string; used_tokens: number; report: CompactionReport };
+
+/**
+ * How a fold ended, as its run reported it to the caller. One word today:
+ * a fold that fails is not scriptable until the contract says what an
+ * agent owes a run whose fold did not happen, and `failed` joins this
+ * vocabulary with it.
+ */
+export type CompactionReport = 'completed';
 
 /**
  * What the mock LLM serves for a model request. A tool-call instruction and

@@ -395,7 +395,7 @@ export function startMockLlm(
     // already requires the next request to carry.
     const text = requestText(messages);
     return scripts.find((s) =>
-      s.conv.turns.slice(0, s.served).some((t) => t.compaction === true && text.includes(t.reply as string)),
+      s.conv.turns.slice(0, s.served).some((t) => t.compaction !== undefined && text.includes(t.reply as string)),
     );
   };
 

@@ -415,15 +415,20 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     // that can be dropped hurt most: a mistyped `prompt` leaves a koan
     // that still passes while scripting no delivery at all.
     for (const key of Object.keys(entry as Record<string, unknown>)) {
-      if (key !== 'request' && key !== 'response' && key !== 'prompt' && key !== 'used_tokens') {
+      if (key !== 'request' && key !== 'response' && key !== 'prompt' && key !== 'used_tokens' && key !== 'report') {
         return problem(
-          `${at_i} has unknown key "${key}" — a trace step carries only "request", "response", "used_tokens", and, on a tool step, "prompt"`,
+          `${at_i} has unknown key "${key}" — a trace step carries only "request", "response", "used_tokens", and, on a tool step, "prompt" (on a compaction request, "report")`,
         );
       }
     }
+    const rawReport = (entry as Record<string, unknown>).report;
     const rawUsed = (entry as Record<string, unknown>).used_tokens;
     if (rawUsed !== undefined && (!Number.isInteger(rawUsed) || (rawUsed as number) < 0)) {
       return problem(`${at_i}.used_tokens must be a non-negative integer — the size this response reports the conversation to have reached`);
+    }
+
+    if (rawReport !== undefined && req !== 'compaction') {
+      return problem(`${at_i}: "report" belongs on a compaction request — it says how the run told its caller a fold ended`);
     }
 
     if (req === 'model') {
@@ -513,7 +518,12 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       if (typeof res !== 'string' || res.trim().length === 0) {
         return problem(`${at_i}.response for a compaction request must be the summary served to it (a non-empty string)`);
       }
-      steps.push({ kind: 'compaction', summary: res, used_tokens: rawUsed as number });
+      if (rawReport !== 'completed') {
+        return problem(
+          `${at_i} needs "report: completed" — how the run told its caller the fold ended. A fold that ends any other way is not scriptable yet`,
+        );
+      }
+      steps.push({ kind: 'compaction', summary: res, used_tokens: rawUsed as number, report: 'completed' });
     } else {
       return problem(`${at_i}.request must be "model", "compaction", or { tool: <name> }`);
     }

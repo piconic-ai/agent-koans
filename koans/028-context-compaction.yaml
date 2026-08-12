@@ -42,8 +42,9 @@ turns:
       # request after it has to carry the operator code, and after the
       # fold nothing else is left carrying it.
       - request: compaction
-        used_tokens: 20000
         response: "Earlier: incident INC-4407 has operator code K-9-4471."
+        used_tokens: 20000
+        report: completed
       - request: model
         response: "The operator code is K-9-4471."
     then:

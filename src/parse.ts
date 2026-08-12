@@ -185,12 +185,12 @@ function parseContext(raw: unknown): Parsed<ContextSetup | undefined> {
   if (!Number.isInteger(c.window) || (c.window as number) < 1) {
     return problem('"given.context.window" must be a positive integer (the window in tokens)');
   }
-  const compaction = parseCompaction(c.compaction);
+  const compaction = parseCompactionPolicy(c.compaction);
   if (isProblem(compaction)) return compaction;
   return { window: c.window as number, compaction };
 }
 
-function parseCompaction(raw: unknown): Parsed<Compaction> {
+function parseCompactionPolicy(raw: unknown): Parsed<Compaction> {
   if (raw === 'off') return { kind: 'off' };
   const match = typeof raw === 'string' ? /^(\d{1,3})%$/.exec(raw) : null;
   const percent = match ? Number(match[1]) : NaN;
@@ -415,20 +415,24 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     // that can be dropped hurt most: a mistyped `prompt` leaves a koan
     // that still passes while scripting no delivery at all.
     for (const key of Object.keys(entry as Record<string, unknown>)) {
-      if (key !== 'request' && key !== 'response' && key !== 'prompt' && key !== 'used_tokens' && key !== 'compaction') {
+      if (
+        key !== 'request' &&
+        key !== 'response' &&
+        key !== 'prompt' &&
+        key !== 'used_tokens' &&
+        key !== 'purpose' &&
+        key !== 'report'
+      ) {
         return problem(
-          `${at_i} has unknown key "${key}" — a trace step carries only "request", "response", "used_tokens", a tool step's "prompt", and a compaction request's "compaction"`,
+          `${at_i} has unknown key "${key}" — a trace step carries only "request", "response", "used_tokens", a tool step's "prompt", and a compaction's "purpose" and "report"`,
         );
       }
     }
-    const rawReport = (entry as Record<string, unknown>).compaction;
+    const rawPurpose = (entry as Record<string, unknown>).purpose;
+    const rawReport = (entry as Record<string, unknown>).report;
     const rawUsed = (entry as Record<string, unknown>).used_tokens;
     if (rawUsed !== undefined && (!Number.isInteger(rawUsed) || (rawUsed as number) < 0)) {
       return problem(`${at_i}.used_tokens must be a non-negative integer — the size this response reports the conversation to have reached`);
-    }
-
-    if (rawReport !== undefined && req !== 'compaction') {
-      return problem(`${at_i}: "compaction" belongs on a compaction request — it says how the run reported that fold's ending`);
     }
 
     if (req === 'model') {
@@ -458,6 +462,15 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         }
         queuedSeam = true;
       }
+      if (rawPurpose !== undefined) {
+        const fold = parseCompactionStep(at_i, rawPurpose, res, rawUsed, rawReport, inTurns, i);
+        if (isProblem(fold)) return fold;
+        steps.push(fold);
+        continue;
+      }
+      if (rawReport !== undefined) {
+        return problem(`${at_i}: "report" belongs on a compaction — it says how the run reported that fold's ending`);
+      }
       const response = parseModelResponse(into(ctx, `[${i}]`, res), inSubagent);
       if (isProblem(response)) return response;
       steps.push({ kind: 'model', response, ...(rawUsed !== undefined ? { used_tokens: rawUsed as number } : {}) });
@@ -475,6 +488,9 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         return problem(
           `${at_i}: "used_tokens" belongs on a model step — it is what a model response reports, not something a tool request carries`,
         );
+      }
+      if (rawPurpose !== undefined || rawReport !== undefined) {
+        return problem(`${at_i}: "purpose" and "report" belong on a model request — a fold is one`);
       }
       if (rawPrompt !== undefined) {
         if (inTurns) {
@@ -503,29 +519,8 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         response: { status: r.status, body: r.body },
         ...(typeof rawPrompt === 'string' ? { prompt: rawPrompt } : {}),
       });
-    } else if (req === 'compaction') {
-      // Anywhere but a turn's first step would pin down one of two
-      // conforming designs: some agents fold before the next request of a
-      // turn already running, some once that turn settles (SPEC.md §3).
-      if (!inTurns || i !== 0) {
-        return problem(
-          `${at_i}: a compaction request belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn's first model request goes out, and where inside the turn before it is the agent's own business`,
-        );
-      }
-      if (rawUsed === undefined) {
-        return problem(`${at_i} needs "used_tokens" — what the conversation shrank to, which is half of what a fold does`);
-      }
-      if (typeof res !== 'string' || res.trim().length === 0) {
-        return problem(`${at_i}.response for a compaction request must be the summary served to it (a non-empty string)`);
-      }
-      if (rawReport !== 'completed') {
-        return problem(
-          `${at_i} needs "compaction: completed" — how the run reported this fold's ending to its caller. A fold that ends any other way is not scriptable yet`,
-        );
-      }
-      steps.push({ kind: 'compaction', summary: res, used_tokens: rawUsed as number, compaction: 'completed' });
     } else {
-      return problem(`${at_i}.request must be "model", "compaction", or { tool: <name> }`);
+      return problem(`${at_i}.request must be "model" or { tool: <name> }`);
     }
   }
 
@@ -549,6 +544,46 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
   const trace: Trace = { steps: steps as [Step, ...Step[]] };
   if (abort) trace.abort = abortKindOf(trace);
   return trace;
+}
+
+/**
+ * A model request whose `purpose` names it a fold. Everything it does is
+ * written on it, and each field is required: the summary it receives, the
+ * size the fold leaves behind, and how the run reported the fold's ending
+ * to its caller.
+ */
+function parseCompactionStep(
+  at: string,
+  purpose: unknown,
+  res: unknown,
+  used: unknown,
+  report: unknown,
+  inTurns: boolean,
+  index: number,
+): Parsed<Step> {
+  if (purpose !== 'compaction') {
+    return problem(`${at}.purpose must be "compaction" — the only purpose a koan gives a model request of its own`);
+  }
+  // Anywhere but a turn's first step would pin down one of two conforming
+  // designs: some agents fold before the next request of a turn already
+  // running, some once that turn settles (SPEC.md §3).
+  if (!inTurns || index !== 0) {
+    return problem(
+      `${at}: a compaction belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn's first model request goes out, and where inside the turn before it is the agent's own business`,
+    );
+  }
+  if (typeof res !== 'string' || res.trim().length === 0) {
+    return problem(`${at}.response for a compaction must be the summary served to it (a non-empty string)`);
+  }
+  if (used === undefined) {
+    return problem(`${at} needs "used_tokens" — what the conversation shrank to, which is half of what a fold does`);
+  }
+  if (report !== 'completed') {
+    return problem(
+      `${at} needs "report: completed" — how the run reported this fold's ending to its caller. A fold that ends any other way is not scriptable yet`,
+    );
+  }
+  return { kind: 'compaction', summary: res, used_tokens: used as number, report: 'completed' };
 }
 
 /**

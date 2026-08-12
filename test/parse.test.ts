@@ -500,7 +500,7 @@ const rows: Row[] = [
           intercept: p
     `),
     message:
-      `when[0] has unknown key "intercept" — a trace step carries only "request", "response", "used_tokens", a tool step's "prompt", and a compaction request's "compaction"`,
+      `when[0] has unknown key "intercept" — a trace step carries only "request", "response", "used_tokens", a tool step's "prompt", and a compaction's "purpose" and "report"`,
   },
   {
     rule: 'a mid-run "prompt" belongs on a tool step',
@@ -785,13 +785,13 @@ const rows: Row[] = [
     message: `when[1]: "x"'s arguments do not parse as a JSON object — argument fidelity is undefined, so the agent must refuse the call instead; no tool request can follow it`,
   },
   {
-    rule: 'a trace entry\'s "request" is "model", "compaction", or { tool }',
+    rule: 'a trace entry\'s "request" is "model" or { tool }',
     yaml: koan(`
       when:
         - request: nonsense
           response: ok
     `),
-    message: 'when[0].request must be "model", "compaction", or { tool: <name> }',
+    message: 'when[0].request must be "model" or { tool: <name> }',
   },
   {
     rule: 'a parallel group needs at least two instructions',
@@ -1025,7 +1025,7 @@ const rows: Row[] = [
       'when[2]: used_tokens falls from 50 to 10 — a conversation shrinks only where a compaction folds it down',
   },
   {
-    rule: 'a compaction request belongs at the start of a later turn',
+    rule: 'a compaction belongs at the start of a later turn',
     yaml: koan(`
       given:
         context:
@@ -1035,15 +1035,16 @@ const rows: Row[] = [
         - request: model
           used_tokens: 95
           response: { tool: x, args: {} }
-        - request: compaction
+        - request: model
+          purpose: compaction
           response: "so far"
           used_tokens: 10
-          compaction: completed
+          report: completed
         - request: model
           response: ok
     `),
     message:
-      'when[1]: a compaction request belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn\'s first model request goes out, and where inside the turn before it is the agent\'s own business',
+      'when[1]: a compaction belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn\'s first model request goes out, and where inside the turn before it is the agent\'s own business',
   },
   {
     rule: 'a turn past the threshold asks for no further model request',
@@ -1100,10 +1101,11 @@ const rows: Row[] = [
               response: ok
         - prompt: b
           when:
-            - request: compaction
+            - request: model
+              purpose: compaction
               response: "so far"
               used_tokens: 10
-              compaction: completed
+              report: completed
             - request: model
               response: ok
     `)}`,
@@ -1125,9 +1127,10 @@ const rows: Row[] = [
               response: ok
         - prompt: b
           when:
-            - request: compaction
+            - request: model
+              purpose: compaction
               response: "so far"
-              compaction: completed
+              report: completed
             - request: model
               response: ok
     `)}`,
@@ -1149,14 +1152,15 @@ const rows: Row[] = [
               response: ok
         - prompt: b
           when:
-            - request: compaction
+            - request: model
+              purpose: compaction
               response: "so far"
               used_tokens: 10
             - request: model
               response: ok
     `)}`,
     message:
-      'turns[1].when[0] needs "compaction: completed" — how the run reported this fold\'s ending to its caller. A fold that ends any other way is not scriptable yet',
+      'turns[1].when[0] needs "report: completed" — how the run reported this fold\'s ending to its caller. A fold that ends any other way is not scriptable yet',
   },
   {
     rule: 'a trace fits the model-request budget',

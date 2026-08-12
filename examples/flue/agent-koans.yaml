@@ -4,6 +4,6 @@ delegation:
   prompt_arg: prompt
 
 skip:
-  030-compaction-on-request: "Flue folds the agent's main conversation only on its own CompactionConfig; harness.compact() compacts the harness's scratch conversation instead, so a caller asking for a fold has nothing to reach (upstream: @flue/runtime)."
+  030-compaction-on-request: "Flue folds the agent's main conversation only on its own CompactionConfig; harness.compact() compacts the harness's scratch conversation instead, so a caller asking for a fold has nothing to reach. The threshold cannot stand in for the ask either: useModel's values are submission-scoped, so one lowered to force a fold stays lowered for the whole turn and folds again after that turn's reply (upstream: @flue/runtime)."
   031-compaction-failure: "The fold this koan refuses is one the caller asked for, which Flue cannot reach for the same reason 030 is skipped (upstream: @flue/runtime)."
   014-malformed-arguments: "pi-ai's parseStreamingJson silently repairs malformed JSON via partial-json instead of erroring, has no strict mode, and useTool() never exposes the raw wire string to intercept (upstream: @earendil-works/pi-ai)."

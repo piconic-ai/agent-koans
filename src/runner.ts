@@ -348,6 +348,16 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             );
             break;
           }
+          if (koan.turns[t].compactAfter) {
+            // Sent once the turn has settled, before the next one's prompt:
+            // an agent that folds when asked and one that folds when it
+            // next needs the model both put the fold where the trace has
+            // it, at the next turn's first request.
+            const compactRes = await fetch(`${base}/runs/${runId}/compact`, { method: 'POST' });
+            if (compactRes.status !== 202 && compactRes.status !== 200) {
+              throw new Error(`POST /runs/${runId}/compact returned ${compactRes.status}, expected 202 or 200`);
+            }
+          }
           const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },

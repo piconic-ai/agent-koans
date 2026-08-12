@@ -91,11 +91,15 @@ export interface Turn {
 /**
  * One conversation's expected wire log. `abort` is not a step: it may only
  * end a trace, so it is a property of the trace, and its kind is derived
- * from what it follows rather than written.
+ * from what it follows rather than written. `compact` is the same shape
+ * for the same reason — the caller asks once this turn has settled, which
+ * is a place only the end of a trace can name.
  */
 export interface Trace {
   steps: [Step, ...Step[]];
   abort?: AbortKind;
+  /** The caller asked for a fold once this turn settled; the next turn opens with one. */
+  compact?: true;
 }
 
 /** Derived: `live` cancels a run in progress, `late` one already settled. */

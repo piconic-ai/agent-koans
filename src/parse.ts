@@ -356,6 +356,27 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
   }
 
   const written = [...node];
+  let compact = false;
+  const compactAt = written.findIndex((s) => s === 'compact');
+  if (compactAt !== -1) {
+    if (compactAt !== written.length - 1) {
+      return problem(`${at}[${compactAt + 1}]: nothing can follow "compact" — the caller asks once this turn has settled`);
+    }
+    if (!inTurns) {
+      return problem(
+        `${at}[${compactAt}]: "compact" needs a later turn to fold into — write it in a "turns:" koan, on the turn the caller asks after`,
+      );
+    }
+    if (inSubagent) {
+      return problem(`${at}[${compactAt}]: "compact" cannot appear inside a subagent block — only the caller's own run can be asked`);
+    }
+    if (compactAt === 0) {
+      return problem(`${at}[0]: "compact" needs at least one exchange before it in the trace`);
+    }
+    written.pop();
+    compact = true;
+  }
+
   let abort = false;
   const abortAt = written.findIndex((s) => s === 'abort');
   if (abortAt !== -1) {
@@ -525,6 +546,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
 
   const trace: Trace = { steps: steps as [Step, ...Step[]] };
   if (abort) trace.abort = abortKindOf(trace);
+  if (compact) trace.compact = true;
   return trace;
 }
 
@@ -1063,7 +1085,7 @@ function theTraceFitsTheModelRequestBudget(koan: KoanFile): Problem | undefined 
 }
 
 /** One conversation of a scripted trace, split where a new turn begins. */
-type ScriptedConversation = Array<{ steps: Step[]; at: string }>;
+type ScriptedConversation = Array<{ steps: Step[]; at: string; compact?: true }>;
 
 // Turn by turn, and not `scriptedTraces` above: a size belongs to one
 // conversation, so a child's starts empty however full its parent's is,
@@ -1082,7 +1104,13 @@ function scriptedConversations(koan: KoanFile): ScriptedConversation[] {
 
   const body = koan.body;
   if (body.kind === 'turns') {
-    found.push(body.turns.map((t, i) => ({ steps: t.trace.steps, at: `turns[${i}].when` })));
+    found.push(
+      body.turns.map((t, i) => ({
+        steps: t.trace.steps,
+        at: `turns[${i}].when`,
+        ...(t.trace.compact ? { compact: true as const } : {}),
+      })),
+    );
     for (const [i, t] of body.turns.entries()) addSubagents(t.trace.steps, `turns[${i}].when`);
     return found;
   }
@@ -1131,11 +1159,13 @@ function usedTokensFitTheWindow(koan: KoanFile): Problem | undefined {
 }
 
 /**
- * Where a compaction may sit, given the declared threshold: a turn that
- * has reached it cannot ask for another model request, since the agent may
- * fold before that request or after the turn settles and the trace could
- * not say which; and a turn that begins past it must open with the fold,
- * since by its first request the agent has run out of room to defer.
+ * Where a compaction may sit. Two things put one there — the conversation
+ * reaching the declared threshold, or the caller asking after the turn
+ * before — and both land it in the same place: a turn that has reached the
+ * threshold cannot ask for another model request, since the agent may fold
+ * before that request or after the turn settles and the trace could not
+ * say which; and a turn that opens owing a fold must open with it, since
+ * by its first request the agent has run out of room to defer.
  */
 function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefined {
   const context = koan.given.context;
@@ -1147,26 +1177,30 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
 
   for (const conv of scriptedConversations(koan)) {
     let used = 0;
-    for (const turn of conv) {
+    let asked = false;
+    for (const [t, turn] of conv.entries()) {
       let over = threshold !== undefined && used >= threshold;
-      if (over && turn.steps[0].kind !== 'compaction') {
+      if ((over || asked) && turn.steps[0].kind !== 'compaction') {
         return problem(
-          `${turn.at}[0]: the conversation carries ${used} of ${context!.window} tokens into this turn, at or above the threshold of ${threshold} — it must open with a compaction step`,
+          asked
+            ? `${turn.at}[0]: the caller asked for a fold after the turn before this one — it must open with a compaction`
+            : `${turn.at}[0]: the conversation carries ${used} of ${context!.window} tokens into this turn, at or above the threshold of ${threshold} — it must open with a compaction`,
         );
+      }
+      if (turn.compact && t === conv.length - 1) {
+        return problem(`${turn.at}: "compact" needs a turn after it — the fold the caller asked for would never be seen`);
       }
       for (const [i, step] of turn.steps.entries()) {
         if (step.kind === 'compaction') {
-          if (threshold === undefined) {
+          if (!over && !asked) {
             return problem(
-              `${turn.at}[${i}]: a compaction step needs "given.context.compaction" to name a threshold — with "off", or with no "given.context" at all, the agent must not compact`,
+              `${turn.at}[${i}]: nothing has asked for a fold here — the conversation is at ${used} tokens${
+                threshold === undefined ? ' and the run declares no threshold' : `, below the threshold of ${threshold}`
+              }, and the caller did not ask after the turn before`,
             );
           }
-          if (!over) {
-            return problem(
-              `${turn.at}[${i}]: the conversation is at ${used} tokens, below the threshold of ${threshold} — nothing has asked the agent to fold it down here`,
-            );
-          }
-          if (step.used_tokens >= threshold) {
+          asked = false;
+          if (threshold !== undefined && step.used_tokens >= threshold) {
             return problem(
               `${turn.at}[${i}]: used_tokens (${step.used_tokens}) is still at or above the threshold of ${threshold} — the agent would fold the conversation down again immediately`,
             );
@@ -1184,6 +1218,7 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
         if (step.used_tokens !== undefined) used = step.used_tokens;
         over = threshold !== undefined && used >= threshold;
       }
+      asked = turn.compact === true;
     }
   }
   return undefined;

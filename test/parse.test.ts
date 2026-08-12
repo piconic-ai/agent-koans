@@ -1074,10 +1074,10 @@ const rows: Row[] = [
               response: ok
     `)}`,
     message:
-      'turns[1].when[0]: the conversation carries 95 of 100 tokens into this turn, at or above the threshold of 90 — it must open with a compaction step',
+      'turns[1].when[0]: the conversation carries 95 of 100 tokens into this turn, at or above the threshold of 90 — it must open with a compaction',
   },
   {
-    rule: 'a compaction needs a threshold to have been declared',
+    rule: 'a compaction needs something to have asked for it',
     yaml: `name: x\n${dedent(`
       given:
         context:
@@ -1096,7 +1096,7 @@ const rows: Row[] = [
               response: ok
     `)}`,
     message:
-      'turns[1].when[0]: a compaction step needs "given.context.compaction" to name a threshold — with "off", or with no "given.context" at all, the agent must not compact',
+      'turns[1].when[0]: nothing has asked for a fold here — the conversation is at 95 tokens and the run declares no threshold, and the caller did not ask after the turn before',
   },
   {
     rule: 'a compaction says what the conversation shrank to',

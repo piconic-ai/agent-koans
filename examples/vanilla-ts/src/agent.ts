@@ -181,6 +181,8 @@ interface RunSession {
   queued: string[];
   /** Whether a turn is in flight; one runs at a time per run. */
   busy: boolean;
+  /** The caller asked for a fold; the next model request of this conversation owes one (SPEC.md §3). */
+  asked: boolean;
   /** Appends to the run's caller-visible record; a delegate's folds report here too. */
   report: (event: RunEvent) => void;
 }
@@ -211,6 +213,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
       size: { used: 0 },
       queued: [],
       busy: false,
+      asked: false,
       report: (event) => run.events.push(event),
     };
     sessions.set(run.run_id, session);
@@ -253,6 +256,19 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     run.output = undefined;
     run.error = undefined;
     runTurn(run, session);
+  }
+
+  /**
+   * The caller asks for a fold (SPEC.md §3). Armed rather than performed
+   * here: the conversation may be mid-turn, and the contract asks only
+   * that the fold happen before its next model request. Returns `false`
+   * when `runId` is unknown, so the caller can answer 404.
+   */
+  function compactRun(runId: string): boolean {
+    const session = sessions.get(runId);
+    if (!session) return false;
+    session.asked = true;
+    return true;
   }
 
   /**
@@ -299,6 +315,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
         session.context,
         session.size,
         session.report,
+        session,
         signal,
       );
       if (text === undefined) {
@@ -335,10 +352,12 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     context: RunContext | undefined,
     size: ConversationSize,
     report: (event: RunEvent) => void,
+    asking: { asked: boolean } | undefined,
     signal: AbortSignal,
   ): Promise<string | undefined> {
     for (;;) {
-      if (reachedThreshold(size.used, context)) {
+      if (asking?.asked === true || reachedThreshold(size.used, context)) {
+        if (asking) asking.asked = false;
         if (budget.used >= budget.max) return undefined;
         budget.used += 1;
         await compact(messages, report, signal);
@@ -444,7 +463,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     // continued yet.
     const childMessages: ChatMessage[] = [{ role: 'user', content: prompt }];
     // A conversation of its own, so a size of its own.
-    const text = await runConversation(childMessages, tools, subagents, budget, context, { used: 0 }, report, signal);
+    const text = await runConversation(childMessages, tools, subagents, budget, context, { used: 0 }, report, undefined, signal);
     return text ?? `Error: subagent "${name}" did not finish before the model-request budget ran out`;
   }
 
@@ -550,5 +569,5 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     messages.push(opening, { role: 'user', content: `Summary of the conversation so far: ${summary}` }, ...unanswered);
   }
 
-  return { startRun, getRun, sendPrompt, abortRun };
+  return { startRun, getRun, sendPrompt, compactRun, abortRun };
 }

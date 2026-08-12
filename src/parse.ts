@@ -507,15 +507,13 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
           `${at_i}: a compaction request belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn's first model request goes out, and where inside the turn before it is the agent's own business`,
         );
       }
-      if (rawUsed !== undefined) {
-        return problem(
-          `${at_i}: "used_tokens" belongs on the model step after this one — a fold reports the size it leaves behind, which that step writes`,
-        );
+      if (rawUsed === undefined) {
+        return problem(`${at_i} needs "used_tokens" — what the conversation shrank to, which is half of what a fold does`);
       }
       if (typeof res !== 'string' || res.trim().length === 0) {
         return problem(`${at_i}.response for a compaction request must be the summary served to it (a non-empty string)`);
       }
-      steps.push({ kind: 'compaction', summary: res });
+      steps.push({ kind: 'compaction', summary: res, used_tokens: rawUsed as number });
     } else {
       return problem(`${at_i}.request must be "model", "compaction", or { tool: <name> }`);
     }
@@ -1029,30 +1027,23 @@ function usedTokensFitTheWindow(koan: KoanFile): Problem | undefined {
   const context = koan.given.context;
   for (const conv of scriptedConversations(koan)) {
     let used = 0;
-    let compacted = false;
     for (const turn of conv) {
       for (const [i, step] of turn.steps.entries()) {
-        if (step.kind === 'compaction') {
-          compacted = true;
-          continue;
-        }
-        if (step.kind !== 'model') continue;
+        if (step.kind !== 'model' && step.kind !== 'compaction') continue;
         const written = step.used_tokens;
-        if (written !== undefined) {
-          if (context === undefined) {
-            return problem(`${turn.at}[${i}]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of`);
-          }
-          if (written > context.window) {
-            return problem(`${turn.at}[${i}]: used_tokens (${written}) is larger than given.context.window (${context.window})`);
-          }
-          if (written < used && !compacted) {
-            return problem(
-              `${turn.at}[${i}]: used_tokens falls from ${used} to ${written} — a conversation shrinks only where a compaction step folds it down`,
-            );
-          }
-          used = written;
+        if (written === undefined) continue;
+        if (context === undefined) {
+          return problem(`${turn.at}[${i}]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of`);
         }
-        compacted = false;
+        if (written > context.window) {
+          return problem(`${turn.at}[${i}]: used_tokens (${written}) is larger than given.context.window (${context.window})`);
+        }
+        if (written < used && step.kind !== 'compaction') {
+          return problem(
+            `${turn.at}[${i}]: used_tokens falls from ${used} to ${written} — a conversation shrinks only where a compaction folds it down`,
+          );
+        }
+        used = written;
       }
     }
   }
@@ -1077,7 +1068,6 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
   for (const conv of scriptedConversations(koan)) {
     let used = 0;
     for (const turn of conv) {
-      let folding = false;
       let over = threshold !== undefined && used >= threshold;
       if (over && turn.steps[0].kind !== 'compaction') {
         return problem(
@@ -1096,29 +1086,23 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
               `${turn.at}[${i}]: the conversation is at ${used} tokens, below the threshold of ${threshold} — nothing has asked the agent to fold it down here`,
             );
           }
-          folding = true;
-          over = false;
-          continue;
-        }
-        if (step.kind !== 'model') continue;
-        if (folding) {
-          // Written, never derived: a reader sees the number fall.
-          if (step.used_tokens === undefined) {
-            return problem(`${turn.at}[${i}]: the model request after a compaction must write "used_tokens" — what the conversation shrank to`);
-          }
-          if (step.used_tokens >= threshold!) {
+          if (step.used_tokens >= threshold) {
             return problem(
               `${turn.at}[${i}]: used_tokens (${step.used_tokens}) is still at or above the threshold of ${threshold} — the agent would fold the conversation down again immediately`,
             );
           }
-        } else if (over) {
+          used = step.used_tokens;
+          over = false;
+          continue;
+        }
+        if (step.kind !== 'model') continue;
+        if (over) {
           return problem(
             `${turn.at}[${i}]: the conversation reached ${used} of ${context!.window} tokens, at or above the threshold of ${threshold}, earlier in this turn — a turn cannot ask for another model request past its threshold, since when the agent folds it down before the next turn is the agent's own business`,
           );
         }
         if (step.used_tokens !== undefined) used = step.used_tokens;
         over = threshold !== undefined && used >= threshold;
-        folding = false;
       }
     }
   }

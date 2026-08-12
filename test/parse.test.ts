@@ -1022,7 +1022,7 @@ const rows: Row[] = [
           response: ok
     `),
     message:
-      'when[2]: used_tokens falls from 50 to 10 — a conversation shrinks only where a compaction step folds it down',
+      'when[2]: used_tokens falls from 50 to 10 — a conversation shrinks only where a compaction folds it down',
   },
   {
     rule: 'a compaction request belongs at the start of a later turn',
@@ -1036,9 +1036,9 @@ const rows: Row[] = [
           used_tokens: 95
           response: { tool: x, args: {} }
         - request: compaction
+          used_tokens: 10
           response: "so far"
         - request: model
-          used_tokens: 10
           response: ok
     `),
     message:
@@ -1100,16 +1100,16 @@ const rows: Row[] = [
         - prompt: b
           when:
             - request: compaction
+              used_tokens: 10
               response: "so far"
             - request: model
-              used_tokens: 10
               response: ok
     `)}`,
     message:
       'turns[1].when[0]: a compaction step needs "given.context.compaction" to name a threshold — with "off", or with no "given.context" at all, the agent must not compact',
   },
   {
-    rule: 'the request after a compaction says what the conversation shrank to',
+    rule: 'a compaction says what the conversation shrank to',
     yaml: `name: x\n${dedent(`
       given:
         context:
@@ -1129,7 +1129,7 @@ const rows: Row[] = [
               response: ok
     `)}`,
     message:
-      'turns[1].when[1]: the model request after a compaction must write "used_tokens" — what the conversation shrank to',
+      'turns[1].when[0] needs "used_tokens" — what the conversation shrank to, which is half of what a fold does',
   },
   {
     rule: 'a trace fits the model-request budget',

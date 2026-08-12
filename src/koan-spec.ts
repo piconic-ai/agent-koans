@@ -123,16 +123,18 @@ export type Step =
   | { kind: 'subagent'; name: string; trace: Trace }
   /**
    * The extra model request an agent makes to fold a conversation that has
-   * reached `given.context.compaction` down to a summary — `summary` is
-   * what the mock replies to it, and the conversation's next request must
-   * carry that reply.
+   * reached `given.context.compaction` down to a summary. Both of a fold's
+   * effects are written on it: `summary` is what the mock replies, and the
+   * conversation's next request must carry that reply; `used_tokens` is
+   * what the conversation shrank to, which is required here rather than
+   * derived, so that the drop is read where it happens.
    *
    * A step of its own, not an annotation on the model step after it: an
    * agent that never folds then has no step to consume here, and one that
    * folds where no koan scripted it none to consume there, so the trace
    * stays the assertion.
    */
-  | { kind: 'compaction'; summary: string };
+  | { kind: 'compaction'; summary: string; used_tokens: number };
 
 /**
  * What the mock LLM serves for a model request. A tool-call instruction and

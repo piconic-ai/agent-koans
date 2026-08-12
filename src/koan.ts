@@ -336,8 +336,7 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
       case 'compaction': {
         // `openCalls` survives: folding a conversation down is not what
         // closes a call, so one still open across it stays open.
-        const next = steps.slice(i + 1).find((s) => s.kind === 'model') as Extract<Step, { kind: 'model' }>;
-        conv.turns.push({ reply: step.summary, usedTokens: next.used_tokens!, compaction: true });
+        conv.turns.push({ reply: step.summary, usedTokens: step.used_tokens, compaction: true });
         break;
       }
       case 'tool': {

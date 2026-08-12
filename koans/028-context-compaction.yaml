@@ -36,10 +36,14 @@ turns:
 
   - prompt: "What was that incident's operator code?"
     when:
+      # The fold: everything above becomes this summary, and 95000 tokens
+      # of conversation become 20000. The summary must come back — the
+      # request after it has to carry the operator code, and after the
+      # fold nothing else is left carrying it.
       - request: compaction
+        used_tokens: 20000
         response: "Earlier: incident INC-4407 has operator code K-9-4471."
       - request: model
-        used_tokens: 20000
         response: "The operator code is K-9-4471."
     then:
       status: completed

@@ -89,9 +89,6 @@ run's state must *do*.
 | `POST /runs/{run_id}/prompts` | Continue a run's conversation |
 | `POST /runs/{run_id}/compact` | Ask the run to fold its conversation down |
 
-A run's `status` is `running`, `completed`, `failed`, or `aborted`. When
-it is `completed`, `output` MUST carry the final answer.
-
 **Terminal state.** Every run MUST reach `completed`, `failed`, or
 `aborted` in finite time — whatever the tools do, whatever the model
 returns, whatever breaks inside you. A run still `running` past the
@@ -128,13 +125,11 @@ is yours. Summarizing is an ordinary request to the same endpoint; what it
 carries is yours to choose, and its reply MUST reach the conversation it
 summarized.
 
-A fold MUST also be reported to the caller, as two entries appended to the
-run's `events`: `{ type: "compaction", phase: "started" }` when it begins,
-and one `completed` or `failed` when it ends. A client that cannot see a
-fold cannot tell its user why the run went quiet, or why something it was
-told earlier is gone from the conversation. A `failed` entry MAY carry an
-`error` saying what went wrong; the words are yours, and what the caller
-is owed is that the fold failed.
+A fold MUST also be reported to the caller: an entry in the run's `events`
+when it begins, and one when it ends saying whether it completed or
+failed. A client that cannot see a fold cannot tell its user why the run
+went quiet, or why something it was told earlier is gone from the
+conversation.
 
 **Asking for a fold.** `POST /runs/{run_id}/compact` is the caller asking
 for one, and you MUST have folded by the time you answer it — and

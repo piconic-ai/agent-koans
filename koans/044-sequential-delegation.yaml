@@ -1,0 +1,46 @@
+name: sequential-delegation
+description: >
+  Two delegations, one after the other, each in its own model response.
+  The second child is briefed after the first has answered, and neither
+  child may see the other's work: what crosses between them is only what
+  the parent writes into the second briefing.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Prepare the weather report, one city at a time."
+
+when:
+  - request: model
+    response: { subagent: tokyo-researcher, prompt: "Look up the current temperature in Tokyo." }
+  - subagent: tokyo-researcher
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Tokyo" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 31, station: "TK-77" } }
+      - request: model
+        response: "Tokyo is 31°C."
+  - request: model
+    response: { subagent: osaka-researcher, prompt: "Look up the current temperature in Osaka." }
+  - subagent: osaka-researcher
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Osaka" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 28, station: "OS-12" } }
+      - request: model
+        response: "Osaka is 28°C."
+  - request: model
+    response: "Tokyo is 31°C and Osaka is 28°C."
+
+then:
+  status: completed
+  output: { matches: "31.*28" }

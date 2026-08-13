@@ -1,0 +1,35 @@
+name: subagent-tool-failure
+description: >
+  A tool fails inside the delegate. The failure is the child's to handle:
+  it reaches the child's model and stops there, so the parent learns of
+  it only through the child's final answer, and the run still completes.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Prepare the weather report."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Look up the current temperature in Tokyo." }
+  - subagent: researcher
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Tokyo" } }
+      - request: { tool: get_weather }
+        response: { status: 503, body: { error: "service_unavailable" } }
+      - request: model
+        response: "No reading is available."
+  - request: model
+    response: "The weather report cannot be prepared: no reading is available for Tokyo."
+
+then:
+  status: completed
+  output: { contains: "no reading is available" }

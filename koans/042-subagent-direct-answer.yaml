@@ -1,0 +1,32 @@
+name: subagent-direct-answer
+description: >
+  The delegate answers its briefing without calling anything. A subagent
+  is not obliged to use a tool any more than the main conversation is
+  (011): the child's first reply is its final answer, and it is what
+  returns to the parent.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Prepare the country briefing."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Name the capital of Japan." }
+  - subagent: researcher
+    when:
+      - request: model
+        response: "The capital is Tokyo."
+  - request: model
+    response: "Japan's capital city is Tokyo."
+
+then:
+  status: completed
+  output: { contains: "Tokyo" }

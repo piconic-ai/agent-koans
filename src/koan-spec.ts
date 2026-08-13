@@ -80,8 +80,15 @@ export type Body =
   | { kind: 'variants'; prompt: string; variants: Record<string, Trace>; then?: Judgment }
   | { kind: 'turns'; turns: [Turn, Turn, ...Turn[]] };
 
-/** One turn of a `turns` koan — a small koan of its own. */
+/**
+ * One turn of a `turns` koan — a small koan of its own. `compact` is the
+ * caller's, and written above `prompt` because that is the order it
+ * happens in: the caller asks for a fold, then sends this turn's prompt,
+ * and the trace below opens with the fold that answers the ask.
+ */
 export interface Turn {
+  /** The caller asked for a fold before this turn's prompt went out. */
+  compact?: true;
   prompt: string;
   trace: Trace;
   /** Defaulted to `{ status: 'completed' }` while parsing, never absent here. */
@@ -91,15 +98,11 @@ export interface Turn {
 /**
  * One conversation's expected wire log. `abort` is not a step: it may only
  * end a trace, so it is a property of the trace, and its kind is derived
- * from what it follows rather than written. `compact` is the same shape
- * for the same reason — the caller asks between two turns, which is a
- * place only the head of a trace can name.
+ * from what it follows rather than written.
  */
 export interface Trace {
   steps: [Step, ...Step[]];
   abort?: AbortKind;
-  /** The caller asked for a fold before this turn's prompt went out; the turn opens with one. */
-  compact?: true;
 }
 
 /** Derived: `live` cancels a run in progress, `late` one already settled. */

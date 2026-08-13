@@ -432,7 +432,7 @@ function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): { 
     turnSpecs.push({
       prompt: t.prompt,
       then: compileJudgment(t.then),
-      ...(t.trace.compact ? { compactBefore: true as const } : {}),
+      ...(t.compact ? { compactBefore: true as const } : {}),
     });
   }
 

@@ -395,7 +395,7 @@ const rows: Row[] = [
             response: ok
         extra: 1
     `),
-    message: 'turns[0] has unknown key "extra" — a turn entry carries only "prompt", "when", and "then"',
+    message: 'turns[0] has unknown key "extra" — a turn entry carries only "compact", "prompt", "when", and "then"',
   },
   {
     rule: 'a turn\'s "when" is a non-empty list',
@@ -1096,7 +1096,7 @@ const rows: Row[] = [
               response: ok
     `)}`,
     message:
-      'turns[1].when[0]: nothing has asked for a fold here — the conversation is at 95 tokens and the run declares no threshold, and the caller did not ask at the head of this turn',
+      'turns[1].when[0]: nothing has asked for a fold here — the conversation is at 95 tokens and the run declares no threshold, and the caller did not ask before this turn',
   },
   {
     rule: 'a compaction says what the conversation shrank to',
@@ -1163,39 +1163,39 @@ const rows: Row[] = [
       'turns[1].when[0]: a compaction step needs a model request after it — otherwise no request carries its summary',
   },
   {
-    rule: '"compact" opens the turn it belongs to',
-    yaml: turnsKoan(`
-      - prompt: a
-        when:
-          - request: model
-            response: ok
-          - compact
-    `),
-    message: `turns[0].when[1]: "compact" opens the turn the caller asked before — nothing of the trace comes before it`,
-  },
-  {
-    rule: '"compact" needs a "turns:" koan',
+    rule: '"compact" is the caller\'s, not a step of the trace',
     yaml: koan(`
       when:
         - compact
         - request: model
           response: ok
     `),
-    message: `when[0]: "compact" needs the turn it opens — write it in a "turns:" koan, on the turn the caller asks before`,
+    message: `when[0]: "compact" is the caller's, not a step of the trace — write it as a turn's own "compact: true"`,
   },
   {
-    rule: '"compact" cannot open the first turn',
+    rule: 'a turn\'s "compact" is true or absent',
     yaml: turnsKoan(`
       - prompt: a
+        compact: "yes"
         when:
-          - compact
           - request: model
             response: ok
     `),
-    message: `turns[0].when[0]: "compact" needs a turn before it — a caller asks a run that has already answered`,
+    message: 'turns[0].compact must be true — the caller either asked for a fold before this turn or did not',
   },
   {
-    rule: 'a turn opening with "compact" opens with the fold it asked for',
+    rule: 'the first turn cannot carry "compact"',
+    yaml: turnsKoan(`
+      - prompt: a
+        compact: true
+        when:
+          - request: model
+            response: ok
+    `),
+    message: `turns[0].compact: the caller asks a run that has already answered — a first turn cannot open with a fold`,
+  },
+  {
+    rule: 'a turn the caller asked before opens with the fold',
     yaml: `name: x\n${dedent(`
       given:
         context:
@@ -1206,13 +1206,13 @@ const rows: Row[] = [
           when:
             - request: model
               response: { body: ok, used_tokens: 10 }
-        - prompt: b
+        - compact: true
+          prompt: b
           when:
-            - compact
             - request: model
               response: ok
     `)}`,
-    message: 'turns[1].when[1]: the caller asked for a fold at the head of this turn — the fold must follow it',
+    message: 'turns[1].when[0]: the caller asked for a fold before this turn — it must open with one',
   },
   {
     rule: 'a trace fits the model-request budget',

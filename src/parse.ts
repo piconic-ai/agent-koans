@@ -276,8 +276,16 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
       return problem(`turns[${i}] needs a non-empty "prompt"`);
     }
     for (const key of Object.keys(rt)) {
-      if (key !== 'prompt' && key !== 'when' && key !== 'then') {
-        return problem(`turns[${i}] has unknown key "${key}" — a turn entry carries only "prompt", "when", and "then"`);
+      if (key !== 'compact' && key !== 'prompt' && key !== 'when' && key !== 'then') {
+        return problem(`turns[${i}] has unknown key "${key}" — a turn entry carries only "compact", "prompt", "when", and "then"`);
+      }
+    }
+    if (rt.compact !== undefined) {
+      if (rt.compact !== true) {
+        return problem(`turns[${i}].compact must be true — the caller either asked for a fold before this turn or did not`);
+      }
+      if (i === 0) {
+        return problem(`turns[0].compact: the caller asks a run that has already answered — a first turn cannot open with a fold`);
       }
     }
     const then =
@@ -295,9 +303,6 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
     }
     const trace = parseTrace(into(ctx, `turns[${i}].when`, rawWhen), true, false);
     if (isProblem(trace)) return trace;
-    if (i === 0 && trace.compact) {
-      return problem(`turns[0].when[0]: "compact" needs a turn before it — a caller asks a run that has already answered`);
-    }
     if (i < rawTurns.length - 1) {
       const last = trace.steps[trace.steps.length - 1];
       // An intermediate turn can only be judged "completed" by ending in
@@ -312,7 +317,12 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
     traces.push(trace);
   }
 
-  const turns = prompts.map((prompt, i) => ({ prompt, trace: traces[i], then: thens[i] }));
+  const turns = prompts.map((prompt, i) => ({
+    ...((rawTurns[i] as Record<string, unknown>).compact === true ? { compact: true as const } : {}),
+    prompt,
+    trace: traces[i],
+    then: thens[i],
+  }));
   return { kind: 'turns', turns: turns as [Turn, Turn, ...Turn[]] };
 }
 
@@ -359,26 +369,12 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
   }
 
   const written = [...node];
-  // The caller's ask opens the turn its fold belongs to, so the two sit
-  // one under the other: who asked, then what the agent did about it.
-  let compact = false;
   const compactAt = written.findIndex((s) => s === 'compact');
   if (compactAt !== -1) {
-    if (compactAt !== 0) {
-      return problem(`${at}[${compactAt}]: "compact" opens the turn the caller asked before — nothing of the trace comes before it`);
-    }
-    if (!inTurns) {
-      return problem(`${at}[0]: "compact" needs the turn it opens — write it in a "turns:" koan, on the turn the caller asks before`);
-    }
-    if (inSubagent) {
-      return problem(`${at}[0]: "compact" cannot appear inside a subagent block — only the caller's own run can be asked`);
-    }
-    written.shift();
-    compact = true;
+    return problem(
+      `${at}[${compactAt}]: "compact" is the caller's, not a step of the trace — write it as a turn's own "compact: true"`,
+    );
   }
-  // Kept so a step's path names the line the koan author wrote, not the
-  // one left after the ask was taken off the front.
-  const written0 = compact ? 1 : 0;
 
   let abort = false;
   const abortAt = written.findIndex((s) => s === 'abort');
@@ -404,7 +400,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
   let sentPromptAt = -1;
   let queuedSeam = false;
   for (let i = 0; i < written.length; i++) {
-    const at_i = `${at}[${i + written0}]`;
+    const at_i = `${at}[${i}]`;
     const prev = steps.at(-1);
     const item: unknown = written[i];
 
@@ -418,7 +414,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       if (typeof block.subagent !== 'string' || block.subagent.length === 0) {
         return problem(`${at_i}.subagent must be a non-empty delegate name`);
       }
-      const childTrace = parseTrace(into(ctx, `[${i + written0}].when`, block.when), false, true);
+      const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), false, true);
       if (isProblem(childTrace)) return childTrace;
       const childLast = childTrace.steps[childTrace.steps.length - 1];
       if (childLast.kind !== 'model' || childLast.response.kind !== 'reply') {
@@ -483,7 +479,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       }
       const envelope = parseModelEnvelope(at_i, res);
       if (isProblem(envelope)) return envelope;
-      const response = parseModelResponse(into(ctx, `[${i + written0}]`, envelope.body), inSubagent);
+      const response = parseModelResponse(into(ctx, `[${i}]`, envelope.body), inSubagent);
       if (isProblem(response)) return response;
       steps.push({
         kind: 'model',
@@ -552,7 +548,6 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
 
   const trace: Trace = { steps: steps as [Step, ...Step[]] };
   if (abort) trace.abort = abortKindOf(trace);
-  if (compact) trace.compact = true;
   return trace;
 }
 
@@ -1132,7 +1127,7 @@ function scriptedConversations(koan: KoanFile): ScriptedConversation[] {
       body.turns.map((t, i) => ({
         steps: t.trace.steps,
         at: `turns[${i}].when`,
-        ...(t.trace.compact ? { compact: true as const } : {}),
+        ...(t.compact ? { compact: true as const } : {}),
       })),
     );
     for (const [i, t] of body.turns.entries()) addSubagents(t.trace.steps, `turns[${i}].when`);
@@ -1203,14 +1198,11 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
     let used = 0;
     for (const turn of conv) {
       const asked = turn.compact === true;
-      // The ask is written as the turn's first entry but is not a step of
-      // its own, so a step's path counts from behind it.
-      const at0 = asked ? 1 : 0;
       let over = threshold !== undefined && used >= threshold;
       if ((over || asked) && turn.steps[0].kind !== 'compaction') {
         return problem(
           asked
-            ? `${turn.at}[${at0}]: the caller asked for a fold at the head of this turn — the fold must follow it`
+            ? `${turn.at}[0]: the caller asked for a fold before this turn — it must open with one`
             : `${turn.at}[0]: the conversation carries ${used} of ${context!.window} tokens into this turn, at or above the threshold of ${threshold} — it must open with a compaction`,
         );
       }
@@ -1218,9 +1210,9 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
         if (step.kind === 'compaction') {
           if (!over && !asked) {
             return problem(
-              `${turn.at}[${i + at0}]: nothing has asked for a fold here — the conversation is at ${used} tokens${
+              `${turn.at}[${i}]: nothing has asked for a fold here — the conversation is at ${used} tokens${
                 threshold === undefined ? ' and the run declares no threshold' : `, below the threshold of ${threshold}`
-              }, and the caller did not ask at the head of this turn`,
+              }, and the caller did not ask before this turn`,
             );
           }
           // A fold that failed leaves the conversation as it was. What
@@ -1233,7 +1225,7 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
           }
           if (threshold !== undefined && step.used_tokens >= threshold) {
             return problem(
-              `${turn.at}[${i + at0}]: used_tokens (${step.used_tokens}) is still at or above the threshold of ${threshold} — the agent would fold the conversation down again immediately`,
+              `${turn.at}[${i}]: used_tokens (${step.used_tokens}) is still at or above the threshold of ${threshold} — the agent would fold the conversation down again immediately`,
             );
           }
           used = step.used_tokens;
@@ -1243,7 +1235,7 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
         if (step.kind !== 'model') continue;
         if (over) {
           return problem(
-            `${turn.at}[${i + at0}]: the conversation reached ${used} of ${context!.window} tokens, at or above the threshold of ${threshold}, earlier in this turn — a turn cannot ask for another model request past its threshold, since when the agent folds it down before the next turn is the agent's own business`,
+            `${turn.at}[${i}]: the conversation reached ${used} of ${context!.window} tokens, at or above the threshold of ${threshold}, earlier in this turn — a turn cannot ask for another model request past its threshold, since when the agent folds it down before the next turn is the agent's own business`,
           );
         }
         if (step.used_tokens !== undefined) used = step.used_tokens;

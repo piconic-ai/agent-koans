@@ -1,0 +1,53 @@
+// Delegation, offered to the model as a tool. What belongs here is the
+// tool's vocabulary and the check that the model named a delegate the run
+// declared; what does not is how a delegate's conversation runs — that is
+// the loop again, reached through the `delegate` this file is handed.
+import { parseArgs, type Tool } from './tools.js';
+
+/** A delegate declared by the run (SPEC.md §3). */
+export interface SubagentDef {
+  name: string;
+  description?: string;
+}
+
+/** Run a briefing as a conversation of its own; `undefined` when the budget ran out first. */
+export type Delegate = (prompt: string, signal: AbortSignal) => Promise<string | undefined>;
+
+/**
+ * Make delegation runnable, over the delegates the run declared.
+ *
+ * The tool's name and argument names are agent-koans' neutral default
+ * (the runner's `DEFAULT_DELEGATION`), so they are written here rather
+ * than read from anywhere: this example declares no vocabulary of its own.
+ */
+export function createSubagentTool(subagents: SubagentDef[], delegate: Delegate): Tool {
+  return {
+    def: {
+      name: 'subagent',
+      description:
+        'Delegate a focused task to a named subagent. Available: ' +
+        subagents.map((s) => (s.description ? `${s.name} (${s.description})` : s.name)).join(', '),
+      input_schema: {
+        type: 'object',
+        properties: { name: { type: 'string' }, prompt: { type: 'string' } },
+        required: ['name', 'prompt'],
+      },
+    },
+    async invoke(argsJson, signal) {
+      const args = parseArgs(argsJson);
+      const name = typeof args?.name === 'string' ? args.name : undefined;
+      const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined;
+      if (!name || !subagents.some((s) => s.name === name)) {
+        return `Error: unknown subagent "${String(name)}"`;
+      }
+      if (prompt === undefined) {
+        return `Error: subagent "${name}" call is missing "prompt"`;
+      }
+
+      // The briefing, and nothing else: what the parent knows is the
+      // parent's, and what the parent gets back is this one answer.
+      const text = await delegate(prompt, signal);
+      return text ?? `Error: subagent "${name}" did not finish before the model-request budget ran out`;
+    },
+  };
+}

@@ -3,8 +3,11 @@
 // Hono is used for HTTP routing only.
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { createAgent, type RunContext, type RunLimits, type SubagentDef, type ToolDef } from './agent.js';
+import { createAgent, type RunLimits } from './agent.js';
 import { loadConfig } from './config.js';
+import type { SubagentDef } from './subagents.js';
+import type { ToolDef } from './tools.js';
+import type { RunContext } from './window.js';
 
 const config = loadConfig();
 const agent = createAgent({ model: config.model, tools: config.tools, workspace: config.workspace });

@@ -1,0 +1,32 @@
+name: non-string-arguments
+description: >
+  The call carries a number and a boolean, both matching the schema. The
+  arguments must reach the tool with their JSON types intact: 3 stays a
+  number and true stays a boolean, neither one turned into a string on the
+  way.
+
+given:
+  tools:
+    get_forecast:
+      description: "Get the weather forecast for the coming days"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+          days: { type: number }
+          hourly: { type: boolean }
+        required: [city, days, hourly]
+
+prompt: "Get the hourly 3-day forecast for Tokyo."
+
+when:
+  - request: model
+    response: { tool: get_forecast, args: { city: "Tokyo", days: 3, hourly: true } }
+  - request: { tool: get_forecast }
+    response: { status: 200, body: { forecast: "sunny" } }
+  - request: model
+    response: "Sunny for the next 3 days in Tokyo."
+
+then:
+  status: completed
+  output: { contains: "Sunny" }

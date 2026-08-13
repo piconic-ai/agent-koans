@@ -6,6 +6,7 @@
 import { createProvider } from '@earendil-works/pi-ai';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import { noteModelRequest } from './budget.js';
+import { checkRoom } from './window.js';
 import type { Config } from './config.js';
 
 /**
@@ -41,14 +42,16 @@ export function createKoanProvider(model: Config['model']) {
         maxTokens: 8192,
       },
     ],
-    // The budget check lives on the request boundary so an over-budget
-    // request is never issued at all (SPEC.md §3).
+    // The budget and window checks live on the request boundary so a
+    // request neither allows is never issued at all (SPEC.md §3).
     api: {
       stream: (model, context, options) => {
+        checkRoom();
         noteModelRequest();
         return api.stream(model, context, options);
       },
       streamSimple: (model, context, options) => {
+        checkRoom();
         noteModelRequest();
         return api.streamSimple(model, context, options);
       },

@@ -256,6 +256,40 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
   }
 
   /**
+   * The caller asks for a fold, and gets it before the answer (SPEC.md
+   * §3). Returns `false` when `runId` is unknown, so the caller can answer
+   * 404. A refused fold is not an error at the asking: it is reported, and
+   * what it means for the run is decided where the room is read.
+   */
+  async function compactRun(runId: string): Promise<boolean> {
+    const session = sessions.get(runId);
+    if (!session) return false;
+    if (session.budget.used >= session.budget.max) {
+      // Folding needs a model request and there is none left to spend. The
+      // ask is still answered the way any refused fold is — reported —
+      // since a caller cannot act on silence.
+      session.report({ type: 'compaction', phase: 'started' });
+      session.report({
+        type: 'compaction',
+        phase: 'failed',
+        error: `model-request budget exhausted (${session.budget.max})`,
+      });
+      return true;
+    }
+    session.budget.used += 1;
+    try {
+      await compact(session.messages, session.report, new AbortController().signal);
+      // Not the summarizing request's own usage: carrying that number over
+      // would trip the threshold again and fold forever.
+      session.size.used = 0;
+    } catch {
+      // Left as it was, which the room check before the next model
+      // request reads for what it is.
+    }
+    return true;
+  }
+
+  /**
    * Request cancellation of a run (SPEC.md §3 abort guarantee). Returns
    * `false` when `runId` is unknown, so the caller can answer 404;
    * otherwise always `true`, including for a run already in a terminal
@@ -341,10 +375,21 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
       if (reachedThreshold(size.used, context)) {
         if (budget.used >= budget.max) return undefined;
         budget.used += 1;
-        await compact(messages, report, signal);
-        // Not the summarizing request's own usage: carrying that number
-        // over would trip the threshold again and fold forever.
-        size.used = 0;
+        try {
+          await compact(messages, report, signal);
+          // Not the summarizing request's own usage: carrying that number
+          // over would trip the threshold again and fold forever.
+          size.used = 0;
+        } catch {
+          // A refused fold leaves the conversation as it was, so the room
+          // below decides what follows — never the fold's outcome.
+        }
+      }
+
+      // Read before every request rather than after a fold: what a full
+      // window forbids is asking the model again, whatever filled it.
+      if (context !== undefined && size.used >= context.window) {
+        throw new Error(`no room left in the declared context window (${context.window})`);
       }
 
       if (budget.used >= budget.max) return undefined;
@@ -550,5 +595,5 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     messages.push(opening, { role: 'user', content: `Summary of the conversation so far: ${summary}` }, ...unanswered);
   }
 
-  return { startRun, getRun, sendPrompt, abortRun };
+  return { startRun, getRun, sendPrompt, compactRun, abortRun };
 }

@@ -7,6 +7,8 @@ import { AgentRunError, type AgentInstanceHandle, init, observe } from '@flue/ru
 import { start } from '@flue/runtime/node';
 import { Assistant, type AssistantData, type RunContext } from './agents/assistant.js';
 import { armBudget, budgetTripped } from './budget.js';
+import { armWindow, noteFoldFailed, noteUsed } from './window.js';
+import { compactConversation } from './compaction.js';
 import { loadConfig } from './config.js';
 import { createKoanProvider } from './provider.js';
 import type { RunSubagentDef } from './subagents.js';
@@ -46,17 +48,31 @@ const runsByInstance = new Map<string, Run>();
 observe((observation, ctx) => {
   const run = ctx.id === undefined ? undefined : runsByInstance.get(ctx.id);
   if (!run) return;
+  if (observation.type === 'turn' && observation.purpose === 'agent' && observation.response?.usage) {
+    noteUsed(observation.response.usage.input);
+  }
   if (observation.type === 'compaction_start') {
     run.events.push({ type: 'compaction', phase: 'started' });
   } else if (observation.type === 'compaction') {
     const failed = observation.isError === true;
+    if (failed) noteFoldFailed();
     run.events.push({
       type: 'compaction',
       phase: failed ? 'failed' : 'completed',
-      ...(failed ? { error: String(observation.error ?? 'compaction failed') } : {}),
+      ...(failed ? { error: reasonOf(observation.error) } : {}),
     });
   }
 });
+
+// Not `String(error)`: Flue serializes a failed fold's cause as an object
+// ({ name, message, ... }), which stringifies to "[object Object]" — the
+// one thing a caller cannot decide from.
+function reasonOf(error: unknown): string {
+  if (error !== null && typeof error === 'object' && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return String(error ?? 'compaction failed');
+}
 // The per-run agent handle, kept for the run's whole process lifetime —
 // not just while a turn is in flight. The abort endpoint needs it to call
 // the handle's own abort(); a follow-up prompt (SPEC.md §3) needs it to
@@ -99,12 +115,14 @@ function startRun(
   const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running', events: [] };
   runs.set(run.run_id, run);
   armBudget(limits?.max_model_requests);
+  armWindow(context?.window);
   // No id passed to init(): each run gets an isolated conversation, never
   // reusing another run's state.
   const agent = init(Assistant);
   handles.set(run.run_id, agent);
   runsByInstance.set(agent.id, run);
   const initialData: AssistantData = {
+    runId: run.run_id,
     tools,
     toolsBaseUrl: config.tools.baseUrl,
     subagents,
@@ -132,6 +150,23 @@ function sendPrompt(runId: string, prompt: string): boolean {
   run.output = undefined;
   run.error = undefined;
   runTurn(run, agent, prompt);
+  return true;
+}
+
+/**
+ * Fold this run's conversation down, because its caller asked (SPEC.md
+ * §3). Returns `false` when `runId` is unknown, so the caller can answer
+ * 404.
+ */
+async function compactRun(runId: string): Promise<boolean> {
+  const agent = handles.get(runId);
+  if (!agent) return false;
+  try {
+    await compactConversation(runId, agent.id);
+  } catch {
+    // Not rethrown: a failed fold owes a report, not an error at the
+    // asking, and the observer above already recorded it.
+  }
   return true;
 }
 
@@ -185,6 +220,12 @@ app.post('/runs/:id/prompts', async (c) => {
     return c.json({ error: 'prompt is required' }, 400);
   }
   const known = sendPrompt(c.req.param('id'), prompt);
+  if (!known) return c.json({ error: 'run not found' }, 404);
+  return c.json({}, 202);
+});
+
+app.post('/runs/:id/compact', async (c) => {
+  const known = await compactRun(c.req.param('id'));
   if (!known) return c.json({ error: 'run not found' }, 404);
   return c.json({}, 202);
 });

@@ -1,0 +1,51 @@
+name: compaction-on-request
+description: >
+  The caller asks for a fold. The run declares compaction off, so nothing
+  the conversation does would fold it — and it folds anyway, because being
+  asked is not the same as crossing a threshold. By the second turn's
+  first model request the conversation must be a summary, that summary
+  must carry what the second turn asks for, and the run must report the
+  fold to the caller who asked for it.
+
+given:
+  context:
+    window: 100000
+    compaction: off
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+turns:
+  - prompt: "Look up incident INC-4407 and confirm it is logged."
+    when:
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-4407" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-9-4471" } }
+      - request: model
+        response:
+          body: "Incident INC-4407 is logged."
+          used_tokens: 40000
+
+  - compact: true
+    when:
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          body: "Earlier: incident INC-4407 has operator code K-9-4471."
+          used_tokens: 8000
+          compaction: completed
+
+  - prompt: "What was that incident's operator code?"
+    when:
+      - request: model
+        response: "The operator code is K-9-4471."
+    then:
+      status: completed
+      output: { contains: "K-9-4471" }

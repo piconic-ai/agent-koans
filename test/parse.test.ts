@@ -395,7 +395,7 @@ const rows: Row[] = [
             response: ok
         extra: 1
     `),
-    message: 'turns[0] has unknown key "extra" — a turn entry carries only "prompt", "when", and "then"',
+    message: 'turns[0] has unknown key "extra" — a prompt entry carries only "prompt", "when", and "then"',
   },
   {
     rule: 'a turn\'s "when" is a non-empty list',
@@ -1074,10 +1074,10 @@ const rows: Row[] = [
               response: ok
     `)}`,
     message:
-      'turns[1].when[0]: the conversation carries 95 of 100 tokens into this turn, at or above the threshold of 90 — it must open with a compaction step',
+      'turns[1].when[0]: the conversation carries 95 of 100 tokens into this turn, at or above the threshold of 90 — it must open with a compaction',
   },
   {
-    rule: 'a compaction needs a threshold to have been declared',
+    rule: 'a compaction needs something to have asked for it',
     yaml: `name: x\n${dedent(`
       given:
         context:
@@ -1096,7 +1096,7 @@ const rows: Row[] = [
               response: ok
     `)}`,
     message:
-      'turns[1].when[0]: a compaction step needs "given.context.compaction" to name a threshold — with "off", or with no "given.context" at all, the agent must not compact',
+      'turns[1].when[0]: nothing has asked for a fold here — the conversation is at 95 tokens and the run declares no threshold, and the caller did not ask before this turn',
   },
   {
     rule: 'a compaction says what the conversation shrank to',
@@ -1140,7 +1140,77 @@ const rows: Row[] = [
               response: ok
     `)}`,
     message:
-      'turns[1].when[0].response needs "compaction: completed" — how the run reported this fold\'s ending to its caller. A fold that ends any other way is not scriptable yet',
+      'turns[1].when[0].response needs "compaction: completed" or "compaction: failed" — how the run reported this fold\'s ending to its caller',
+  },
+  {
+    rule: 'a fold that completed is followed by a model request',
+    yaml: `name: x\n${dedent(`
+      given:
+        context:
+          window: 100
+          compaction: "off"
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: { body: ok, used_tokens: 10 }
+        - compact: true
+          when:
+            - request: { type: model, purpose: compaction }
+              response: { body: "so far", used_tokens: 5, compaction: completed }
+    `)}`,
+    message:
+      'turns[1]: a compaction needs a model request after it — otherwise no request carries its summary',
+  },
+  {
+    rule: '"compact" is the caller\'s, not a step of the trace',
+    yaml: koan(`
+      when:
+        - compact
+        - request: model
+          response: ok
+    `),
+    message: `when[0]: "compact" is the caller's, not a step of the trace — write it as a turn's own "compact: true"`,
+  },
+  {
+    rule: 'an ask\'s "compact" is true',
+    yaml: turnsKoan(`
+      - compact: "yes"
+        when:
+          - request: model
+            response: ok
+    `),
+    message: 'turns[0].compact must be true — the caller either asked for a fold here or did not',
+  },
+  {
+    rule: 'a koan cannot open with an ask',
+    yaml: turnsKoan(`
+      - compact: true
+        when:
+          - request: model
+            response: ok
+    `),
+    message: `turns[0].compact: the caller asks a run that has already answered — an ask cannot open a koan`,
+  },
+  {
+    rule: 'an ask brings about a fold and nothing else',
+    yaml: `name: x\n${dedent(`
+      given:
+        context:
+          window: 100
+          compaction: "off"
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: { body: ok, used_tokens: 10 }
+        - compact: true
+          when:
+            - request: model
+              response: ok
+    `)}`,
+    message:
+      'turns[1].when scripts 1 step(s) — an ask brings about the fold and nothing else, since without a prompt there is no other work',
   },
   {
     rule: 'a trace fits the model-request budget',

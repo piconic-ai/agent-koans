@@ -1,0 +1,54 @@
+name: compaction-failure
+description: >
+  The caller asks for a fold and the summarizing request is refused, so
+  nothing is summarized and the conversation stays as it was. Two things
+  follow. The caller must be told the fold failed — not in any particular
+  words, since a failure said two ways is the same failure, so what this
+  koan reads is the report and never its wording. And the run carries on:
+  the conversation is far from its window, and what decides whether the
+  agent may ask the model again is the room left there, never the fold's
+  outcome.
+
+given:
+  context:
+    window: 100000
+    compaction: off
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+turns:
+  - prompt: "Look up incident INC-4407 and confirm it is logged."
+    when:
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-4407" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-9-4471" } }
+      - request: model
+        response:
+          body: "Incident INC-4407 is logged."
+          used_tokens: 40000
+
+  # 40000 of 100000: nothing here is under pressure but the caller's ask.
+  - compact: true
+    when:
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          status: 400
+          body: { error: "summarizer_unavailable" }
+          compaction: failed
+
+  - prompt: "What was that incident's operator code?"
+    when:
+      - request: model
+        response: "The operator code is K-9-4471."
+    then:
+      status: completed
+      output: { contains: "K-9-4471" }

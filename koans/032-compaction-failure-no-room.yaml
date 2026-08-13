@@ -1,0 +1,49 @@
+name: compaction-failure-no-room
+description: >
+  The same refusal as 031, against a full window: the same run, the same
+  ask, the same refusal, and one number changed. The first turn leaves the
+  conversation at the size the run declared, so when the fold the caller
+  asked for is refused there is no room for another model request, and the
+  run ends instead of making one. What the agent reads to know that is the
+  size the model reported, against the window the run declared — never its
+  compaction policy, which says only when it folds on its own.
+
+given:
+  context:
+    window: 100000
+    compaction: off
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+turns:
+  - prompt: "Look up incident INC-4407 and confirm it is logged."
+    when:
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-4407" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-9-4471" } }
+      - request: model
+        response:
+          body: "Incident INC-4407 is logged."
+          used_tokens: 100000
+
+  - compact: true
+    when:
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          status: 400
+          body: { error: "summarizer_unavailable" }
+          compaction: failed
+
+  # No room for a model request, so the prompt draws none and the run ends.
+  - prompt: "What was that incident's operator code?"
+    then:
+      status: failed

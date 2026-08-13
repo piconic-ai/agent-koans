@@ -94,6 +94,32 @@ paths:
         "404":
           description: Unknown `run_id`.
 
+  /runs/{run_id}/compact:
+    post:
+      operationId: compactRun
+      summary: Ask the run to fold its conversation down
+      description: >
+        The caller asks for a compaction (SPEC.md §3). The agent MUST have
+        folded the conversation by the time it answers, and MUST report the
+        fold in `events`, whatever `context.compaction` says — that setting
+        governs folding the agent does on its own, not what the caller
+        asks for.
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: >
+            The fold has happened by now — completed or failed — and is in
+            the run's `events`.
+        "200":
+          description: Request accepted. Equivalent to 202.
+        "404":
+          description: Unknown `run_id`.
+
   /runs/{run_id}/prompts:
     post:
       operationId: sendPrompt
@@ -278,4 +304,4 @@ components:
             `completed`/`failed` when it ends.
         error:
           type: string
-          description: Failure detail. SHOULD be present when `phase` is `failed`.
+          description: Failure detail in the run's own words. MAY be present when `phase` is `failed`.

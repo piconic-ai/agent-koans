@@ -80,12 +80,29 @@ export type Body =
   | { kind: 'variants'; prompt: string; variants: Record<string, Trace>; then?: Judgment }
   | { kind: 'turns'; turns: [Turn, Turn, ...Turn[]] };
 
-/** One turn of a `turns` koan — a small koan of its own. */
-export interface Turn {
+/**
+ * One entry of a `turns` koan: something the caller did, and what the
+ * agent did about it. A prompt is one such thing and asking for a fold is
+ * another, so they are two shapes rather than one carrying a flag — an
+ * ask has no prompt to send and no outcome to judge, and the fold it
+ * brings about is its own exchange, not the next prompt's.
+ */
+export type Turn = PromptTurn | CompactTurn;
+
+/** The caller sent a prompt. `trace` is absent where no model request followed it. */
+export interface PromptTurn {
+  kind: 'prompt';
   prompt: string;
-  trace: Trace;
+  trace?: Trace;
   /** Defaulted to `{ status: 'completed' }` while parsing, never absent here. */
   then: Judgment;
+}
+
+/** The caller asked the run to fold its conversation down. */
+export interface CompactTurn {
+  kind: 'compact';
+  /** The fold the ask brings about, and nothing else: without a prompt there is no other work. */
+  trace: Trace;
 }
 
 /**
@@ -139,19 +156,25 @@ export type Step =
    * ending to its caller. The request itself is the fold beginning, so
    * only its ending is written.
    *
-   * A shape of its own rather than a `model` step carrying two optional
-   * fields: a fold's response is a summary and never a tool call, and its
-   * three fields are required, none of which a shared shape could say.
+   * A fold that failed has neither of the first two — nothing was
+   * summarized and nothing shrank — so it carries the failure the model
+   * endpoint answered with instead, and the same `report`.
+   *
+   * A shape of its own rather than a `model` step carrying optional
+   * fields: a fold's response is a summary and never a tool call, and what
+   * it must carry depends on how it ended, neither of which a shared shape
+   * could say.
    */
-  | { kind: 'compaction'; summary: string; used_tokens: number; report: CompactionReport };
+  | { kind: 'compaction'; summary: string; used_tokens: number; report: 'completed' }
+  | { kind: 'compaction'; fails: ToolResponse; report: 'failed' };
 
 /**
- * How a fold ended, as its run reported it to its caller. One word today:
- * a fold that fails is not scriptable until the contract says what an
- * agent owes a run whose fold did not happen, and `failed` joins this
- * vocabulary with it.
+ * How a fold ended, as its run reported it to its caller. A fold that
+ * failed owes nothing further of the agent — carrying on and ending the
+ * run both conform (SPEC.md §3) — so what a koan can assert about one is
+ * that its caller was told, which is what this word is.
  */
-export type CompactionReport = 'completed';
+export type CompactionReport = 'completed' | 'failed';
 
 /**
  * What the mock LLM serves for a model request. A tool-call instruction and

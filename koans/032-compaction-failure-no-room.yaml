@@ -1,16 +1,17 @@
 name: compaction-failure-no-room
 description: >
-  The same refusal as 031, against a full window. The first turn fills the
-  conversation to the size the run declared, so the fold the threshold
-  forces is the only way on — and it is refused. There is no room left for
-  another model request, so the run ends instead of asking for one. The
-  window is what decides that, which is why the two koans differ in one
-  number and nothing else.
+  The same refusal as 031, against a full window: the same run, the same
+  ask, the same refusal, and one number changed. The first turn leaves the
+  conversation at the size the run declared, so when the fold the caller
+  asked for is refused there is no room for another model request, and the
+  run ends instead of making one. What the agent reads to know that is the
+  size the model reported, against the window the run declared — never its
+  compaction policy, which says only when it folds on its own.
 
 given:
   context:
     window: 100000
-    compaction: 90%
+    compaction: off
   tools:
     lookup_incident:
       description: "Look up an incident record by id"
@@ -31,6 +32,7 @@ turns:
         response:
           body: "Incident INC-4407 is logged."
           used_tokens: 100000
+      - compact
 
   - prompt: "What was that incident's operator code?"
     when:

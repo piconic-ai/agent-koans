@@ -2,6 +2,10 @@
 // budget is, at the provider boundary: Flue treats a refused fold as
 // best-effort and asks the model again, so the request the window has no
 // room for has to be stopped before it is issued.
+//
+// One mutable slot rather than a map keyed by run, exactly as budget.ts
+// holds the request budget: the conformance runner starts a fresh agent
+// process per koan and submits one run at a time.
 
 /** Thrown by the provider wrapper instead of issuing a request the window cannot hold. */
 export class WindowFullError extends Error {

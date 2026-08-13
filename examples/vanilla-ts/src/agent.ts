@@ -264,7 +264,18 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
   async function compactRun(runId: string): Promise<boolean> {
     const session = sessions.get(runId);
     if (!session) return false;
-    if (session.budget.used >= session.budget.max) return true;
+    if (session.budget.used >= session.budget.max) {
+      // Folding needs a model request and there is none left to spend. The
+      // ask is still answered the way any refused fold is — reported —
+      // since a caller cannot act on silence.
+      session.report({ type: 'compaction', phase: 'started' });
+      session.report({
+        type: 'compaction',
+        phase: 'failed',
+        error: `model-request budget exhausted (${session.budget.max})`,
+      });
+      return true;
+    }
     session.budget.used += 1;
     try {
       await compact(session.messages, session.report, new AbortController().signal);

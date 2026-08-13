@@ -155,9 +155,10 @@ function judge(then: Judgment, run: RunState): string[] {
   return failures;
 }
 
-/** How many folds the run has reported so far, started and ended alike. */
-function foldsReported(run: RunState): number {
-  return (run.events ?? []).filter((e) => e.type === 'compaction').length;
+// Endings only: a run that has answered the ask has folded, and one that
+// has reported a fold beginning has not said how it went.
+function foldsEnded(run: RunState): number {
+  return (run.events ?? []).filter((e) => e.type === 'compaction' && e.phase !== 'started').length;
 }
 
 // What the caller was told about the folds the trace scripts (SPEC.md
@@ -362,7 +363,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
           }
           const entry = koan.turns[t];
           if (entry.kind === 'compact') {
-            const before = foldsReported(run);
+            const before = foldsEnded(run);
             const compactRes = await fetch(`${base}/runs/${runId}/compact`, { method: 'POST' });
             if (compactRes.status !== 202 && compactRes.status !== 200) {
               throw new Error(`POST /runs/${runId}/compact returned ${compactRes.status}, expected 202 or 200`);
@@ -374,10 +375,10 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             const asked = await fetch(`${base}/runs/${runId}`);
             if (!asked.ok) throw new Error(`GET /runs/${runId} returned ${asked.status}`);
             run = (await asked.json()) as RunState;
-            if (foldsReported(run) === before) {
+            if (foldsEnded(run) === before) {
               failures.push(
-                `POST /runs/${runId}/compact answered with no fold reported: a run answers the ask once it has folded, ` +
-                  `so "compaction" events for it are in GET /runs/{run_id} by then`,
+                `POST /runs/${runId}/compact answered before the fold ended: a run answers the ask once it has folded, ` +
+                  `so a "compaction" event saying completed or failed is in GET /runs/{run_id} by then`,
               );
             }
             continue;

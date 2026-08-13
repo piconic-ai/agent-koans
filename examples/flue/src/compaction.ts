@@ -1,6 +1,10 @@
 // Folding the agent's own conversation when the caller asks (SPEC.md §3).
 // The HTTP surface belongs to server.ts, what the agent declares about
 // itself to agents/assistant.ts.
+//
+// Nothing is ever dropped from the map below: a settled run can be
+// prompted again, so no moment marks a run's stores as spent, and the
+// conformance runner starts a fresh agent process per koan.
 import { createFlueContext, resolveModel } from '@flue/runtime/internal';
 import { Assistant } from './agents/assistant.js';
 

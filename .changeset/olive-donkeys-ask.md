@@ -2,7 +2,7 @@
 'agent-koans': minor
 ---
 
-The caller can ask a run to fold its conversation down, and a fold can be refused. `POST /runs/{run_id}/compact` is the new endpoint, and what it asks for is not what `context.compaction` governs: that setting says when an agent folds on its own, and `off` does not take the choice away from the caller. The fold must happen before the conversation's next model request and be reported like any other, so a client that offered the button can show what came of pressing it.
+The caller can ask a run to fold its conversation down, and a fold can be refused. `POST /runs/{run_id}/compact` is the new endpoint, and what it asks for is not what `context.compaction` governs: that setting says when an agent folds on its own, and `off` does not take the choice away from the caller. The fold must happen before the conversation's next model request and be reported like any other, so a client that offered the button can show what came of pressing it. Answering the ask says it was taken, not that the fold has happened — the deadline is that next request — so a caller with its answer may send the next prompt at once. The bundled examples take both readings: `examples/flue` folds before answering, `examples/vanilla-ts` on the way to the request that follows.
 
 A fold that fails owes two things. The caller must be told it failed, as a `failed` entry in the run's `events`; an `error` beside it is welcome and never read by the suite, since the same failure said in two vocabularies is the same failure. And the run goes on or ends by the room left in the window, never by the fold's outcome: a refused fold leaves the conversation exactly as it was, so it changes nothing about what the agent may do next.
 

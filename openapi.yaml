@@ -112,7 +112,9 @@ paths:
             type: string
       responses:
         "202":
-          description: Request accepted.
+          description: >
+            Ask accepted. The fold may still be ahead of it — the deadline
+            is the conversation's next model request, not this response.
         "200":
           description: Request accepted. Equivalent to 202.
         "404":

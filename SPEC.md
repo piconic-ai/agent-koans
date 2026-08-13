@@ -142,6 +142,13 @@ and report it the same way. It is not governed by `context.compaction`:
 that setting says when you fold on your own, and `off` does not take the
 choice away from the caller who asked.
 
+Answering the ask says it was taken, not that the fold has happened: fold
+before you answer, or on the way to the next model request — the deadline
+is that request, not the response. So a caller that has its answer may
+send the next prompt at once, and one that has not may not: two requests
+in flight together have no order to keep, and nothing can be owed about
+which of them lands first.
+
 A fold that fails leaves the conversation as it was, and what decides
 whether the run goes on is the room left in the window, never the fold's
 outcome. With room, you carry on; with none, the run ends. What you owe

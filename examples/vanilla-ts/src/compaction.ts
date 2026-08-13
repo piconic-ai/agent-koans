@@ -3,8 +3,9 @@
 // events a fold owes the caller; what does not is when to fold — the loop
 // folds on the run's threshold (conversation.ts), the caller asks for one
 // (agent.ts).
-import type { Conversation, RunScope } from './conversation.js';
+import type { Conversation } from './conversation.js';
 import type { ChatMessage, ModelClient } from './model.js';
+import type { Run } from './run.js';
 
 /** Something the run did that its caller has to be able to show (SPEC.md §3). */
 export interface RunEvent {
@@ -17,23 +18,55 @@ export interface RunEvent {
 export type ReportEvent = (event: RunEvent) => void;
 
 /**
- * Fold `conversation` down, spending one model request from the run's
- * budget. Resolves to `false` when the budget had nothing left to spend —
- * what that means for the run is decided by whoever asked for the fold.
- *
- * A fold that fails is not raised: it leaves the conversation as it was,
- * and what follows is decided by the room left in the window, never by the
- * fold's outcome.
+ * Fold `conversation` because it grew into the run's threshold. Resolves
+ * to `false` when the budget had nothing left to spend, and reports
+ * nothing then: no fold was attempted, so there is none to tell of.
  */
-export async function fold(
+export async function foldOnThreshold(
   conversation: Conversation,
-  scope: RunScope,
+  run: Run,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (run.budget.take() === undefined) return false;
+  await fold(conversation, run, signal);
+  return true;
+}
+
+/**
+ * Fold `conversation` because the caller asked for one (SPEC.md §3).
+ * Reported either way, refusal included: a caller holding the answer has
+ * to be able to tell what came of pressing the button, and cannot act on
+ * silence.
+ */
+export async function foldOnRequest(
+  conversation: Conversation,
+  run: Run,
   signal: AbortSignal,
   instructions?: string,
-): Promise<boolean> {
-  if (scope.budget.take() === undefined) return false;
+): Promise<void> {
+  if (run.budget.take() === undefined) {
+    run.report({ type: 'compaction', phase: 'started' });
+    run.report({
+      type: 'compaction',
+      phase: 'failed',
+      error: `model-request budget exhausted (${run.budget.max})`,
+    });
+    return;
+  }
+  await fold(conversation, run, signal, instructions);
+}
+
+// A fold that fails is not raised: it leaves the conversation as it was,
+// and what follows is decided by the room left in the window, never by the
+// fold's outcome.
+async function fold(
+  conversation: Conversation,
+  run: Run,
+  signal: AbortSignal,
+  instructions?: string,
+): Promise<void> {
   try {
-    await compact(conversation.messages, scope.model, scope.report, signal, instructions);
+    await compact(conversation.messages, run.model, run.report, signal, instructions);
     // Not the summarizing request's own usage: carrying that number over
     // would trip the threshold again and fold forever.
     conversation.size.used = 0;
@@ -41,7 +74,6 @@ export async function fold(
     // Left as it was, which the room check before the next model request
     // reads for what it is.
   }
-  return true;
 }
 
 /**

@@ -9,6 +9,11 @@
 // A ceiling of its own, so a run that declares no limit still terminates.
 const MAX_STEPS = 16;
 
+/** What a run declared about how much it may spend (SPEC.md §3). */
+export interface RunLimits {
+  max_model_requests?: number;
+}
+
 /** A claim on one model request. */
 export interface Grant {
   /** Whether this claim took the last request the budget permits. */
@@ -23,8 +28,8 @@ export interface Budget {
 }
 
 /** Open a budget for a run, never wider than this agent's own ceiling. */
-export function createBudget(maxModelRequests?: number): Budget {
-  const max = Math.min(MAX_STEPS, maxModelRequests ?? MAX_STEPS);
+export function createBudget(limits?: RunLimits): Budget {
+  const max = Math.min(MAX_STEPS, limits?.max_model_requests ?? MAX_STEPS);
   let used = 0;
   return {
     max,

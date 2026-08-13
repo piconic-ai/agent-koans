@@ -3,11 +3,9 @@
 // Hono is used for HTTP routing only.
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { createAgent, type RunLimits } from './agent.js';
+import { createAgent } from './agent.js';
 import { loadConfig } from './config.js';
-import type { SubagentDef } from './subagents.js';
-import type { ToolDef } from './tools.js';
-import type { RunContext } from './window.js';
+import type { RunSetup } from './run.js';
 
 const config = loadConfig();
 const agent = createAgent({ model: config.model, tools: config.tools, workspace: config.workspace });
@@ -17,21 +15,18 @@ const app = new Hono();
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
 app.post('/runs', async (c) => {
-  const body = await c.req
-    .json<{
-      prompt?: string;
-      tools?: ToolDef[];
-      subagents?: SubagentDef[];
-      limits?: RunLimits;
-      context?: RunContext;
-    }>()
-    .catch(() => null);
+  const body = await c.req.json<{ prompt?: string } & Partial<RunSetup>>().catch(() => null);
   const prompt = body?.prompt;
   if (typeof prompt !== 'string') {
     return c.json({ error: 'prompt is required' }, 400);
   }
   // The run executes asynchronously; the caller polls GET /runs/{id}.
-  const run = agent.startRun(prompt, body?.tools ?? [], body?.subagents ?? [], body?.limits, body?.context);
+  const run = agent.startRun(prompt, {
+    tools: body?.tools ?? [],
+    subagents: body?.subagents ?? [],
+    limits: body?.limits,
+    context: body?.context,
+  });
   return c.json({ run_id: run.run_id }, 202);
 });
 

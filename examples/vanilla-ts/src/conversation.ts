@@ -5,11 +5,10 @@
 //
 // No agent framework anywhere below it. This loop, and the run lifecycle
 // that drives it, are the part agent-koans verifies.
-import type { Budget } from './budget.js';
-import { fold, type ReportEvent } from './compaction.js';
-import type { ChatMessage, ModelClient, ToolCall } from './model.js';
-import type { Tool } from './tools.js';
-import { checkRoom, reachedThreshold, type ConversationSize, type RunContext } from './window.js';
+import { foldOnThreshold } from './compaction.js';
+import type { ChatMessage, ToolCall } from './model.js';
+import type { Run } from './run.js';
+import { checkRoom, reachedThreshold, type ConversationSize } from './window.js';
 
 /** One conversation of a run: a history of its own, and a size of its own. */
 export interface Conversation {
@@ -23,44 +22,30 @@ export interface Conversation {
 }
 
 /**
- * What every conversation of one run shares. A delegate is given a
- * `Conversation` of its own and this same scope — one budget for the whole
- * run, one tool table, one record the caller reads.
- */
-export interface RunScope {
-  tools: Map<string, Tool>;
-  budget: Budget;
-  /** Absent when the run declared none: the conversation then grows unbounded and is never folded down. */
-  context?: RunContext;
-  report: ReportEvent;
-  model: ModelClient;
-}
-
-/**
  * Run one conversation's request/response loop — the run's own, or
  * (recursively, through the subagent tool) a delegate's. Resolves to the
- * final text reply, or `undefined` when the run-wide budget ran out before
+ * final text reply, or `undefined` when the run's budget ran out before
  * one arrived.
  */
 export async function runConversation(
   conversation: Conversation,
-  scope: RunScope,
+  run: Run,
   signal: AbortSignal,
 ): Promise<string | undefined> {
   const { messages, size } = conversation;
   for (;;) {
-    if (reachedThreshold(size, scope.context)) {
-      if (!(await fold(conversation, scope, signal))) return undefined;
+    if (reachedThreshold(size, run.context)) {
+      if (!(await foldOnThreshold(conversation, run, signal))) return undefined;
     }
 
     // Read before every request rather than after a fold: what a full
     // window forbids is asking the model again, whatever filled it.
-    checkRoom(size, scope.context);
+    checkRoom(size, run.context);
 
-    const grant = scope.budget.take();
+    const grant = run.budget.take();
     if (grant === undefined) return undefined;
 
-    const reply = await scope.model(messages, wireTools(scope), signal);
+    const reply = await run.model(messages, wireTools(run), signal);
     const message = reply.message;
     size.used = reply.used;
 
@@ -70,7 +55,7 @@ export async function runConversation(
       if (grant.last) return undefined;
       messages.push(message);
       for (const call of message.tool_calls) {
-        const content = await executeToolCall(call, scope, signal);
+        const content = await executeToolCall(call, run, signal);
         messages.push({ role: 'tool', tool_call_id: call.id, content });
       }
       continue;
@@ -87,12 +72,12 @@ export async function runConversation(
 // Every tool of the run, the agent's own included: a table entry is what
 // the model is told about and what answers when it calls, and the two
 // cannot be allowed to disagree.
-function wireTools(scope: RunScope) {
-  return [...scope.tools.values()].map((t) => t.def);
+function wireTools(run: Run) {
+  return [...run.tools.values()].map((t) => t.def);
 }
 
-async function executeToolCall(call: ToolCall, scope: RunScope, signal: AbortSignal): Promise<string> {
-  const tool = scope.tools.get(call.function.name);
+async function executeToolCall(call: ToolCall, run: Run, signal: AbortSignal): Promise<string> {
+  const tool = run.tools.get(call.function.name);
   if (tool === undefined) {
     return `Error: unknown tool "${call.function.name}"`;
   }

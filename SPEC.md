@@ -148,7 +148,9 @@ The ask MAY carry `{ "instructions": "..." }` — what the caller wants the
 summary to keep. Asking is a kind of prompting, so those words MUST reach
 the request that summarizes, as they were written. They are about the
 summary rather than the task, which is the only reason they are a field
-of their own and not a prompt.
+of their own and not a prompt. An ask that carries none leaves the
+wording to you: what you hand a summarizer is otherwise yours, and no
+koan reads it.
 
 A fold that fails leaves the conversation as it was, and what decides
 whether the run goes on is the room left in the window, never the fold's

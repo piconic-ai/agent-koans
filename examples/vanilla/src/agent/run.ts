@@ -7,7 +7,6 @@ import { createBudget, type Budget, type RunLimits } from './budget.js';
 import type { ReportEvent } from './compaction.js';
 import { runConversation } from './conversation.js';
 import type { ModelClient } from './model.js';
-import { createReadFileTool } from './read-file.js';
 import { createSubagentTool, type Delegate, type SubagentDef } from './subagents.js';
 import { createDeclaredTool, type Tool, type ToolDef } from './tools.js';
 import type { RunContext } from './window.js';
@@ -16,7 +15,8 @@ import type { RunContext } from './window.js';
 interface AgentParts {
   model: ModelClient;
   toolsBaseUrl: string;
-  workspaceDir: string;
+  /** Tools of the agent's own, from its definition (lifecycle.ts). */
+  own: Tool[];
 }
 
 /** What a run was submitted with, beyond the prompt that opened it (SPEC.md §3). */
@@ -25,12 +25,6 @@ export interface RunSetup {
   subagents: SubagentDef[];
   limits?: RunLimits;
   context?: RunContext;
-  /**
-   * Standing instructions for the run's own conversation, sent ahead of
-   * its first prompt. Not passed on to a delegate: a delegate is given a
-   * briefing, and the briefing is the whole of what it was asked for.
-   */
-  system?: string;
 }
 
 /**
@@ -66,7 +60,7 @@ export function createRun(parts: AgentParts, setup: RunSetup, report: ReportEven
   for (const def of setup.tools) register(tools, createDeclaredTool(def, parts.toolsBaseUrl));
   // Registered after the run's own, so a run that declares one of these
   // names cannot reroute a capability of the agent's to the tool server.
-  register(tools, createReadFileTool(parts.workspaceDir));
+  for (const tool of parts.own) register(tools, tool);
   if (setup.subagents.length > 0) register(tools, createSubagentTool(setup.subagents, delegate));
   return run;
 }

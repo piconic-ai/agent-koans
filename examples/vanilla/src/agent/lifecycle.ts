@@ -1,4 +1,4 @@
-// What the agent does with runs: accepts them, drives their turns, and
+// What an agent does with runs: accepts them, drives their turns, and
 // answers for them. What belongs here is the state a caller polls, the
 // queue of turns, and the transitions between them; what does not is what
 // a run is made of (run.ts) or how a turn is carried out (conversation.ts).
@@ -6,6 +6,19 @@ import { foldOnRequest, type RunEvent } from './compaction.js';
 import { runConversation, type Conversation } from './conversation.js';
 import { createModelClient, type ChatMessage } from './model.js';
 import { createRun, type Run, type RunSetup } from './run.js';
+import type { Tool } from './tools.js';
+
+/**
+ * What makes one agent a particular agent: what it is told it is, and what
+ * it can do beyond whatever a run declares. Everything else about running
+ * it is the same for any agent, which is why nothing else here asks.
+ */
+export interface AgentDefinition {
+  /** Standing instructions, sent ahead of a run's first prompt. */
+  system?: string;
+  /** Tools of the agent's own, executed by the agent and never sent out. */
+  tools?: Tool[];
+}
 
 /** A run as its caller sees it: what GET /runs/{id} answers with (SPEC.md §3). */
 interface RunState {
@@ -39,15 +52,15 @@ interface RunSession {
   turn?: AbortController;
 }
 
-export function createAgent(config: {
-  model: { baseUrl: string; apiKey: string; model: string };
-  tools: { baseUrl: string };
-  workspace: { dir: string };
-}) {
+/** Make `definition` runnable: submit runs to it, and ask after them. */
+export function createAgent(
+  definition: AgentDefinition,
+  config: { model: { baseUrl: string; apiKey: string; model: string }; tools: { baseUrl: string } },
+) {
   const parts = {
     model: createModelClient(config.model),
     toolsBaseUrl: config.tools.baseUrl,
-    workspaceDir: config.workspace.dir,
+    own: definition.tools ?? [],
   };
   const sessions = new Map<string, RunSession>();
 
@@ -56,7 +69,7 @@ export function createAgent(config: {
     const session: RunSession = {
       state,
       run: createRun(parts, setup, (event) => state.events.push(event)),
-      conversation: { messages: opening(prompt, setup.system), size: { used: 0 } },
+      conversation: { messages: opening(prompt, definition.system), size: { used: 0 } },
       queued: [],
     };
     sessions.set(state.run_id, session);

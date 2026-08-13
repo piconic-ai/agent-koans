@@ -3,12 +3,12 @@
 // Hono is used for HTTP routing only.
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { createAgent } from './agent.js';
+import { createAgent, type RunSetup } from './agent/index.js';
+import { assistant } from './assistant.js';
 import { loadConfig } from './config.js';
-import type { RunSetup } from './run.js';
 
 const config = loadConfig();
-const agent = createAgent({ model: config.model, tools: config.tools, workspace: config.workspace });
+const agent = createAgent(assistant(config), config);
 
 const app = new Hono();
 
@@ -21,9 +21,6 @@ app.post('/runs', async (c) => {
     return c.json({ error: 'prompt is required' }, 400);
   }
   // The run executes asynchronously; the caller polls GET /runs/{id}.
-  // Each field named rather than the body spread: openapi.yaml defines
-  // this interface, and a run's standing instructions are not part of it
-  // — they are the terminal adapter's to pass (cli.ts).
   const run = agent.startRun(prompt, {
     tools: body?.tools ?? [],
     subagents: body?.subagents ?? [],

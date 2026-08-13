@@ -1,17 +1,17 @@
-// The agent's own file-reading capability, offered to the model as a tool.
-// What belongs here is resolving a path against the run's workspace and
-// reading it; what does not is anything that leaves this process — a
-// capability of the agent's own never reaches the tool server (SPEC.md §2).
+// A tool of this assistant's own: read a file from its workspace. What
+// belongs here is resolving a path against that directory and reading it;
+// what does not is anything that leaves this process — a tool the agent
+// runs itself never reaches the tool service (SPEC.md §2).
 //
-// The one place this example steps off the Web platform: KOAN_WORKSPACE is
-// a filesystem contract and the Web platform has no filesystem API.
-// Everything else is fetch and crypto.randomUUID, so the rest of the
-// example runs on Node, Deno, and Bun alike.
+// The one place this example steps off the Web platform, since a workspace
+// is a filesystem and the Web platform has no filesystem API. Everything
+// else is fetch and crypto.randomUUID, so the rest runs on Node, Deno, and
+// Bun alike.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { parseArgs, type Tool } from './tools.js';
+import { parseArgs, type Tool } from './agent/index.js';
 
-/** Make `read_file` runnable, resolved against the run's workspace directory. */
+/** Make `read_file` runnable, resolved against `workspaceDir`. */
 export function createReadFileTool(workspaceDir: string): Tool {
   return {
     def: {

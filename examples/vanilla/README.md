@@ -12,6 +12,12 @@ request budget runs out, and settles when its caller aborts it.
 There are two ways in, over the same agent: a terminal command, and an
 HTTP server.
 
+It is split the way an agent built on a framework is split. Everything
+under `agent/` is machinery any agent needs — the loop, delegation, the
+budget, the window, the run lifecycle — and it knows nothing about this
+one. `assistant.ts` is the whole of what makes this agent this agent:
+what it is told it is, and the tools it carries.
+
 It is also the reference implementation of the
 [agent-koans conformance contract](../../SPEC.md), and passes every koan in
 the suite. The suite is how the behavior above is checked. It is not what
@@ -21,8 +27,9 @@ a terminal, with no part of agent-koans involved.
 Every file opens with a header saying what belongs in it and what does
 not, so the file you want is the one whose header claims your change. Read
 it beside [examples/flue](../flue), which meets the same contract on a
-framework. Most files carry the same name in both, and the ones only this
-example has are what the framework provides over there.
+real framework: the line this example draws between `agent/` and
+`assistant.ts` falls there between `@flue/runtime` and
+`agents/assistant.ts`.
 
 Web-standard APIs throughout (`fetch`, `crypto.randomUUID`), so it runs on
 Node, Deno, and Bun. The one exception is `read-file.ts`: a workspace is a
@@ -52,13 +59,25 @@ command takes them as options instead.
 $ pnpm install
 $ cd examples/vanilla
 $ export OPENAI_API_KEY=sk-...
-$ pnpm cli --system "You are terse." "Read note.txt and tell me what it says."
-The note says it is 31 degrees.
+$ pnpm cli "What is the capital of Japan?"
+Tokyo
 ```
 
-`--system` sets standing instructions for the conversation, `--workspace`
-chooses what `read_file` resolves against, and `--setup` takes a JSON file
-with the run's `tools`, `subagents`, `limits` and `context`:
+With no prompt at all, the assistant reads them one per line and keeps
+the conversation going:
+
+```console
+$ pnpm cli
+> What is the capital of Japan?
+Tokyo
+> And its population, roughly?
+The Greater Tokyo Area is usually estimated at over 37 million people.
+```
+
+What the assistant is told, and the tools it has, are its own
+(`assistant.ts`), not something a caller passes. `--workspace` chooses
+what `read_file` resolves against, and `--setup` takes a JSON file with
+the run's `tools`, `subagents`, `limits` and `context`:
 
 ```json
 {
@@ -136,24 +155,37 @@ ok    002-arg-validation
 
 ## Files
 
+This agent, and the two doors into it:
+
 | File | What belongs in it |
 | ---- | ------------------ |
-| `cli.ts` | The terminal adapter. Read arguments, submit a run, print the answer |
-| `server.ts` | The HTTP adapter. Parse a request, hand it over, answer |
+| `assistant.ts` | What this agent is told it is, and the tools it carries |
+| `read-file.ts` | One of those tools: reading a file from the workspace |
+| `cli.ts` | Terminal adapter. Read arguments, submit a run, print the answer |
+| `server.ts` | HTTP adapter. Parse a request, hand it over, answer |
 | `config.ts` | Reading the environment, in one place |
-| `agent.ts` | The state a caller polls, the queue of turns, and the transitions between them |
-| `run.ts` | What a run is made of, assembled from what it was submitted with |
-| `conversation.ts` | The loop: ask the model, run what it asked for, ask again |
-| `model.ts` | The one place the agent talks to the model endpoint |
-| `tools.ts` | The shape every tool has, and the declared kind that reaches the tool service |
-| `read-file.ts` | The agent's own file reading, offered to the model as a tool |
-| `subagents.ts` | Delegation, offered to the model as a tool |
-| `budget.ts` | How many model requests a run may spend |
-| `window.ts` | The context window a run declared, and how full a conversation is |
-| `compaction.ts` | Folding a conversation down to a summary |
 
-Two of these carry most of what makes an agent an agent. `conversation.ts`
-holds the loop, and it stays short because every step it orders lives
-elsewhere. `run.ts` assembles what that loop is given — the tools, the
-budget, the window, the model — which is why delegation is one line there:
-a conversation of its own, and the same run.
+What any agent would need, knowing nothing about this one:
+
+| File | What belongs in it |
+| ---- | ------------------ |
+| `agent/index.ts` | The surface an agent is built on |
+| `agent/lifecycle.ts` | The state a caller polls, the queue of turns, and the transitions between them |
+| `agent/run.ts` | What a run is made of, assembled from a definition and a submission |
+| `agent/conversation.ts` | The loop: ask the model, run what it asked for, ask again |
+| `agent/model.ts` | The one place the agent talks to the model endpoint |
+| `agent/tools.ts` | The shape every tool has, and the declared kind that reaches the tool service |
+| `agent/subagents.ts` | Delegation, offered to the model as a tool |
+| `agent/budget.ts` | How many model requests a run may spend |
+| `agent/window.ts` | The context window a run declared, and how full a conversation is |
+| `agent/compaction.ts` | Folding a conversation down to a summary |
+
+The two tools fall on opposite sides of that line, which is what the line
+means: reading a file is something anyone can write against the `Tool`
+interface, while delegation is the loop re-entering itself, and only what
+owns the loop can offer that.
+
+`conversation.ts` holds the loop, and stays short because every step it
+orders lives elsewhere. `run.ts` assembles what that loop is given — the
+tools, the budget, the window, the model — which is why delegation is one
+line there: a conversation of its own, and the same run.

@@ -1,0 +1,47 @@
+name: three-turns
+description: >
+  A third turn, where 022 has two. History does not thin out as it grows:
+  the last turn's request must still carry both earlier turns, which is
+  what lets the model answer from them without looking anything up again.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+turns:
+  - prompt: "What is the weather in Tokyo?"
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Tokyo" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 31 } }
+      - request: model
+        response: "Tokyo is 31°C."
+    then:
+      status: completed
+      output: { contains: "31" }
+  - prompt: "What about Osaka?"
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Osaka" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 33 } }
+      - request: model
+        response: "Osaka is 33°C."
+    then:
+      status: completed
+      output: { contains: "33" }
+  - prompt: "Which of the two was warmer?"
+    when:
+      # No tool call: both readings are in the conversation already.
+      - request: model
+        response: "Osaka was warmer than Tokyo."
+    then:
+      status: completed
+      output: { contains: "Osaka was warmer" }

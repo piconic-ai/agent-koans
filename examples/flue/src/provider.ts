@@ -3,9 +3,10 @@
 // Flue's built-in OpenAI provider does not honor OPENAI_BASE_URL, so the
 // conformance contract's "redirect model calls to the mock" requirement is
 // met by registering an OpenAI-compatible provider with an explicit baseUrl.
-import { createProvider } from '@earendil-works/pi-ai';
+import { createProvider, type Context } from '@earendil-works/pi-ai';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import { noteModelRequest } from './budget.js';
+import { foldInstructions } from './compaction.js';
 import { checkRoom } from './window.js';
 import type { Config } from './config.js';
 
@@ -16,6 +17,21 @@ import type { Config } from './config.js';
  * (agents/assistant.ts).
  */
 export const CONTEXT_WINDOW = 128_000;
+
+// A fold the caller asked with words of its own: they belong to the
+// request Flue is about to send, and Flue's summarizing prompt has no
+// room for them (compaction.ts).
+function asked(context: Context): Context {
+  const instructions = foldInstructions();
+  if (instructions === undefined) return context;
+  return {
+    ...context,
+    messages: [
+      ...context.messages,
+      { role: 'user', content: [{ type: 'text', text: instructions }], timestamp: Date.now() },
+    ],
+  };
+}
 
 export function createKoanProvider(model: Config['model']) {
   const api = openAICompletionsApi();
@@ -48,12 +64,12 @@ export function createKoanProvider(model: Config['model']) {
       stream: (model, context, options) => {
         checkRoom();
         noteModelRequest();
-        return api.stream(model, context, options);
+        return api.stream(model, asked(context), options);
       },
       streamSimple: (model, context, options) => {
         checkRoom();
         noteModelRequest();
-        return api.streamSimple(model, context, options);
+        return api.streamSimple(model, asked(context), options);
       },
     },
   });

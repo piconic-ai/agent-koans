@@ -89,9 +89,6 @@ run's state must *do*.
 | `POST /runs/{run_id}/prompts` | Continue a run's conversation |
 | `POST /runs/{run_id}/compact` | Ask the run to fold its conversation down |
 
-A run's `status` is `running`, `completed`, `failed`, or `aborted`. When
-it is `completed`, `output` MUST carry the final answer.
-
 **Terminal state.** Every run MUST reach `completed`, `failed`, or
 `aborted` in finite time — whatever the tools do, whatever the model
 returns, whatever breaks inside you. A run still `running` past the
@@ -128,13 +125,11 @@ is yours. Summarizing is an ordinary request to the same endpoint; what it
 carries is yours to choose, and its reply MUST reach the conversation it
 summarized.
 
-A fold MUST also be reported to the caller, as two entries appended to the
-run's `events`: `{ type: "compaction", phase: "started" }` when it begins,
-and one `completed` or `failed` when it ends. A client that cannot see a
-fold cannot tell its user why the run went quiet, or why something it was
-told earlier is gone from the conversation. A `failed` entry MAY carry an
-`error` saying what went wrong; the words are yours, and what the caller
-is owed is that the fold failed.
+A fold MUST also be reported to the caller: an entry in the run's `events`
+when it begins, and one when it ends saying whether it completed or
+failed. A client that cannot see a fold cannot tell its user why the run
+went quiet, or why something it was told earlier is gone from the
+conversation.
 
 **Asking for a fold.** `POST /runs/{run_id}/compact` is the caller asking
 for one, and you MUST have folded by the time you answer it — and
@@ -143,6 +138,10 @@ what came of pressing the button, and may send the next prompt at once.
 The ask is not governed by `context.compaction`: that setting says when
 you fold on your own, and `off` does not take the choice away from the
 caller who asked.
+
+An ask MAY carry instructions — what the caller wants the summary to keep
+(openapi.yaml). Those words MUST reach the request that summarizes, as
+they were written; an ask carrying none leaves the wording to you.
 
 A fold that fails leaves the conversation as it was, and what decides
 whether the run goes on is the room left in the window, never the fold's
@@ -262,6 +261,7 @@ it cannot drift from the contract it indexes.
 | [030-compaction-on-request](./koans/030-compaction-on-request.yaml) | The caller asks for a fold. The run declares compaction off, so nothing the conversation does would fold it — and it folds anyway, because being asked is not the same as crossing a threshold. By the second turn's first model request the conversation must be a summary, that summary must carry what the second turn asks for, and the run must report the fold to the caller who asked for it. |
 | [031-compaction-failure](./koans/031-compaction-failure.yaml) | The caller asks for a fold and the summarizing request is refused, so nothing is summarized and the conversation stays as it was. Two things follow. The caller must be told the fold failed — not in any particular words, since a failure said two ways is the same failure, so what this koan reads is the report and never its wording. And the run carries on: the conversation is far from its window, and what decides whether the agent may ask the model again is the room left there, never the fold's outcome. |
 | [032-compaction-failure-no-room](./koans/032-compaction-failure-no-room.yaml) | The same refusal as 031, against a full window: the same run, the same ask, the same refusal, and one number changed. The first turn leaves the conversation at the size the run declared, so when the fold the caller asked for is refused there is no room for another model request, and the run ends instead of making one. What the agent reads to know that is the size the model reported, against the window the run declared — never its compaction policy, which says only when it folds on its own. |
+| [033-compaction-instructions](./koans/033-compaction-instructions.yaml) | The caller asks for a fold and says what it must keep. Asking is a kind of prompting: the words are the caller's, they are about the summary rather than the task, and an agent may no more reword them than it may reword a prompt. So the summarizing request must carry them, and the summary that comes back must reach the conversation the way any other fold's does. |
 
 <!-- koan-index:end -->
 

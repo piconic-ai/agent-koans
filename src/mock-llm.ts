@@ -477,9 +477,15 @@ export function startMockLlm(
 
     const previous = conv.turns[index - 1];
     if (entry.compaction) {
-      // No content check: what a framework hands its summarizer is its
-      // own, since some fold only the older part and keep the rest
-      // verbatim. What a fold must not lose is checked one request later.
+      // What a framework hands its summarizer is otherwise its own, since
+      // some fold only the older part and keep the rest verbatim. What a
+      // fold must not lose is checked one request later.
+      if (entry.asked !== undefined && !requestText(messages).includes(entry.asked)) {
+        state.violations.push(
+          `request #${requestNo} folds the conversation without what the caller asked the fold to keep ` +
+            `(${JSON.stringify(entry.asked)}): an ask that says how is not an ask the agent may reword`,
+        );
+      }
     } else if (index === 0) {
       checkConversationStart(conv, requestNo, messages, state.violations);
     } else if (previous?.compaction !== undefined) {

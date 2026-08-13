@@ -158,11 +158,11 @@ function sendPrompt(runId: string, prompt: string): boolean {
  * §3). Returns `false` when `runId` is unknown, so the caller can answer
  * 404.
  */
-async function compactRun(runId: string): Promise<boolean> {
+async function compactRun(runId: string, instructions?: string): Promise<boolean> {
   const agent = handles.get(runId);
   if (!agent) return false;
   try {
-    await compactConversation(runId, agent.id);
+    await compactConversation(runId, agent.id, instructions);
   } catch {
     // Not rethrown: a failed fold owes a report, not an error at the
     // asking, and the observer above already recorded it.
@@ -225,7 +225,8 @@ app.post('/runs/:id/prompts', async (c) => {
 });
 
 app.post('/runs/:id/compact', async (c) => {
-  const known = await compactRun(c.req.param('id'));
+  const body = await c.req.json<{ instructions?: string }>().catch(() => null);
+  const known = await compactRun(c.req.param('id'), body?.instructions);
   if (!known) return c.json({ error: 'run not found' }, 404);
   return c.json({}, 202);
 });

@@ -26,7 +26,7 @@ export interface DelegationVocabulary {
   prompt_arg: string;
 }
 
-/** The neutral default vocabulary, implemented by examples/vanilla-ts. */
+/** The neutral default vocabulary, implemented by examples/vanilla. */
 export const DEFAULT_DELEGATION: DelegationVocabulary = {
   tool: 'subagent',
   agent_arg: 'name',

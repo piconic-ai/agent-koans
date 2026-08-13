@@ -61,5 +61,5 @@ app.post('/runs/:id/abort', (c) => {
 });
 
 serve({ fetch: app.fetch, port: config.port }, () => {
-  console.log(`vanilla-ts agent listening on :${config.port}`);
+  console.log(`vanilla agent listening on :${config.port}`);
 });

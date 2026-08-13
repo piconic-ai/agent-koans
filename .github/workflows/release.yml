@@ -38,12 +38,20 @@ jobs:
           pnpm typecheck
           pnpm test
 
-      # With pending changesets: maintains the release PR. Without:
-      # runs the publish script, which no-ops unless main carries an
-      # unreleased version.
+      # Not the action's `publish:` input, which runs only when no
+      # changeset is pending: a version bump merging after a changeset
+      # leaves main carrying a version that is released by nothing, and
+      # the next bump then jumps over it. And not after the action
+      # either, whose version run rewrites package.json in place, so a
+      # later step would read the version being prepared rather than the
+      # one main carries.
+      - name: Publish the version main carries, if it is not out yet
+        run: bash .github/scripts/publish.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Maintains the release PR while changesets are pending, and does
+      # nothing when none are.
       - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
-        with:
-          publish: bash .github/scripts/publish.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ github.token }}

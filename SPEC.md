@@ -144,13 +144,9 @@ The ask is not governed by `context.compaction`: that setting says when
 you fold on your own, and `off` does not take the choice away from the
 caller who asked.
 
-The ask MAY carry `{ "instructions": "..." }` — what the caller wants the
-summary to keep. Asking is a kind of prompting, so those words MUST reach
-the request that summarizes, as they were written. They are about the
-summary rather than the task, which is the only reason they are a field
-of their own and not a prompt. An ask that carries none leaves the
-wording to you: what you hand a summarizer is otherwise yours, and no
-koan reads it.
+An ask MAY carry instructions — what the caller wants the summary to keep
+(openapi.yaml). Those words MUST reach the request that summarizes, as
+they were written; an ask carrying none leaves the wording to you.
 
 A fold that fails leaves the conversation as it was, and what decides
 whether the run goes on is the room left in the window, never the fold's

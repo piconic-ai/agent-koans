@@ -99,9 +99,15 @@ export interface PromptTurn {
 }
 
 /**
- * The caller asked the run to fold its conversation down. `instructions`
- * is what the ask said about how — absent where it said nothing, which is
- * the ask written `compact: true`.
+ * The caller asked the run to fold its conversation down.
+ *
+ * `instructions` is what the ask said about how, written as the words
+ * themselves (`compact: "Keep every operator code verbatim."`) and absent
+ * where the ask said nothing (`compact: true`). Words rather than a
+ * prompt, because they are about the summary and not the task, so they
+ * open no turn of their own. A koan that writes them holds the
+ * summarizing request to carrying them; one that writes `true` says
+ * nothing about the wording, which is the agent's.
  */
 export interface CompactTurn {
   kind: 'compact';

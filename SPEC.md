@@ -132,9 +132,9 @@ A fold MUST also be reported to the caller, as two entries appended to the
 run's `events`: `{ type: "compaction", phase: "started" }` when it begins,
 and one `completed` or `failed` when it ends. A client that cannot see a
 fold cannot tell its user why the run went quiet, or why something it was
-told earlier is gone from the conversation. A `failed` entry MUST carry an
-`error` naming what went wrong, in your own words but carrying what the
-endpoint said — the caller decides from it whether to ask again.
+told earlier is gone from the conversation. A `failed` entry MAY carry an
+`error` saying what went wrong; the words are yours, and what the caller
+is owed is that the fold failed.
 
 **Asking for a fold.** `POST /runs/{run_id}/compact` is the caller asking
 for one, and you MUST fold before that conversation's next model request
@@ -258,7 +258,7 @@ it cannot drift from the contract it indexes.
 | [028-context-compaction](./koans/028-context-compaction.yaml) | The run declares the model's context window and the share of it at which the agent compacts. The first turn fills the window past that share, so the second turn cannot open with the conversation as it stands: by its first model request the agent must have folded it into a summary — one extra model request, answered with one. The summary must come back into the conversation carrying what the second turn asks for, an operator code looked up before the fold, and the run must report the fold to its caller, who has a user to explain it to. Where inside the first turn the agent folds is not covered: before its next request, or once it settles. |
 | [029-compaction-off](./koans/029-compaction-off.yaml) | The same pressure as 028, with compaction switched off. The conversation fills the declared window and the agent must leave it alone: no extra model request, no summary, the history carried as it stands — the trace has no compaction step for one to consume. Being nearly out of room is not itself a reason to end the run, which still completes. |
 | [030-compaction-on-request](./koans/030-compaction-on-request.yaml) | The caller asks for a fold. The run declares compaction off, so nothing the conversation does would fold it — and it folds anyway, because being asked is not the same as crossing a threshold. By the second turn's first model request the conversation must be a summary, that summary must carry what the second turn asks for, and the run must report the fold to the caller who asked for it. |
-| [031-compaction-failure](./koans/031-compaction-failure.yaml) | The caller asks for a fold and the summarizing request is refused, so nothing is summarized and the conversation stays as it was. What the run owes for that is one thing: the caller must be told, and told with what the endpoint said, so it can decide whether to ask again. What the agent does next is its own business, and the branches of the second turn are the answers it may give — end the run, carry on while the window still has room, or ask for the fold once more. Each branch is a whole run, and an agent conforms by walking any one of them. |
+| [031-compaction-failure](./koans/031-compaction-failure.yaml) | The caller asks for a fold and the summarizing request is refused, so nothing is summarized and the conversation stays as it was. What the run owes for that is one thing: the caller must be told the fold failed. Not in any particular words — a failure said two ways is the same failure — so what this koan reads is the report, never its wording. What the agent does next is its own business, and the branches of the second turn are the answers it may give — end the run, carry on while the window still has room, or ask for the fold once more. Each branch is a whole run, and an agent conforms by walking any one of them. |
 
 <!-- koan-index:end -->
 

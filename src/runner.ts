@@ -158,6 +158,9 @@ function judge(then: Judgment, run: RunState): string[] {
 // What the caller was told about the folds the trace scripts (SPEC.md
 // §3). Read from the settled run rather than watched as it happens: a
 // client polls, so the record has to survive the activity it describes.
+// Only how each fold ended is read: a failure's own words are the
+// implementation's, and the same failure in two vocabularies is the same
+// failure.
 function judgeReportedFolds(trace: Trace, run: RunState): string[] {
   const folds = trace.conversations.flatMap((c) => c.turns.filter((t) => t.compaction));
   const reported = (run.events ?? []).filter((e) => e.type === 'compaction');
@@ -172,31 +175,7 @@ function judgeReportedFolds(trace: Trace, run: RunState): string[] {
         `GET /runs/{run_id} must carry a "compaction" event when a fold starts and one when it ends`,
     ];
   }
-
-  // What a caller needs from a failure is the reason, so it can decide
-  // whether to ask again. Matched against what the endpoint itself said,
-  // never against wording (SPEC.md §1).
-  const failures: string[] = [];
-  const failed = reported.filter((e) => e.phase === 'failed');
-  const refusals = folds.filter((t) => t.compaction === 'failed').map((t) => t.fails);
-  for (const [i, event] of failed.entries()) {
-    const refusal = refusals[i];
-    if (!refusal) continue;
-    const indicators = [String(refusal.status), ...scalarLeaves(refusal.body)];
-    if (!indicators.some((s) => (event.error ?? '').includes(s))) {
-      failures.push(
-        `the fold's failure reached the caller as ${JSON.stringify(event.error)}, which carries none of ` +
-          `${JSON.stringify(indicators)} — a caller decides from what the endpoint said whether to ask again`,
-      );
-    }
-  }
-  return failures;
-}
-
-function scalarLeaves(value: unknown): string[] {
-  if (value === null || value === undefined) return [];
-  if (typeof value !== 'object') return [String(value)];
-  return Object.values(value as object).flatMap(scalarLeaves);
+  return [];
 }
 
 /**

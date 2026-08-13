@@ -2,8 +2,9 @@ name: compaction-failure
 description: >
   The caller asks for a fold and the summarizing request is refused, so
   nothing is summarized and the conversation stays as it was. What the run
-  owes for that is one thing: the caller must be told, and told with what
-  the endpoint said, so it can decide whether to ask again. What the agent
+  owes for that is one thing: the caller must be told the fold failed. Not
+  in any particular words — a failure said two ways is the same failure —
+  so what this koan reads is the report, never its wording. What the agent
   does next is its own business, and the branches of the second turn are
   the answers it may give — end the run, carry on while the window still
   has room, or ask for the fold once more. Each branch is a whole run, and

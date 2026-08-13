@@ -302,4 +302,4 @@ components:
             `completed`/`failed` when it ends.
         error:
           type: string
-          description: Failure detail. SHOULD be present when `phase` is `failed`.
+          description: Failure detail in the run's own words. MAY be present when `phase` is `failed`.

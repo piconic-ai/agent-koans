@@ -4,7 +4,7 @@
 
 The caller can ask a run to fold its conversation down, and a fold can be refused. `POST /runs/{run_id}/compact` is the new endpoint, and what it asks for is not what `context.compaction` governs: that setting says when an agent folds on its own, and `off` does not take the choice away from the caller. The fold must happen before the conversation's next model request and be reported like any other, so a client that offered the button can show what came of pressing it.
 
-A fold that fails owes one thing: the caller must be told, and told with what the model endpoint said, so it can decide whether to ask again. A `failed` entry in the run's `events` must carry an `error` naming what went wrong, in your own words but carrying the status or the error body's own text. Nothing else follows from it. Whether the agent carries on — it may, while the window still has room for another request — or ends the run is its own business.
+A fold that fails owes one thing: the caller must be told the fold failed, as a `failed` entry in the run's `events`. An `error` beside it is welcome and never read by the suite — the same failure said in two vocabularies is the same failure. Nothing else follows from it. Whether the agent carries on — it may, while the window still has room for another request — or ends the run is its own business.
 
 `030-compaction-on-request` scripts the ask: a run with compaction off, a conversation nowhere near its window, and a fold anyway because the caller asked. A koan writes the ask as `- compact` at the end of the turn the caller asks after, which is the same shape `abort` has and for the same reason: it is a caller's action at a moment only the end of a trace can name. The turn after it must open with the fold.
 

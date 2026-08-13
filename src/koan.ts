@@ -98,6 +98,8 @@ export interface ModelTurn {
   usedTokens: number;
   /** Set on the auxiliary request that folds the conversation down: how the run reported its ending. `reply` is the summary served to it. */
   compaction?: CompactionReport;
+  /** What the caller's ask said about how to fold; this request must carry it. */
+  asked?: string;
   /** This turn's tool-call instruction(s); more than one means a parallel group. */
   call_tools?: CallToolInstruction[];
   /** This turn's delegation instruction(s), each scripted by a following subagent block. */
@@ -175,7 +177,9 @@ export interface Judgment {
 }
 
 /** One entry of a `turns:` koan: what the caller does, and how the run is judged after it. */
-export type TurnSpec = { kind: 'prompt'; prompt: string; then: Judgment } | { kind: 'compact' };
+export type TurnSpec =
+  | { kind: 'prompt'; prompt: string; then: Judgment }
+  | { kind: 'compact'; instructions?: string };
 
 /** A compiled koan: shared `given`/`then` plus one or more trace variants. */
 export interface Koan {
@@ -425,9 +429,12 @@ function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): { 
   for (const [i, t] of turns.entries()) {
     if (t.kind === 'prompt' && i > 0) followUps.push({ start: main.turns.length, prompt: t.prompt });
     if (t.trace) compileSteps(t.trace.steps, main, conversations);
-    turnSpecs.push(
-      t.kind === 'compact' ? { kind: 'compact' } : { kind: 'prompt', prompt: t.prompt, then: compileJudgment(t.then) },
-    );
+    if (t.kind === 'compact') {
+      if (t.instructions !== undefined) main.turns[main.turns.length - 1].asked = t.instructions;
+      turnSpecs.push({ kind: 'compact', ...(t.instructions !== undefined ? { instructions: t.instructions } : {}) });
+      continue;
+    }
+    turnSpecs.push({ kind: 'prompt', prompt: t.prompt, then: compileJudgment(t.then) });
   }
 
   return { trace: { conversations }, turnSpecs };

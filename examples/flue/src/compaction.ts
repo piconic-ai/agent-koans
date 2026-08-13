@@ -29,7 +29,7 @@ export function noteInstanceStores(runId: string, harness: unknown): void {
  * Fold one run's conversation down, now. Rejects when the summarization
  * request fails.
  */
-export async function compactConversation(runId: string, instanceId: string): Promise<void> {
+export async function compactConversation(runId: string, instanceId: string, instructions?: string): Promise<void> {
   const held = stores.get(runId);
   if (held === undefined) throw new Error(`no conversation stores kept for run ${runId}`);
   // Not `harness.compact()`: the harness a render receives is an
@@ -46,5 +46,26 @@ export async function compactConversation(runId: string, instanceId: string): Pr
   const harness = (await context.initializeRootHarness(Assistant)) as unknown as {
     session(name?: string): Promise<{ compact(): Promise<void> }>;
   };
-  await (await harness.session('default')).compact();
+  const session = await harness.session('default');
+  // The summarizing prompt is Flue's own and takes no words from a
+  // caller, so the words ride the request instead — armed here, where the
+  // fold this run asked for is about to be the only one in flight, and
+  // spent by the provider that sends it (provider.ts).
+  armFoldInstructions(instructions);
+  try {
+    await session.compact();
+  } finally {
+    armFoldInstructions(undefined);
+  }
+}
+
+let armed: string | undefined;
+
+function armFoldInstructions(instructions: string | undefined): void {
+  armed = instructions;
+}
+
+/** What the caller asked this run's fold to keep, for the request that folds. */
+export function foldInstructions(): string | undefined {
+  return armed;
 }

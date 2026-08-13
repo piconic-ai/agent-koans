@@ -364,7 +364,15 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
           const entry = koan.turns[t];
           if (entry.kind === 'compact') {
             const before = foldsEnded(run);
-            const compactRes = await fetch(`${base}/runs/${runId}/compact`, { method: 'POST' });
+            const compactRes = await fetch(`${base}/runs/${runId}/compact`, {
+              method: 'POST',
+              ...(entry.instructions !== undefined
+                ? {
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ instructions: entry.instructions }),
+                  }
+                : {}),
+            });
             if (compactRes.status !== 202 && compactRes.status !== 200) {
               throw new Error(`POST /runs/${runId}/compact returned ${compactRes.status}, expected 202 or 200`);
             }

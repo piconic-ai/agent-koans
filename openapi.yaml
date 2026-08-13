@@ -110,6 +110,19 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                instructions:
+                  type: string
+                  description: >-
+                    What the caller wants the summary to keep. The agent
+                    MUST carry these words into the request that
+                    summarizes, as they were written.
       responses:
         "202":
           description: >

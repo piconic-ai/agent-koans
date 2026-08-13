@@ -98,9 +98,14 @@ export interface PromptTurn {
   then: Judgment;
 }
 
-/** The caller asked the run to fold its conversation down. */
+/**
+ * The caller asked the run to fold its conversation down. `instructions`
+ * is what the ask said about how — absent where it said nothing, which is
+ * the ask written `compact: true`.
+ */
 export interface CompactTurn {
   kind: 'compact';
+  instructions?: string;
   /** The fold the ask brings about, and nothing else: without a prompt there is no other work. */
   trace: Trace;
 }

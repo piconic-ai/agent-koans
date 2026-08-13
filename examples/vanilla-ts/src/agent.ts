@@ -261,7 +261,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
    * 404. A refused fold is not an error at the asking: it is reported, and
    * what it means for the run is decided where the room is read.
    */
-  async function compactRun(runId: string): Promise<boolean> {
+  async function compactRun(runId: string, instructions?: string): Promise<boolean> {
     const session = sessions.get(runId);
     if (!session) return false;
     if (session.budget.used >= session.budget.max) {
@@ -278,7 +278,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     }
     session.budget.used += 1;
     try {
-      await compact(session.messages, session.report, new AbortController().signal);
+      await compact(session.messages, session.report, new AbortController().signal, instructions);
       // Not the summarizing request's own usage: carrying that number over
       // would trip the threshold again and fold forever.
       session.size.used = 0;
@@ -571,6 +571,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     messages: ChatMessage[],
     report: (event: RunEvent) => void,
     signal: AbortSignal,
+    instructions?: string,
   ): Promise<void> {
     const opening = messages[0];
     let answered = messages.length;
@@ -581,7 +582,17 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     let message: ChatMessage;
     try {
       ({ message } = await post(
-        [...messages, { role: 'user', content: 'Summarize the conversation so far, keeping every detail the task still needs.' }],
+        [
+          ...messages,
+          {
+            role: 'user',
+            content:
+              'Summarize the conversation so far, keeping every detail the task still needs.' +
+              // Verbatim, not paraphrased: the words are the caller's, and
+              // the summary is what they were about (SPEC.md §3).
+              (instructions !== undefined ? ` ${instructions}` : ''),
+          },
+        ],
         [],
         signal,
       ));

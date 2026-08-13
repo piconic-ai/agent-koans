@@ -1173,14 +1173,25 @@ const rows: Row[] = [
     message: `when[0]: "compact" is the caller's, not a step of the trace — write it as a turn's own "compact: true"`,
   },
   {
-    rule: 'an ask\'s "compact" is true',
+    rule: 'an ask\'s "compact" is true or what it asked the fold to keep',
     yaml: turnsKoan(`
-      - compact: "yes"
+      - compact: 3
         when:
           - request: model
             response: ok
     `),
-    message: 'turns[0].compact must be true — the caller either asked for a fold here or did not',
+    message:
+      'turns[0].compact must be true, or what the caller asked the fold to keep — the ask either says how or does not',
+  },
+  {
+    rule: 'an ask that says nothing is written "compact: true"',
+    yaml: turnsKoan(`
+      - compact: "  "
+        when:
+          - request: model
+            response: ok
+    `),
+    message: 'turns[0].compact is empty — an ask that says nothing about the fold is written "compact: true"',
   },
   {
     rule: 'a koan cannot open with an ask',

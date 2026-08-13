@@ -280,8 +280,15 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
       }
     }
     if (asking) {
-      if (rt.compact !== true) {
-        return problem(`turns[${i}].compact must be true — the caller either asked for a fold here or did not`);
+      // A string is what the ask said about how to fold; `true` is an ask
+      // that said nothing, which is why the two are one field.
+      if (rt.compact !== true && typeof rt.compact !== 'string') {
+        return problem(
+          `turns[${i}].compact must be true, or what the caller asked the fold to keep — the ask either says how or does not`,
+        );
+      }
+      if (typeof rt.compact === 'string' && rt.compact.trim().length === 0) {
+        return problem(`turns[${i}].compact is empty — an ask that says nothing about the fold is written "compact: true"`);
       }
       if (i === 0) {
         return problem(`turns[0].compact: the caller asks a run that has already answered — an ask cannot open a koan`);
@@ -316,13 +323,17 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
     }
     const trace = parseTrace(into(ctx, `turns[${i}].when`, rt.when), true, false);
     if (isProblem(trace)) return trace;
-    if (rt.compact === true) {
+    if (rt.compact !== undefined) {
       if (trace.steps.length !== 1 || trace.steps[0].kind !== 'compaction') {
         return problem(
           `turns[${i}].when scripts ${trace.steps.length} step(s) — an ask brings about the fold and nothing else, since without a prompt there is no other work`,
         );
       }
-      turns.push({ kind: 'compact', trace });
+      turns.push({
+        kind: 'compact',
+        ...(typeof rt.compact === 'string' ? { instructions: rt.compact } : {}),
+        trace,
+      });
       continue;
     }
     if (!last) {

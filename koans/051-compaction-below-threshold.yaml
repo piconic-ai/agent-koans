@@ -1,0 +1,40 @@
+name: compaction-below-threshold
+description: >
+  The run declares a threshold and the conversation stays well below it.
+  A declared threshold is not an instruction to fold whenever convenient:
+  with room left, the agent must carry the history as it stands into the
+  next turn — the trace has no compaction step for one to consume.
+
+given:
+  context:
+    window: 100000
+    compaction: 90%
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+turns:
+  - prompt: "Look up incident INC-4407 and confirm it is logged."
+    when:
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-4407" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-9-4471" } }
+      # 40000 of the declared 100000 is far below the 90% the run folds at.
+      - request: model
+        response:
+          body: "Incident INC-4407 is logged."
+          used_tokens: 40000
+
+  - prompt: "What was that incident's operator code?"
+    when:
+      - request: model
+        response: "The operator code is K-9-4471."
+    then:
+      status: completed
+      output: { contains: "K-9-4471" }

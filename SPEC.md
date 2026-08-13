@@ -279,6 +279,8 @@ it cannot drift from the contract it indexes.
 | [048-workspace-two-files](./koans/048-workspace-two-files.yaml) | Two workspace files, read one after the other. Each read must flow into the conversation's next model request, so the second read does not displace the first: the final answer is drawn from both files. |
 | [049-three-turns](./koans/049-three-turns.yaml) | A third turn, where 022 has two. History does not thin out as it grows: the last turn's request must still carry both earlier turns, which is what lets the model answer from them without looking anything up again. |
 | [050-follow-up-delegation](./koans/050-follow-up-delegation.yaml) | A follow-up turn delegates. The parent must carry its own earlier turn into this one, and the child must still see only its briefing: a conversation's history belongs to the conversation that holds it, and a delegate opens a new one however long the parent's has grown. |
+| [051-compaction-below-threshold](./koans/051-compaction-below-threshold.yaml) | The run declares a threshold and the conversation stays well below it. A declared threshold is not an instruction to fold whenever convenient: with room left, the agent must carry the history as it stands into the next turn — the trace has no compaction step for one to consume. |
+| [052-compaction-asked-below-threshold](./koans/052-compaction-asked-below-threshold.yaml) | The caller asks for a fold while the conversation sits far below the threshold the run declared. The threshold says when the agent folds on its own, and 051 shows it holding here; the ask is the caller's, and it folds the conversation anyway. |
 
 <!-- koan-index:end -->
 

@@ -1096,7 +1096,7 @@ const rows: Row[] = [
               response: ok
     `)}`,
     message:
-      'turns[1].when[0]: nothing has asked for a fold here — the conversation is at 95 tokens and the run declares no threshold, and the caller did not ask after the turn before',
+      'turns[1].when[0]: nothing has asked for a fold here — the conversation is at 95 tokens and the run declares no threshold, and the caller did not ask at the head of this turn',
   },
   {
     rule: 'a compaction says what the conversation shrank to',
@@ -1161,6 +1161,58 @@ const rows: Row[] = [
     `)}`,
     message:
       'turns[1].when[0]: a compaction step needs a model request after it — otherwise no request carries its summary',
+  },
+  {
+    rule: '"compact" opens the turn it belongs to',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request: model
+            response: ok
+          - compact
+    `),
+    message: `turns[0].when[1]: "compact" opens the turn the caller asked before — nothing of the trace comes before it`,
+  },
+  {
+    rule: '"compact" needs a "turns:" koan',
+    yaml: koan(`
+      when:
+        - compact
+        - request: model
+          response: ok
+    `),
+    message: `when[0]: "compact" needs the turn it opens — write it in a "turns:" koan, on the turn the caller asks before`,
+  },
+  {
+    rule: '"compact" cannot open the first turn',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - compact
+          - request: model
+            response: ok
+    `),
+    message: `turns[0].when[0]: "compact" needs a turn before it — a caller asks a run that has already answered`,
+  },
+  {
+    rule: 'a turn opening with "compact" opens with the fold it asked for',
+    yaml: `name: x\n${dedent(`
+      given:
+        context:
+          window: 100
+          compaction: "off"
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: { body: ok, used_tokens: 10 }
+        - prompt: b
+          when:
+            - compact
+            - request: model
+              response: ok
+    `)}`,
+    message: 'turns[1].when[1]: the caller asked for a fold at the head of this turn — the fold must follow it',
   },
   {
     rule: 'a trace fits the model-request budget',

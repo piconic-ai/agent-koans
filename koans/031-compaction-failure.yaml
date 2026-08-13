@@ -33,11 +33,11 @@ turns:
         response:
           body: "Incident INC-4407 is logged."
           used_tokens: 40000
-      - compact
 
   # 40000 of 100000: nothing here is under pressure but the caller's ask.
   - prompt: "What was that incident's operator code?"
     when:
+      - compact
       - request:
           type: model
           purpose: compaction

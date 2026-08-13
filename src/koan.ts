@@ -179,8 +179,8 @@ export interface TurnSpec {
   prompt: string;
   /** This turn's judgment; defaults to `{ status: 'completed' }` when the turn omits its own `then`. */
   then: Judgment;
-  /** The caller asks for a fold once this turn has settled, before the next turn's prompt goes out. */
-  compactAfter?: true;
+  /** The caller asks for a fold before this turn's prompt goes out. */
+  compactBefore?: true;
 }
 
 /** A compiled koan: shared `given`/`then` plus one or more trace variants. */
@@ -432,7 +432,7 @@ function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): { 
     turnSpecs.push({
       prompt: t.prompt,
       then: compileJudgment(t.then),
-      ...(t.trace.compact ? { compactAfter: true as const } : {}),
+      ...(t.trace.compact ? { compactBefore: true as const } : {}),
     });
   }
 

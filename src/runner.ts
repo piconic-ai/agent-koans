@@ -155,6 +155,11 @@ function judge(then: Judgment, run: RunState): string[] {
   return failures;
 }
 
+/** How many folds the run has reported so far, started and ended alike. */
+function foldsReported(run: RunState): number {
+  return (run.events ?? []).filter((e) => e.type === 'compaction').length;
+}
+
 // What the caller was told about the folds the trace scripts (SPEC.md
 // §3). Read from the settled run rather than watched as it happens: a
 // client polls, so the record has to survive the activity it describes.
@@ -354,14 +359,22 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             break;
           }
           if (koan.turns[t + 1].compactBefore) {
-            // Awaited, but only for the answer: a run may fold before it
-            // or on the way to the request that follows (SPEC.md §3).
-            // Firing this and the prompt together instead would leave the
-            // two with no order to keep, and the trace could not say
-            // which turn the fold belongs to.
+            const before = foldsReported(run);
             const compactRes = await fetch(`${base}/runs/${runId}/compact`, { method: 'POST' });
             if (compactRes.status !== 202 && compactRes.status !== 200) {
               throw new Error(`POST /runs/${runId}/compact returned ${compactRes.status}, expected 202 or 200`);
+            }
+            // Read here rather than at the end: the answer to the ask says
+            // the fold has happened (SPEC.md §3), so a caller holding it
+            // knows what came of pressing the button before it types the
+            // next thing.
+            const asked = await fetch(`${base}/runs/${runId}`);
+            if (!asked.ok) throw new Error(`GET /runs/${runId} returned ${asked.status}`);
+            if (foldsReported((await asked.json()) as RunState) === before) {
+              failures.push(
+                `POST /runs/${runId}/compact answered with no fold reported: a run answers the ask once it has folded, ` +
+                  `so "compaction" events for it are in GET /runs/{run_id} by then`,
+              );
             }
           }
           const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {

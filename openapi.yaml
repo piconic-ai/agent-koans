@@ -99,8 +99,8 @@ paths:
       operationId: compactRun
       summary: Ask the run to fold its conversation down
       description: >
-        The caller asks for a compaction (SPEC.md §3). The agent MUST fold
-        the conversation before its next model request and MUST report the
+        The caller asks for a compaction (SPEC.md §3). The agent MUST have
+        folded the conversation by the time it answers, and MUST report the
         fold in `events`, whatever `context.compaction` says — that setting
         governs folding the agent does on its own, not what the caller
         asks for.
@@ -113,8 +113,8 @@ paths:
       responses:
         "202":
           description: >
-            Ask accepted. The fold may still be ahead of it — the deadline
-            is the conversation's next model request, not this response.
+            The fold has happened by now — completed or failed — and is in
+            the run's `events`.
         "200":
           description: Request accepted. Equivalent to 202.
         "404":

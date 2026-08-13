@@ -137,17 +137,12 @@ told earlier is gone from the conversation. A `failed` entry MAY carry an
 is owed is that the fold failed.
 
 **Asking for a fold.** `POST /runs/{run_id}/compact` is the caller asking
-for one, and you MUST fold before that conversation's next model request
-and report it the same way. It is not governed by `context.compaction`:
-that setting says when you fold on your own, and `off` does not take the
-choice away from the caller who asked.
-
-Answering the ask says it was taken, not that the fold has happened: fold
-before you answer, or on the way to the next model request — the deadline
-is that request, not the response. So a caller that has its answer may
-send the next prompt at once, and one that has not may not: two requests
-in flight together have no order to keep, and nothing can be owed about
-which of them lands first.
+for one, and you MUST have folded by the time you answer it — and
+reported the fold, completed or failed. A caller holding the answer knows
+what came of pressing the button, and may send the next prompt at once.
+The ask is not governed by `context.compaction`: that setting says when
+you fold on your own, and `off` does not take the choice away from the
+caller who asked.
 
 A fold that fails leaves the conversation as it was, and what decides
 whether the run goes on is the room left in the window, never the fold's

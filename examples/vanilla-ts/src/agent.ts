@@ -181,8 +181,6 @@ interface RunSession {
   queued: string[];
   /** Whether a turn is in flight; one runs at a time per run. */
   busy: boolean;
-  /** The caller asked for a fold; the next model request of this conversation owes one (SPEC.md §3). */
-  asked: boolean;
   /** Appends to the run's caller-visible record; a delegate's folds report here too. */
   report: (event: RunEvent) => void;
 }
@@ -213,7 +211,6 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
       size: { used: 0 },
       queued: [],
       busy: false,
-      asked: false,
       report: (event) => run.events.push(event),
     };
     sessions.set(run.run_id, session);
@@ -259,15 +256,25 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
   }
 
   /**
-   * The caller asks for a fold (SPEC.md §3). Armed rather than performed
-   * here: the conversation may be mid-turn, and the contract asks only
-   * that the fold happen before its next model request. Returns `false`
-   * when `runId` is unknown, so the caller can answer 404.
+   * The caller asks for a fold, and gets it before the answer (SPEC.md
+   * §3). Returns `false` when `runId` is unknown, so the caller can answer
+   * 404. A refused fold is not an error at the asking: it is reported, and
+   * what it means for the run is decided where the room is read.
    */
-  function compactRun(runId: string): boolean {
+  async function compactRun(runId: string): Promise<boolean> {
     const session = sessions.get(runId);
     if (!session) return false;
-    session.asked = true;
+    if (session.budget.used >= session.budget.max) return true;
+    session.budget.used += 1;
+    try {
+      await compact(session.messages, session.report, new AbortController().signal);
+      // Not the summarizing request's own usage: carrying that number over
+      // would trip the threshold again and fold forever.
+      session.size.used = 0;
+    } catch {
+      // Left as it was, which the room check before the next model
+      // request reads for what it is.
+    }
     return true;
   }
 
@@ -315,7 +322,6 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
         session.context,
         session.size,
         session.report,
-        session,
         signal,
       );
       if (text === undefined) {
@@ -352,12 +358,10 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     context: RunContext | undefined,
     size: ConversationSize,
     report: (event: RunEvent) => void,
-    asking: { asked: boolean } | undefined,
     signal: AbortSignal,
   ): Promise<string | undefined> {
     for (;;) {
-      if (asking?.asked === true || reachedThreshold(size.used, context)) {
-        if (asking) asking.asked = false;
+      if (reachedThreshold(size.used, context)) {
         if (budget.used >= budget.max) return undefined;
         budget.used += 1;
         try {
@@ -365,12 +369,16 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
           // Not the summarizing request's own usage: carrying that number
           // over would trip the threshold again and fold forever.
           size.used = 0;
-        } catch (err) {
-          // Not rethrown while the window still has room: a refused fold
-          // leaves the conversation as it was, and what decides whether
-          // this run goes on is that room, never the fold's outcome.
-          if (context !== undefined && size.used >= context.window) throw err;
+        } catch {
+          // A refused fold leaves the conversation as it was, so the room
+          // below decides what follows — never the fold's outcome.
         }
+      }
+
+      // Read before every request rather than after a fold: what a full
+      // window forbids is asking the model again, whatever filled it.
+      if (context !== undefined && size.used >= context.window) {
+        throw new Error(`no room left in the declared context window (${context.window})`);
       }
 
       if (budget.used >= budget.max) return undefined;
@@ -470,7 +478,7 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
     // continued yet.
     const childMessages: ChatMessage[] = [{ role: 'user', content: prompt }];
     // A conversation of its own, so a size of its own.
-    const text = await runConversation(childMessages, tools, subagents, budget, context, { used: 0 }, report, undefined, signal);
+    const text = await runConversation(childMessages, tools, subagents, budget, context, { used: 0 }, report, signal);
     return text ?? `Error: subagent "${name}" did not finish before the model-request budget ran out`;
   }
 

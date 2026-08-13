@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Publishes the version main carries, exactly once: npm publish via
-# trusted publishing, the vX.Y.Z tag, and the GitHub release with that
-# version's CHANGELOG section. Tagging is done here, not by changeset
-# publish, because the workspace makes this repository a monorepo in
-# changesets' eyes and its tags would be agent-koans@X.Y.Z instead of
-# the vX.Y.Z form this repository uses.
+# Releases the version main carries, exactly once, and a release is all
+# three of: npm publish via trusted publishing, the vX.Y.Z tag, and the
+# GitHub release carrying that version's CHANGELOG section. It runs on
+# every push to main and decides for itself whether there is anything to
+# release, so it is not named for the npm half alone.
+#
+# Tagging is done here, not by changeset publish, because the workspace
+# makes this repository a monorepo in changesets' eyes and its tags
+# would be agent-koans@X.Y.Z instead of the vX.Y.Z form this repository
+# uses.
 set -euo pipefail
 
 version=$(node -p "require('./package.json').version")

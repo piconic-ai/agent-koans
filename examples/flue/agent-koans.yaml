@@ -4,5 +4,4 @@ delegation:
   prompt_arg: prompt
 
 skip:
-  032-compaction-failure-no-room: "Flue does not treat a run's declared window as a limit: after the refused fold it asks the model again, and no seam of the agent API sits between its loop and that request (upstream: @flue/runtime)."
   014-malformed-arguments: "pi-ai's parseStreamingJson silently repairs malformed JSON via partial-json instead of erroring, has no strict mode, and useTool() never exposes the raw wire string to intercept (upstream: @earendil-works/pi-ai)."

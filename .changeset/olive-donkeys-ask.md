@@ -10,4 +10,6 @@ A fold that fails owes two things. The caller must be told it failed, as a `fail
 
 Two koans script the refusal, written where the summary would have been: `response: { status: 400, body: ..., compaction: failed }`. They differ in one number. `031-compaction-failure` refuses a fold with the conversation at 40000 of 100000, and the run answers the turn anyway. `032-compaction-failure-no-room` refuses one with the window full, and the run ends, because there is nothing left to ask the model with.
 
-`examples/flue` needed a route to the ask. Flue's own manual fold, `harness.compact()`, folds the invocation harness's conversation, not the agent's, so the example opens the agent's own conversation the way the runtime does — the `default` session of the `default` harness — and folds that. It skips `032`: Flue does not treat a run's declared window as a limit, and no seam of its agent API sits between its loop and the request it makes next.
+`examples/flue` needed a route to the ask. Flue's own manual fold, `harness.compact()`, folds the invocation harness's conversation, not the agent's, so the example opens the agent's own conversation the way the runtime does — the `default` session of the `default` harness — and folds that.
+
+It also had to enforce the declared window itself: Flue treats a refused fold as best-effort and asks the model again, so the example stops that request at the provider boundary, where its request budget was already enforced.

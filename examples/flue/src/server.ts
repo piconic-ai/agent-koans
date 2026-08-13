@@ -7,6 +7,7 @@ import { AgentRunError, type AgentInstanceHandle, init, observe } from '@flue/ru
 import { start } from '@flue/runtime/node';
 import { Assistant, type AssistantData, type RunContext } from './agents/assistant.js';
 import { armBudget, budgetTripped } from './budget.js';
+import { armWindow, noteFoldFailed, noteUsed } from './window.js';
 import { compactConversation } from './compaction.js';
 import { loadConfig } from './config.js';
 import { createKoanProvider } from './provider.js';
@@ -47,10 +48,14 @@ const runsByInstance = new Map<string, Run>();
 observe((observation, ctx) => {
   const run = ctx.id === undefined ? undefined : runsByInstance.get(ctx.id);
   if (!run) return;
+  if (observation.type === 'turn' && observation.purpose === 'agent' && observation.response?.usage) {
+    noteUsed(observation.response.usage.input);
+  }
   if (observation.type === 'compaction_start') {
     run.events.push({ type: 'compaction', phase: 'started' });
   } else if (observation.type === 'compaction') {
     const failed = observation.isError === true;
+    if (failed) noteFoldFailed();
     run.events.push({
       type: 'compaction',
       phase: failed ? 'failed' : 'completed',
@@ -110,6 +115,7 @@ function startRun(
   const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running', events: [] };
   runs.set(run.run_id, run);
   armBudget(limits?.max_model_requests);
+  armWindow(context?.window);
   // No id passed to init(): each run gets an isolated conversation, never
   // reusing another run's state.
   const agent = init(Assistant);

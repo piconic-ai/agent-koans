@@ -265,6 +265,8 @@ it cannot drift from the contract it indexes.
 | [034-optional-argument-omitted](./koans/034-optional-argument-omitted.yaml) | The schema declares "units" but does not require it, and the model's call leaves it out. Optional means optional: the agent must invoke the tool with the arguments as the model wrote them — neither rejecting the call as incomplete nor filling the missing field in itself. |
 | [035-non-string-arguments](./koans/035-non-string-arguments.yaml) | The call carries a number and a boolean, both matching the schema. The arguments must reach the tool with their JSON types intact: 3 stays a number and true stays a boolean, neither one turned into a string on the way. |
 | [036-nested-object-argument](./koans/036-nested-object-argument.yaml) | One argument is an object of its own, whose fields the schema never describes. The agent must pass the whole structure through to the tool as the model wrote it — not flattened, not pruned to the fields the schema names. |
+| [037-tool-rate-limited](./koans/037-tool-rate-limited.yaml) | The tool server answers 429. A rate limit is a tool failure like any other: it must reach the model, and the agent must not retry it on its own — the follow-up call is the model's, and it succeeds. |
+| [038-tool-failure-without-body](./koans/038-tool-failure-without-body.yaml) | The tool server fails with a status and nothing else. There is no error text to pass on, so the status itself is what the model must be told — a failure the agent reports as a bare result would leave the model reading it as success. |
 
 <!-- koan-index:end -->
 

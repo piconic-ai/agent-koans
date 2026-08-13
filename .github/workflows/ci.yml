@@ -24,7 +24,7 @@ jobs:
       - name: Typecheck
         run: |
           pnpm typecheck
-          pnpm --dir examples/vanilla-ts typecheck
+          pnpm --dir examples/vanilla typecheck
           pnpm --dir examples/flue typecheck
 
       - name: Build the publishable package

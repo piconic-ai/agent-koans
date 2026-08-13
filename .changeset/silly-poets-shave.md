@@ -6,4 +6,4 @@ A caller asking for a fold can say what the summary must keep. `POST /runs/{run_
 
 A koan writes the ask as the words themselves: `compact: "Keep every operator code verbatim."`, with `true` staying the form for an ask that says nothing about how — the plain button, which leaves the wording to the agent. `033-compaction-instructions` scripts one, and the mock reads the summarizing request for the caller's words the way it reads any other request for what must be on the wire.
 
-Both bundled examples carry them. `examples/vanilla-ts` writes its own summarizing prompt and appends them to it. `examples/flue` cannot: Flue's `session.compact()` takes no arguments and its summarizing prompt is the runtime's own, so the example attaches the words to the request instead, at the provider boundary it already owns.
+Both bundled examples carry them. `examples/vanilla` writes its own summarizing prompt and appends them to it. `examples/flue` cannot: Flue's `session.compact()` takes no arguments and its summarizing prompt is the runtime's own, so the example attaches the words to the request instead, at the provider boundary it already owns.

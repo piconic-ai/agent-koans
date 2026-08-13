@@ -56,7 +56,7 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
-  examples/vanilla-ts:
+  examples/vanilla:
     dependencies:
       '@hono/node-server':
         specifier: ^1.14.0

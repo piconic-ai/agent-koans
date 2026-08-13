@@ -1,0 +1,29 @@
+name: model-api-failure-midway
+description: >
+  The model endpoint rejects a request made in the middle of the run,
+  after a tool call has already succeeded. Work already done is no reason
+  to press on: the agent must not re-issue the request, must not invoke
+  anything further, and must end the run as failed.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: model
+    response: { status: 403 }
+
+then:
+  status: failed

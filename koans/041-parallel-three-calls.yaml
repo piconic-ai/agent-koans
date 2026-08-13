@@ -1,0 +1,48 @@
+name: parallel-three-calls
+description: >
+  A parallel group of three, rather than the pair of 015. A batch has no
+  size the agent may assume: all three calls must be invoked and closed
+  before the model is asked again.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+    get_local_time:
+      description: "Look up the current local time for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+    check_status:
+      description: "Report the current system status"
+      input_schema:
+        type: object
+        properties: {}
+
+prompt: "Report the weather and local time in Tokyo, and the system status."
+
+when:
+  - request: model
+    response:
+      - { tool: get_weather, args: { city: "Tokyo" } }
+      - { tool: get_local_time, args: { city: "Tokyo" } }
+      - { tool: check_status, args: {} }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: { tool: get_local_time }
+    response: { status: 200, body: { time: "14:05" } }
+  - request: { tool: check_status }
+    response: { status: 200, body: { load: "high" } }
+  - request: model
+    response: "Tokyo: 31°C at 14:05, and the system load is high."
+
+then:
+  status: completed
+  output: { matches: "31.*14:05.*high" }

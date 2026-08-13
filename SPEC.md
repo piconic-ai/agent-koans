@@ -267,6 +267,9 @@ it cannot drift from the contract it indexes.
 | [036-nested-object-argument](./koans/036-nested-object-argument.yaml) | One argument is an object of its own, whose fields the schema never describes. The agent must pass the whole structure through to the tool as the model wrote it — not flattened, not pruned to the fields the schema names. |
 | [037-tool-rate-limited](./koans/037-tool-rate-limited.yaml) | The tool server answers 429. A rate limit is a tool failure like any other: it must reach the model, and the agent must not retry it on its own — the follow-up call is the model's, and it succeeds. |
 | [038-tool-failure-without-body](./koans/038-tool-failure-without-body.yaml) | The tool server fails with a status and nothing else. There is no error text to pass on, so the status itself is what the model must be told — a failure the agent reports as a bare result would leave the model reading it as success. |
+| [039-parallel-same-tool](./koans/039-parallel-same-tool.yaml) | One response requests the same tool twice with different arguments. The two calls are told apart by their arguments alone, so the agent must invoke the tool once per city — not once for the pair — and close each call with its own result. |
+| [040-parallel-batch-all-fail](./koans/040-parallel-batch-all-fail.yaml) | Every call of a parallel batch fails. A batch is not abandoned because its first member failed: both calls must be made and both closed with their own failure, each reaching the model, which then gives up gracefully. |
+| [041-parallel-three-calls](./koans/041-parallel-three-calls.yaml) | A parallel group of three, rather than the pair of 015. A batch has no size the agent may assume: all three calls must be invoked and closed before the model is asked again. |
 
 <!-- koan-index:end -->
 

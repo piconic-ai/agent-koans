@@ -1,0 +1,34 @@
+name: parallel-same-tool
+description: >
+  One response requests the same tool twice with different arguments. The
+  two calls are told apart by their arguments alone, so the agent must
+  invoke the tool once per city — not once for the pair — and close each
+  call with its own result.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Compare the current temperature in Tokyo and Osaka."
+
+when:
+  - request: model
+    response:
+      - { tool: get_weather, args: { city: "Tokyo" } }
+      - { tool: get_weather, args: { city: "Osaka" } }
+  - request: { tool: get_weather, args: { city: "Tokyo" } }
+    response: { status: 200, body: { temp: 31 } }
+  - request: { tool: get_weather, args: { city: "Osaka" } }
+    response: { status: 200, body: { temp: 33 } }
+  - request: model
+    response: "Osaka (33°C) is warmer than Tokyo (31°C)."
+
+then:
+  status: completed
+  output: { matches: "33.*31|31.*33" }

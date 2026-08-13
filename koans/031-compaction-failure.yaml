@@ -36,7 +36,6 @@ turns:
 
   # 40000 of 100000: nothing here is under pressure but the caller's ask.
   - compact: true
-    prompt: "What was that incident's operator code?"
     when:
       - request:
           type: model
@@ -45,6 +44,9 @@ turns:
           status: 400
           body: { error: "summarizer_unavailable" }
           compaction: failed
+
+  - prompt: "What was that incident's operator code?"
+    when:
       - request: model
         response: "The operator code is K-9-4471."
     then:

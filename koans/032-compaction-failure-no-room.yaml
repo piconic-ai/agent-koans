@@ -34,7 +34,6 @@ turns:
           used_tokens: 100000
 
   - compact: true
-    prompt: "What was that incident's operator code?"
     when:
       - request:
           type: model
@@ -43,5 +42,8 @@ turns:
           status: 400
           body: { error: "summarizer_unavailable" }
           compaction: failed
+
+  # No room for a model request, so the prompt draws none and the run ends.
+  - prompt: "What was that incident's operator code?"
     then:
       status: failed

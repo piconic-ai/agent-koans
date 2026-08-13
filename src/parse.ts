@@ -258,71 +258,88 @@ function parseBody(ctx: Ctx<KoanFile>, raw: Record<string, unknown>): Parsed<Bod
 }
 
 // Two passes over the raw list, like the shape of the koan itself: every
-// turn's own fields (prompt, unknown keys, its `then`) validate before any
-// turn's `when` is parsed, so a shape error in turn 0's `then` is reported
-// even when turn 1's `when` is merely empty.
+// entry's own fields validate before any entry's `when` is parsed, so a
+// shape error in entry 0's `then` is reported even when entry 1's `when`
+// is merely empty.
 function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
   if (!Array.isArray(rawTurns) || rawTurns.length === 0) return problem('"turns" must be a non-empty list of turn entries');
   if (rawTurns.length < 2) return problem('"turns" needs at least two entries — a 1-turn koan is just "when"');
 
-  const prompts: string[] = [];
   const thens: Judgment[] = [];
   for (let i = 0; i < rawTurns.length; i++) {
     const rt = (rawTurns[i] ?? {}) as Record<string, unknown>;
-    // Trim-empty counts as empty: turn 1's prompt routes the run the same
-    // way a plain koan's does, and a later turn's is what a turn-boundary
+    const asking = rt.compact !== undefined;
+    for (const key of Object.keys(rt)) {
+      const allowed = asking ? key === 'compact' || key === 'when' : key === 'prompt' || key === 'when' || key === 'then';
+      if (!allowed) {
+        return problem(
+          asking
+            ? `turns[${i}] has unknown key "${key}" — an entry asking for a fold carries only "compact" and "when"`
+            : `turns[${i}] has unknown key "${key}" — a prompt entry carries only "prompt", "when", and "then"`,
+        );
+      }
+    }
+    if (asking) {
+      if (rt.compact !== true) {
+        return problem(`turns[${i}].compact must be true — the caller either asked for a fold here or did not`);
+      }
+      if (i === 0) {
+        return problem(`turns[0].compact: the caller asks a run that has already answered — an ask cannot open a koan`);
+      }
+      thens.push({});
+      continue;
+    }
+    // Trim-empty counts as empty: entry 1's prompt routes the run the same
+    // way a plain koan's does, and a later one's is what a turn-boundary
     // request must be shown to carry.
     if (typeof rt.prompt !== 'string' || rt.prompt.trim().length === 0) {
       return problem(`turns[${i}] needs a non-empty "prompt"`);
     }
-    for (const key of Object.keys(rt)) {
-      if (key !== 'compact' && key !== 'prompt' && key !== 'when' && key !== 'then') {
-        return problem(`turns[${i}] has unknown key "${key}" — a turn entry carries only "compact", "prompt", "when", and "then"`);
-      }
-    }
-    if (rt.compact !== undefined) {
-      if (rt.compact !== true) {
-        return problem(`turns[${i}].compact must be true — the caller either asked for a fold before this turn or did not`);
-      }
-      if (i === 0) {
-        return problem(`turns[0].compact: the caller asks a run that has already answered — a first turn cannot open with a fold`);
-      }
-    }
     const then =
       rt.then !== undefined ? parseJudgment(into(ctx, `turns[${i}].then`, rt.then)) : ({ status: 'completed' } as Judgment);
     if (isProblem(then)) return then;
-    prompts.push(rt.prompt);
     thens.push(then);
   }
 
-  const traces: Trace[] = [];
+  const turns: Turn[] = [];
   for (let i = 0; i < rawTurns.length; i++) {
-    const rawWhen = (rawTurns[i] as Record<string, unknown>).when;
-    if (!Array.isArray(rawWhen) || rawWhen.length === 0) {
+    const rt = rawTurns[i] as Record<string, unknown>;
+    const last = i === rawTurns.length - 1;
+    // Omitted only where nothing could follow: a prompt the agent answers
+    // with no model request at all ends the koan by definition.
+    if (rt.when === undefined && rt.compact === undefined && last) {
+      turns.push({ kind: 'prompt', prompt: rt.prompt as string, then: thens[i] });
+      continue;
+    }
+    if (!Array.isArray(rt.when) || rt.when.length === 0) {
       return problem(`turns[${i}].when must be a non-empty list of trace steps`);
     }
-    const trace = parseTrace(into(ctx, `turns[${i}].when`, rawWhen), true, false);
+    const trace = parseTrace(into(ctx, `turns[${i}].when`, rt.when), true, false);
     if (isProblem(trace)) return trace;
-    if (i < rawTurns.length - 1) {
-      const last = trace.steps[trace.steps.length - 1];
+    if (rt.compact === true) {
+      if (trace.steps.length !== 1 || trace.steps[0].kind !== 'compaction') {
+        return problem(
+          `turns[${i}].when scripts ${trace.steps.length} step(s) — an ask brings about the fold and nothing else, since without a prompt there is no other work`,
+        );
+      }
+      turns.push({ kind: 'compact', trace });
+      continue;
+    }
+    if (!last) {
+      const end = trace.steps[trace.steps.length - 1];
       // An intermediate turn can only be judged "completed" by ending in
       // a plain reply — the one seam where a later turn's first request
       // is allowed to continue the same conversation.
-      if (last.kind !== 'model' || last.response.kind !== 'reply') {
+      if (end.kind !== 'model' || end.response.kind !== 'reply') {
         return problem(
           `turns[${i}].when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one`,
         );
       }
     }
-    traces.push(trace);
+    turns.push({ kind: 'prompt', prompt: rt.prompt as string, trace, then: thens[i] });
   }
 
-  const turns = prompts.map((prompt, i) => ({
-    ...((rawTurns[i] as Record<string, unknown>).compact === true ? { compact: true as const } : {}),
-    prompt,
-    trace: traces[i],
-    then: thens[i],
-  }));
+  if (turns[0].kind !== 'prompt') return problem('turns[0] must be a prompt — a run starts from one');
   return { kind: 'turns', turns: turns as [Turn, Turn, ...Turn[]] };
 }
 
@@ -530,15 +547,6 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     return problem(
       `${at}: a trace carries either "abort" or a mid-run "prompt", not both — cancelling a held invocation is not scripted yet`,
     );
-  }
-  for (let i = 0; i < steps.length; i++) {
-    const step = steps[i];
-    // Only a fold that completed: a refused one produced no summary to
-    // carry, and a run that gives up on the refusal ends right here.
-    if (step.kind !== 'compaction' || step.report !== 'completed') continue;
-    if (steps[i + 1]?.kind !== 'model') {
-      return problem(`${at}[${i}]: a compaction step needs a model request after it — otherwise no request carries its summary`);
-    }
   }
   if (sentPromptAt !== -1 && !steps.slice(sentPromptAt + 1).some((s) => s.kind === 'model')) {
     return problem(
@@ -853,6 +861,7 @@ const constraints: Constraint[] = [
   theTraceFitsTheModelRequestBudget,
   usedTokensFitTheWindow,
   compactionMatchesTheDeclaredThreshold,
+  everyFoldReachesTheConversation,
 ];
 
 /**
@@ -888,8 +897,26 @@ function scriptedTraces(koan: KoanFile): ScriptedTrace[] {
       abort: trace.abort,
     }));
   }
-  const steps = body.turns.flatMap((t) => t.trace.steps);
-  return [{ steps, at: 'turns', opening: { label: 'turns[0].prompt', text: body.turns[0].prompt } }];
+  const steps = body.turns.flatMap((t) => t.trace?.steps ?? []);
+  const opening = body.turns[0] as Extract<Turn, { kind: 'prompt' }>;
+  return [{ steps, at: 'turns', opening: { label: 'turns[0].prompt', text: opening.prompt } }];
+}
+
+// Across entries, not within one: the fold an ask brings about is an
+// entry of its own, and the request that carries its summary belongs to
+// the prompt that follows.
+function everyFoldReachesTheConversation(koan: KoanFile): Problem | undefined {
+  for (const { steps, at } of scriptedTraces(koan)) {
+    for (const [i, step] of steps.entries()) {
+      // Only a fold that completed: a refused one produced no summary to
+      // carry, and a run that gives up on the refusal ends right there.
+      if (step.kind !== 'compaction' || step.report !== 'completed') continue;
+      if (steps[i + 1]?.kind !== 'model') {
+        return problem(`${at}[${i}]: a compaction needs a model request after it — otherwise no request carries its summary`);
+      }
+    }
+  }
+  return undefined;
 }
 
 /** Unlike a tool call, a delegation has no round trip a koan may omit: it must be answered. */
@@ -1125,12 +1152,12 @@ function scriptedConversations(koan: KoanFile): ScriptedConversation[] {
   if (body.kind === 'turns') {
     found.push(
       body.turns.map((t, i) => ({
-        steps: t.trace.steps,
+        steps: t.trace?.steps ?? [],
         at: `turns[${i}].when`,
-        ...(t.compact ? { compact: true as const } : {}),
+        ...(t.kind === 'compact' ? { compact: true as const } : {}),
       })),
     );
-    for (const [i, t] of body.turns.entries()) addSubagents(t.trace.steps, `turns[${i}].when`);
+    for (const [i, t] of body.turns.entries()) addSubagents(t.trace?.steps ?? [], `turns[${i}].when`);
     return found;
   }
 

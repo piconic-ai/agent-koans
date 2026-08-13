@@ -33,7 +33,6 @@ turns:
           used_tokens: 40000
 
   - compact: true
-    prompt: "What was that incident's operator code?"
     when:
       - request:
           type: model
@@ -42,6 +41,9 @@ turns:
           body: "Earlier: incident INC-4407 has operator code K-9-4471."
           used_tokens: 8000
           compaction: completed
+
+  - prompt: "What was that incident's operator code?"
+    when:
       - request: model
         response: "The operator code is K-9-4471."
     then:

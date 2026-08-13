@@ -174,14 +174,8 @@ export interface Judgment {
   output?: Matcher;
 }
 
-/** One turn of a `turns:` koan: its prompt, and its own judgment. */
-export interface TurnSpec {
-  prompt: string;
-  /** This turn's judgment; defaults to `{ status: 'completed' }` when the turn omits its own `then`. */
-  then: Judgment;
-  /** The caller asks for a fold before this turn's prompt goes out. */
-  compactBefore?: true;
-}
+/** One entry of a `turns:` koan: what the caller does, and how the run is judged after it. */
+export type TurnSpec = { kind: 'prompt'; prompt: string; then: Judgment } | { kind: 'compact' };
 
 /** A compiled koan: shared `given`/`then` plus one or more trace variants. */
 export interface Koan {
@@ -422,18 +416,18 @@ function compileJudgment(then: ParsedJudgment | undefined): Judgment {
 function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): { trace: Trace; turnSpecs: TurnSpec[] } {
   const conversations: Conversation[] = [];
   const followUps: TurnBoundary[] = [];
-  const main: Conversation = { name: '', turns: [], briefing: turns[0].prompt, followUps };
+  // parse.ts requires the first entry to be a prompt: a run starts from one.
+  const opening = turns[0] as Extract<ParsedTurn, { kind: 'prompt' }>;
+  const main: Conversation = { name: '', turns: [], briefing: opening.prompt, followUps };
   conversations.push(main);
 
   const turnSpecs: TurnSpec[] = [];
   for (const [i, t] of turns.entries()) {
-    if (i > 0) followUps.push({ start: main.turns.length, prompt: t.prompt });
-    compileSteps(t.trace.steps, main, conversations);
-    turnSpecs.push({
-      prompt: t.prompt,
-      then: compileJudgment(t.then),
-      ...(t.compact ? { compactBefore: true as const } : {}),
-    });
+    if (t.kind === 'prompt' && i > 0) followUps.push({ start: main.turns.length, prompt: t.prompt });
+    if (t.trace) compileSteps(t.trace.steps, main, conversations);
+    turnSpecs.push(
+      t.kind === 'compact' ? { kind: 'compact' } : { kind: 'prompt', prompt: t.prompt, then: compileJudgment(t.then) },
+    );
   }
 
   return { trace: { conversations }, turnSpecs };

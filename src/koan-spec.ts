@@ -81,18 +81,28 @@ export type Body =
   | { kind: 'turns'; turns: [Turn, Turn, ...Turn[]] };
 
 /**
- * One turn of a `turns` koan — a small koan of its own. `compact` is the
- * caller's, and written above `prompt` because that is the order it
- * happens in: the caller asks for a fold, then sends this turn's prompt,
- * and the trace below opens with the fold that answers the ask.
+ * One entry of a `turns` koan: something the caller did, and what the
+ * agent did about it. A prompt is one such thing and asking for a fold is
+ * another, so they are two shapes rather than one carrying a flag — an
+ * ask has no prompt to send and no outcome to judge, and the fold it
+ * brings about is its own exchange, not the next prompt's.
  */
-export interface Turn {
-  /** The caller asked for a fold before this turn's prompt went out. */
-  compact?: true;
+export type Turn = PromptTurn | CompactTurn;
+
+/** The caller sent a prompt. `trace` is absent where no model request followed it. */
+export interface PromptTurn {
+  kind: 'prompt';
   prompt: string;
-  trace: Trace;
+  trace?: Trace;
   /** Defaulted to `{ status: 'completed' }` while parsing, never absent here. */
   then: Judgment;
+}
+
+/** The caller asked the run to fold its conversation down. */
+export interface CompactTurn {
+  kind: 'compact';
+  /** The fold the ask brings about, and nothing else: without a prompt there is no other work. */
+  trace: Trace;
 }
 
 /**

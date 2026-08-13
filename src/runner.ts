@@ -252,7 +252,8 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // A `turns:` koan submits its first turn's prompt the
       // same way any koan submits its top-level `prompt`; later turns go
       // to POST /runs/{id}/prompts instead.
-      const firstPrompt = koan.turns ? koan.turns[0].prompt : (koan.prompt as string);
+      const opening = koan.turns?.[0];
+      const firstPrompt = opening?.kind === 'prompt' ? opening.prompt : (koan.prompt as string);
 
       const submitRes = await fetch(`${base}/runs`, {
         method: 'POST',
@@ -349,16 +350,18 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // stopped left behind.
       let stoppedEarly = false;
       if (koan.turns) {
-        for (let t = 0; t < koan.turns.length - 1; t++) {
-          failures.push(...judge(koan.turns[t].then, run));
-          if (run.status !== 'completed') {
-            stoppedEarly = true;
-            failures.push(
-              `turn ${t + 1} of ${koan.turns.length} did not complete; the remaining prompts were not sent`,
-            );
-            break;
+        for (let t = 1; t < koan.turns.length; t++) {
+          const previous = koan.turns[t - 1];
+          if (previous.kind === 'prompt') {
+            failures.push(...judge(previous.then, run));
+            if (run.status !== 'completed') {
+              stoppedEarly = true;
+              failures.push(`turn ${t} of ${koan.turns.length} did not complete; the rest of the koan was not sent`);
+              break;
+            }
           }
-          if (koan.turns[t + 1].compactBefore) {
+          const entry = koan.turns[t];
+          if (entry.kind === 'compact') {
             const before = foldsReported(run);
             const compactRes = await fetch(`${base}/runs/${runId}/compact`, { method: 'POST' });
             if (compactRes.status !== 202 && compactRes.status !== 200) {
@@ -370,17 +373,19 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             // next thing.
             const asked = await fetch(`${base}/runs/${runId}`);
             if (!asked.ok) throw new Error(`GET /runs/${runId} returned ${asked.status}`);
-            if (foldsReported((await asked.json()) as RunState) === before) {
+            run = (await asked.json()) as RunState;
+            if (foldsReported(run) === before) {
               failures.push(
                 `POST /runs/${runId}/compact answered with no fold reported: a run answers the ask once it has folded, ` +
                   `so "compaction" events for it are in GET /runs/{run_id} by then`,
               );
             }
+            continue;
           }
           const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ prompt: koan.turns[t + 1].prompt }),
+            body: JSON.stringify({ prompt: entry.prompt }),
           });
           if (promptRes.status !== 202 && promptRes.status !== 200) {
             throw new Error(`POST /runs/${runId}/prompts returned ${promptRes.status}, expected 202 or 200`);
@@ -429,7 +434,8 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // (`stoppedEarly`): that turn's own judgment above, plus the
       // underrun failures, already cover the koan's failure.
       if (!stoppedEarly) {
-        failures.push(...judge(koan.turns ? koan.turns[koan.turns.length - 1].then : koan.then, run));
+        const last = koan.turns?.[koan.turns.length - 1];
+        failures.push(...judge(last === undefined ? koan.then : last.kind === 'prompt' ? last.then : {}, run));
       }
     } catch (err) {
       failures.push(err instanceof Error ? err.message : String(err));

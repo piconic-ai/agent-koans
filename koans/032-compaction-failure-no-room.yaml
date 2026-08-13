@@ -1,18 +1,16 @@
-name: compaction-failure
+name: compaction-failure-no-room
 description: >
-  The caller asks for a fold and the summarizing request is refused, so
-  nothing is summarized and the conversation stays as it was. Two things
-  follow. The caller must be told the fold failed — not in any particular
-  words, since a failure said two ways is the same failure, so what this
-  koan reads is the report and never its wording. And the run carries on:
-  the conversation is far from its window, and what decides whether the
-  agent may ask the model again is the room left there, never the fold's
-  outcome.
+  The same refusal as 031, against a full window. The first turn fills the
+  conversation to the size the run declared, so the fold the threshold
+  forces is the only way on — and it is refused. There is no room left for
+  another model request, so the run ends instead of asking for one. The
+  window is what decides that, which is why the two koans differ in one
+  number and nothing else.
 
 given:
   context:
     window: 100000
-    compaction: off
+    compaction: 90%
   tools:
     lookup_incident:
       description: "Look up an incident record by id"
@@ -32,10 +30,8 @@ turns:
       - request: model
         response:
           body: "Incident INC-4407 is logged."
-          used_tokens: 40000
-      - compact
+          used_tokens: 100000
 
-  # 40000 of 100000: nothing here is under pressure but the caller's ask.
   - prompt: "What was that incident's operator code?"
     when:
       - request:
@@ -45,8 +41,5 @@ turns:
           status: 400
           body: { error: "summarizer_unavailable" }
           compaction: failed
-      - request: model
-        response: "The operator code is K-9-4471."
     then:
-      status: completed
-      output: { contains: "K-9-4471" }
+      status: failed

@@ -78,17 +78,9 @@ export type Compaction = { kind: 'off' } | { kind: 'threshold'; percent: number 
 export type Body =
   | { kind: 'single'; prompt: string; trace: Trace; then?: Judgment }
   | { kind: 'variants'; prompt: string; variants: Record<string, Trace>; then?: Judgment }
-  /**
-   * One entry per acceptable run of the same prompts — `''` alone when no
-   * turn writes `one_of`. Whole sequences rather than a branch point, so
-   * no rule downstream meets a turn that is two things.
-   */
-  | { kind: 'turns'; variants: Record<string, [Turn, Turn, ...Turn[]]> };
+  | { kind: 'turns'; turns: [Turn, Turn, ...Turn[]] };
 
-/**
- * One turn of a `turns` koan — a small koan of its own. `prompt` is the
- * caller's, so a branch replaces only `trace` and `then`.
- */
+/** One turn of a `turns` koan — a small koan of its own. */
 export interface Turn {
   prompt: string;
   trace: Trace;

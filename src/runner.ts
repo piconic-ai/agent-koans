@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { DelegationVocabulary } from './config.js';
-import { promptDuringOf, type Judgment, type Koan, type Matcher, type Trace, type TurnSpec } from './koan.js';
+import { promptDuringOf, type Judgment, type Koan, type Matcher, type Trace } from './koan.js';
 import { startMockLlm } from './mock-llm.js';
 import { startMockTools } from './mock-tools.js';
 import { createHold, type PendingInvocation } from './pending.js';
@@ -186,14 +186,14 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
   const variants = Object.entries(koan.traces);
   const allFailures: string[] = [];
   for (const [variant, trace] of variants) {
-    const failures = await runTrace(koan, koan.turns?.[variant], trace, agent);
+    const failures = await runTrace(koan, trace, agent);
     if (failures.length === 0) return;
     allFailures.push(...(variant ? failures.map((f) => `[${variant}] ${f}`) : failures));
   }
   throw new Error(`koan "${koan.name}" failed:\n  - ${allFailures.join('\n  - ')}`);
 }
 
-async function runTrace(koan: Koan, turns: TurnSpec[] | undefined, trace: Trace, agent: AgentConfig): Promise<string[]> {
+async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<string[]> {
   const pending: PendingInvocation[] = [];
   // Created here rather than inside a mock: both it and this driver hold
   // one end of the same window.
@@ -247,7 +247,7 @@ async function runTrace(koan: Koan, turns: TurnSpec[] | undefined, trace: Trace,
       // A `turns:` koan submits its first turn's prompt the
       // same way any koan submits its top-level `prompt`; later turns go
       // to POST /runs/{id}/prompts instead.
-      const firstPrompt = turns ? turns[0].prompt : (koan.prompt as string);
+      const firstPrompt = koan.turns ? koan.turns[0].prompt : (koan.prompt as string);
 
       const submitRes = await fetch(`${base}/runs`, {
         method: 'POST',
@@ -343,17 +343,17 @@ async function runTrace(koan: Koan, turns: TurnSpec[] | undefined, trace: Trace,
       // turn's expectations against the state the one that actually
       // stopped left behind.
       let stoppedEarly = false;
-      if (turns) {
-        for (let t = 0; t < turns.length - 1; t++) {
-          failures.push(...judge(turns[t].then, run));
+      if (koan.turns) {
+        for (let t = 0; t < koan.turns.length - 1; t++) {
+          failures.push(...judge(koan.turns[t].then, run));
           if (run.status !== 'completed') {
             stoppedEarly = true;
             failures.push(
-              `turn ${t + 1} of ${turns.length} did not complete; the remaining prompts were not sent`,
+              `turn ${t + 1} of ${koan.turns.length} did not complete; the remaining prompts were not sent`,
             );
             break;
           }
-          if (turns[t].compactAfter) {
+          if (koan.turns[t].compactAfter) {
             // Sent once the turn has settled, before the next one's prompt:
             // an agent that folds when asked and one that folds when it
             // next needs the model both put the fold where the trace has
@@ -366,7 +366,7 @@ async function runTrace(koan: Koan, turns: TurnSpec[] | undefined, trace: Trace,
           const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ prompt: turns[t + 1].prompt }),
+            body: JSON.stringify({ prompt: koan.turns[t + 1].prompt }),
           });
           if (promptRes.status !== 202 && promptRes.status !== 200) {
             throw new Error(`POST /runs/${runId}/prompts returned ${promptRes.status}, expected 202 or 200`);
@@ -415,7 +415,7 @@ async function runTrace(koan: Koan, turns: TurnSpec[] | undefined, trace: Trace,
       // (`stoppedEarly`): that turn's own judgment above, plus the
       // underrun failures, already cover the koan's failure.
       if (!stoppedEarly) {
-        failures.push(...judge(turns ? turns[turns.length - 1].then : koan.then, run));
+        failures.push(...judge(koan.turns ? koan.turns[koan.turns.length - 1].then : koan.then, run));
       }
     } catch (err) {
       failures.push(err instanceof Error ? err.message : String(err));

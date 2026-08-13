@@ -360,10 +360,17 @@ export function createAgent(config: { model: ModelConfig; tools: ToolsConfig; wo
         if (asking) asking.asked = false;
         if (budget.used >= budget.max) return undefined;
         budget.used += 1;
-        await compact(messages, report, signal);
-        // Not the summarizing request's own usage: carrying that number
-        // over would trip the threshold again and fold forever.
-        size.used = 0;
+        try {
+          await compact(messages, report, signal);
+          // Not the summarizing request's own usage: carrying that number
+          // over would trip the threshold again and fold forever.
+          size.used = 0;
+        } catch (err) {
+          // Not rethrown while the window still has room: a refused fold
+          // leaves the conversation as it was, and what decides whether
+          // this run goes on is that room, never the fold's outcome.
+          if (context !== undefined && size.used >= context.window) throw err;
+        }
       }
 
       if (budget.used >= budget.max) return undefined;

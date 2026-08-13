@@ -257,20 +257,16 @@ function parseBody(ctx: Ctx<KoanFile>, raw: Record<string, unknown>): Parsed<Bod
   return { kind: 'variants', prompt, variants, then };
 }
 
-type RawBranches = Record<string, { at: string; when: unknown; then: Judgment }>;
-
 // Two passes over the raw list, like the shape of the koan itself: every
 // turn's own fields (prompt, unknown keys, its `then`) validate before any
 // turn's `when` is parsed, so a shape error in turn 0's `then` is reported
-// even when turn 1's `when` is merely empty. A turn with no `one_of` is a
-// single branch named `''`, so one walk serves both.
+// even when turn 1's `when` is merely empty.
 function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
   if (!Array.isArray(rawTurns) || rawTurns.length === 0) return problem('"turns" must be a non-empty list of turn entries');
   if (rawTurns.length < 2) return problem('"turns" needs at least two entries — a 1-turn koan is just "when"');
 
   const prompts: string[] = [];
-  const branchesPerTurn: RawBranches[] = [];
-  let branchedAt = -1;
+  const thens: Judgment[] = [];
   for (let i = 0; i < rawTurns.length; i++) {
     const rt = (rawTurns[i] ?? {}) as Record<string, unknown>;
     // Trim-empty counts as empty: turn 1's prompt routes the run the same
@@ -280,90 +276,41 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
       return problem(`turns[${i}] needs a non-empty "prompt"`);
     }
     for (const key of Object.keys(rt)) {
-      if (key !== 'prompt' && key !== 'when' && key !== 'one_of' && key !== 'then') {
-        return problem(`turns[${i}] has unknown key "${key}" — a turn entry carries only "prompt", "when" or "one_of", and "then"`);
+      if (key !== 'prompt' && key !== 'when' && key !== 'then') {
+        return problem(`turns[${i}] has unknown key "${key}" — a turn entry carries only "prompt", "when", and "then"`);
       }
     }
-    if (rt.one_of !== undefined) {
-      if (branchedAt !== -1) {
+    const then =
+      rt.then !== undefined ? parseJudgment(into(ctx, `turns[${i}].then`, rt.then)) : ({ status: 'completed' } as Judgment);
+    if (isProblem(then)) return then;
+    prompts.push(rt.prompt);
+    thens.push(then);
+  }
+
+  const traces: Trace[] = [];
+  for (let i = 0; i < rawTurns.length; i++) {
+    const rawWhen = (rawTurns[i] as Record<string, unknown>).when;
+    if (!Array.isArray(rawWhen) || rawWhen.length === 0) {
+      return problem(`turns[${i}].when must be a non-empty list of trace steps`);
+    }
+    const trace = parseTrace(into(ctx, `turns[${i}].when`, rawWhen), true, false);
+    if (isProblem(trace)) return trace;
+    if (i < rawTurns.length - 1) {
+      const last = trace.steps[trace.steps.length - 1];
+      // An intermediate turn can only be judged "completed" by ending in
+      // a plain reply — the one seam where a later turn's first request
+      // is allowed to continue the same conversation.
+      if (last.kind !== 'model' || last.response.kind !== 'reply') {
         return problem(
-          `turns[${branchedAt}] and turns[${i}] both carry "one_of" — a koan branches on one turn, so that every variant is one whole run`,
+          `turns[${i}].when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one`,
         );
       }
-      const branches = parseTurnBranches(ctx, i, rt);
-      if (isProblem(branches)) return branches;
-      branchedAt = i;
-      branchesPerTurn.push(branches);
-    } else {
-      const then =
-        rt.then !== undefined ? parseJudgment(into(ctx, `turns[${i}].then`, rt.then)) : ({ status: 'completed' } as Judgment);
-      if (isProblem(then)) return then;
-      branchesPerTurn.push({ '': { at: `turns[${i}]`, when: rt.when, then } });
     }
-    prompts.push(rt.prompt);
+    traces.push(trace);
   }
 
-  const turnsPerBranch: Array<Record<string, Turn>> = [];
-  for (let i = 0; i < rawTurns.length; i++) {
-    const parsed: Record<string, Turn> = {};
-    for (const [name, branch] of Object.entries(branchesPerTurn[i])) {
-      if (!Array.isArray(branch.when) || branch.when.length === 0) {
-        return problem(`${branch.at}.when must be a non-empty list of trace steps`);
-      }
-      const trace = parseTrace(into(ctx, `${branch.at}.when`, branch.when), true, false);
-      if (isProblem(trace)) return trace;
-      if (i < rawTurns.length - 1) {
-        const last = trace.steps[trace.steps.length - 1];
-        // An intermediate turn can only be judged "completed" by ending in
-        // a plain reply — the one seam where a later turn's first request
-        // is allowed to continue the same conversation.
-        if (last.kind !== 'model' || last.response.kind !== 'reply') {
-          return problem(
-            `${branch.at}.when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one`,
-          );
-        }
-      }
-      parsed[name] = { prompt: prompts[i], trace, then: branch.then };
-    }
-    turnsPerBranch.push(parsed);
-  }
-
-  const names = branchedAt === -1 ? [''] : Object.keys(branchesPerTurn[branchedAt]);
-  const variants: Record<string, [Turn, Turn, ...Turn[]]> = {};
-  for (const name of names) {
-    const sequence = turnsPerBranch.map((byName) => byName[name] ?? byName['']);
-    variants[name] = sequence as [Turn, Turn, ...Turn[]];
-  }
-  return { kind: 'turns', variants };
-}
-
-// The prompt stays outside a branch: it is the caller's, and the caller
-// sends the same one whichever way the run goes.
-function parseTurnBranches(ctx: Ctx<KoanFile>, i: number, rt: Record<string, unknown>): Parsed<RawBranches> {
-  if (rt.when !== undefined || rt.then !== undefined) {
-    return problem(`turns[${i}] cannot combine "one_of" with "when" or "then" — each branch carries its own`);
-  }
-  if (!isMapping(rt.one_of)) {
-    return problem(`turns[${i}].one_of must be a mapping of variant name to { when, then }`);
-  }
-  const entries = Object.entries(rt.one_of);
-  if (entries.length < 2) {
-    return problem(`turns[${i}].one_of needs at least two variants — use "when" for a single trace`);
-  }
-  const branches: RawBranches = {};
-  for (const [name, raw] of entries) {
-    const at = `turns[${i}].one_of.${name}`;
-    if (!isMapping(raw)) return problem(`${at} must be a mapping carrying "when" and an optional "then"`);
-    for (const key of Object.keys(raw)) {
-      if (key !== 'when' && key !== 'then') {
-        return problem(`${at} has unknown key "${key}" — a variant of a turn carries only "when" and "then"`);
-      }
-    }
-    const then = raw.then !== undefined ? parseJudgment(into(ctx, `${at}.then`, raw.then)) : ({ status: 'completed' } as Judgment);
-    if (isProblem(then)) return then;
-    branches[name] = { at, when: raw.when, then };
-  }
-  return branches;
+  const turns = prompts.map((prompt, i) => ({ prompt, trace: traces[i], then: thens[i] }));
+  return { kind: 'turns', turns: turns as [Turn, Turn, ...Turn[]] };
 }
 
 function parseJudgment(ctx: Ctx<unknown>): Parsed<Judgment> {
@@ -526,8 +473,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         queuedSeam = true;
       }
       if (target.purpose !== undefined) {
-        const retry = prev?.kind === 'compaction' && prev.report === 'failed';
-        const fold = parseCompactionStep(at_i, res, inTurns && (i === 0 || retry));
+        const fold = parseCompactionStep(at_i, res, inTurns && i === 0);
         if (isProblem(fold)) return fold;
         steps.push(fold);
         continue;
@@ -671,12 +617,10 @@ function parseUsedTokens(at: string, raw: unknown): Parsed<number | undefined> {
 function parseCompactionStep(at: string, res: unknown, mayFoldHere: boolean): Parsed<Step> {
   // Anywhere but a turn's first step would pin down one of two conforming
   // designs: some agents fold before the next request of a turn already
-  // running, some once that turn settles (SPEC.md §3). The one other place
-  // a fold may sit is straight after a fold that failed, which is an agent
-  // asking again for what it did not get.
+  // running, some once that turn settles (SPEC.md §3).
   if (!mayFoldHere) {
     return problem(
-      `${at}: a compaction belongs at the start of a later turn of a "turns:" koan, or straight after one that failed — a run folds the conversation down by the time the next turn's first model request goes out, and where inside the turn before it is the agent's own business`,
+      `${at}: a compaction belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn's first model request goes out, and where inside the turn before it is the agent's own business`,
     );
   }
   if (!isMapping(res)) {
@@ -946,15 +890,8 @@ function scriptedTraces(koan: KoanFile): ScriptedTrace[] {
       abort: trace.abort,
     }));
   }
-  return Object.entries(body.variants).map(([name, turns]) => ({
-    steps: turns.flatMap((t) => t.trace.steps),
-    at: name === '' ? 'turns' : `turns(${name})`,
-    opening: { label: 'turns[0].prompt', text: turns[0].prompt },
-  }));
-}
-
-function turnAt(variant: string, i: number): string {
-  return variant === '' ? `turns[${i}].when` : `turns(${variant})[${i}].when`;
+  const steps = body.turns.flatMap((t) => t.trace.steps);
+  return [{ steps, at: 'turns', opening: { label: 'turns[0].prompt', text: body.turns[0].prompt } }];
 }
 
 /** Unlike a tool call, a delegation has no round trip a koan may omit: it must be answered. */
@@ -1188,16 +1125,14 @@ function scriptedConversations(koan: KoanFile): ScriptedConversation[] {
 
   const body = koan.body;
   if (body.kind === 'turns') {
-    for (const [variant, turns] of Object.entries(body.variants)) {
-      found.push(
-        turns.map((t, i) => ({
-          steps: t.trace.steps,
-          at: turnAt(variant, i),
-          ...(t.trace.compact ? { compact: true as const } : {}),
-        })),
-      );
-      for (const [i, t] of turns.entries()) addSubagents(t.trace.steps, turnAt(variant, i));
-    }
+    found.push(
+      body.turns.map((t, i) => ({
+        steps: t.trace.steps,
+        at: `turns[${i}].when`,
+        ...(t.trace.compact ? { compact: true as const } : {}),
+      })),
+    );
+    for (const [i, t] of body.turns.entries()) addSubagents(t.trace.steps, `turns[${i}].when`);
     return found;
   }
 
@@ -1276,12 +1211,9 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
       if (turn.compact && t === conv.length - 1) {
         return problem(`${turn.at}: "compact" needs a turn after it — the fold the caller asked for would never be seen`);
       }
-      let retrying = false;
       for (const [i, step] of turn.steps.entries()) {
-        const afterFailure = retrying;
-        retrying = false;
         if (step.kind === 'compaction') {
-          if (!over && !asked && !afterFailure) {
+          if (!over && !asked) {
             return problem(
               `${turn.at}[${i}]: nothing has asked for a fold here — the conversation is at ${used} tokens${
                 threshold === undefined ? ' and the run declares no threshold' : `, below the threshold of ${threshold}`
@@ -1292,11 +1224,9 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
           // A fold that failed leaves the conversation as it was. What
           // decides whether the turn may ask the model again is the room
           // left in the window, not the fold (SPEC.md §3), so the size
-          // stays and only the obligation is discharged — while the fold
-          // itself may still be asked for again, right here.
+          // stays and only the obligation is discharged.
           if (step.report === 'failed') {
             over = false;
-            retrying = true;
             continue;
           }
           if (threshold !== undefined && step.used_tokens >= threshold) {

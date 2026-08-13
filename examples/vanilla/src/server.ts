@@ -21,6 +21,9 @@ app.post('/runs', async (c) => {
     return c.json({ error: 'prompt is required' }, 400);
   }
   // The run executes asynchronously; the caller polls GET /runs/{id}.
+  // Each field named rather than the body spread: openapi.yaml defines
+  // this interface, and a run's standing instructions are not part of it
+  // — they are the terminal adapter's to pass (cli.ts).
   const run = agent.startRun(prompt, {
     tools: body?.tools ?? [],
     subagents: body?.subagents ?? [],

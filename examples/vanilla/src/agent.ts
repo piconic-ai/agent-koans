@@ -4,7 +4,7 @@
 // a run is made of (run.ts) or how a turn is carried out (conversation.ts).
 import { foldOnRequest, type RunEvent } from './compaction.js';
 import { runConversation, type Conversation } from './conversation.js';
-import { createModelClient } from './model.js';
+import { createModelClient, type ChatMessage } from './model.js';
 import { createRun, type Run, type RunSetup } from './run.js';
 
 /** A run as its caller sees it: what GET /runs/{id} answers with (SPEC.md §3). */
@@ -56,7 +56,7 @@ export function createAgent(config: {
     const session: RunSession = {
       state,
       run: createRun(parts, setup, (event) => state.events.push(event)),
-      conversation: { messages: [{ role: 'user', content: prompt }], size: { used: 0 } },
+      conversation: { messages: opening(prompt, setup.system), size: { used: 0 } },
       queued: [],
     };
     sessions.set(state.run_id, session);
@@ -172,4 +172,11 @@ export function createAgent(config: {
   }
 
   return { startRun, getRun, sendPrompt, compactRun, abortRun };
+}
+
+// Standing instructions lead, so every request of the conversation carries
+// them: they are what the run is to be answered as, not a turn of it.
+function opening(prompt: string, system: string | undefined): ChatMessage[] {
+  const user: ChatMessage = { role: 'user', content: prompt };
+  return system === undefined ? [user] : [{ role: 'system', content: system }, user];
 }

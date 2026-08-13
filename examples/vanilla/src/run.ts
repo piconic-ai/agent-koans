@@ -25,6 +25,12 @@ export interface RunSetup {
   subagents: SubagentDef[];
   limits?: RunLimits;
   context?: RunContext;
+  /**
+   * Standing instructions for the run's own conversation, sent ahead of
+   * its first prompt. Not passed on to a delegate: a delegate is given a
+   * briefing, and the briefing is the whole of what it was asked for.
+   */
+  system?: string;
 }
 
 /**

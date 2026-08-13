@@ -9,11 +9,14 @@ workspace, carries a conversation across turns, folds that conversation
 into a summary when it grows too large for the window, stops when a
 request budget runs out, and settles when its caller aborts it.
 
+There are two ways in, over the same agent: a terminal command, and an
+HTTP server.
+
 It is also the reference implementation of the
 [agent-koans conformance contract](../../SPEC.md), and passes every koan in
 the suite. The suite is how the behavior above is checked. It is not what
-the agent is for: point `OPENAI_BASE_URL` at a model endpoint and this
-runs on its own, with no part of agent-koans involved.
+the agent is for: give it a real key and a real model and it answers from
+a terminal, with no part of agent-koans involved.
 
 Every file opens with a header saying what belongs in it and what does
 not, so the file you want is the one whose header claims your change. Read
@@ -27,26 +30,65 @@ filesystem, and the Web platform has no filesystem API.
 
 ## Usage
 
-The agent is an HTTP server, configured entirely from the environment.
+Which model to talk to comes from the environment, for both ways in.
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `OPENAI_API_KEY` | Credential sent to the model endpoint | empty |
 | `OPENAI_BASE_URL` | Model endpoint, OpenAI-compatible (includes `/v1`) | `https://api.openai.com/v1` |
 | `OPENAI_MODEL` | Model to request | `gpt-4o-mini` |
-| `PORT` | Port to listen on | `3000` |
+| `PORT` | Port the HTTP server listens on | `3000` |
 | `KOAN_WORKSPACE` | Directory `read_file` resolves against | the working directory |
 | `KOAN_TOOLS_URL` | Service that runs a run's declared tools | empty |
 
 The last two carry the conformance runner's names because that is what it
 sets ([SPEC.md §2](../../SPEC.md)). Both are ordinary settings: a working
-directory, and the service this agent invokes its tools on.
+directory, and the service this agent invokes its tools on. The terminal
+command takes them as options instead.
 
-### As an agent
+### From the terminal
 
 ```console
 $ pnpm install
 $ cd examples/vanilla
+$ export OPENAI_API_KEY=sk-...
+$ pnpm cli --system "You are terse." "Read note.txt and tell me what it says."
+The note says it is 31 degrees.
+```
+
+`--system` sets standing instructions for the conversation, `--workspace`
+chooses what `read_file` resolves against, and `--setup` takes a JSON file
+with the run's `tools`, `subagents`, `limits` and `context`:
+
+```json
+{
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Look up current weather for a city",
+      "input_schema": {
+        "type": "object",
+        "properties": { "city": { "type": "string" } },
+        "required": ["city"]
+      }
+    }
+  ]
+}
+```
+
+```console
+$ pnpm cli --setup ./run.json --tools-url http://localhost:8080 \
+      "What is the weather in Tokyo?"
+```
+
+A declared tool is invoked at `POST <tools-url>/invoke/<name>`, the model's
+arguments as the body. `read_file` is the agent's own: it needs nothing
+configured, and never leaves the process. `pnpm cli --help` lists every
+option.
+
+### As an HTTP server
+
+```console
 $ OPENAI_API_KEY=sk-... pnpm start
 vanilla agent listening on :3000
 ```
@@ -71,29 +113,12 @@ $ curl -s -X POST localhost:3000/runs/r_e3cb524b-.../prompts \
 $ curl -s -X POST localhost:3000/runs/r_e3cb524b-.../abort
 ```
 
-`read_file` is the agent's own and needs nothing configured. Tools of your
-own are declared per run, and invoked at
-`POST $KOAN_TOOLS_URL/invoke/{name}` with the model's arguments as the
-body:
-
-```console
-$ curl -s localhost:3000/runs -H 'content-type: application/json' -d '{
-    "prompt": "What is the weather in Tokyo?",
-    "tools": [{
-      "name": "get_weather",
-      "description": "Look up current weather for a city",
-      "input_schema": {
-        "type": "object",
-        "properties": { "city": { "type": "string" } },
-        "required": ["city"]
-      }
-    }]
-  }'
-```
-
-Subagents are declared the same way, under `subagents`. Every endpoint,
-with its full request and response schema, is in
-[openapi.yaml](../../openapi.yaml).
+Tools and subagents are declared per run, in the same shapes `--setup`
+takes, and `KOAN_TOOLS_URL` says where a declared tool is invoked. Every
+endpoint, with its full request and response schema, is in
+[openapi.yaml](../../openapi.yaml) — which is why `--system` has no
+counterpart here: that file defines this interface, and standing
+instructions are not part of it.
 
 ### Against the suite
 
@@ -113,7 +138,8 @@ ok    002-arg-validation
 
 | File | What belongs in it |
 | ---- | ------------------ |
-| `server.ts` | The HTTP endpoints. Parse a request, hand it over, answer |
+| `cli.ts` | The terminal adapter. Read arguments, submit a run, print the answer |
+| `server.ts` | The HTTP adapter. Parse a request, hand it over, answer |
 | `config.ts` | Reading the environment, in one place |
 | `agent.ts` | The state a caller polls, the queue of turns, and the transitions between them |
 | `run.ts` | What a run is made of, assembled from what it was submitted with |

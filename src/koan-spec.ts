@@ -186,7 +186,7 @@ export type Step =
    * could say.
    */
   | { kind: 'compaction'; summary: string; used_tokens: number; report: 'completed' }
-  | { kind: 'compaction'; fails: ToolResponse; report: 'failed' };
+  | { kind: 'compaction'; fails: HttpToolResponse; report: 'failed' };
 
 /**
  * How a fold ended, as its run reported it to its caller. A fold that
@@ -229,10 +229,18 @@ export type Args =
 export type ParsedArgs = Record<string, unknown>;
 
 /** The tool server's scripted HTTP response. */
-export interface ToolResponse {
+export interface HttpToolResponse {
   status: number;
   body?: unknown;
 }
+
+/**
+ * What the mock tool server does with a permitted invocation: answer it,
+ * or sever the connection without answering (`response: disconnect` in
+ * YAML). A union rather than an optional `status`, so a response that
+ * answers always has one to answer with.
+ */
+export type ToolResponse = HttpToolResponse | { disconnect: true };
 
 /** `then`: the run's outcome after the trace settles. */
 export interface Judgment {

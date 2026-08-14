@@ -31,10 +31,16 @@ export interface ToolDef {
 }
 
 /** A scripted HTTP response of a mocked party (tool server or model API). */
-export interface ToolResponse {
+export interface HttpResponse {
   status: number;
   body?: unknown;
 }
+
+/**
+ * What the tool mock does with a permitted invocation: answer it, or
+ * sever the connection without answering.
+ */
+export type ToolResponse = HttpResponse | { disconnect: true };
 
 /**
  * One tool-call instruction inside a model response — one entry of a
@@ -58,6 +64,8 @@ export interface CallToolInstruction {
   tool_responds?: ToolResponse;
   /** A prompt the caller sends while this invocation is held open. */
   promptDuring?: string;
+  /** This prompt's position among the trace's mid-run prompts, in step order — which hold the runner pairs it with. */
+  promptIndex?: number;
   /** Set by a response-less tool request: the agent executes this call itself. Resolved to `readsFile` once the trace has compiled. */
   internal?: true;
   /**
@@ -77,8 +85,10 @@ export interface DelegationInstruction {
   subagent: string;
   /** The briefing that opens the delegate's conversation. */
   prompt: string;
-  /** The delegate's final reply, lifted from the subagent block that scripts it. */
+  /** The delegate's final reply, lifted from the subagent block that scripts it. Empty when the child never answered — it failed, or the run's abort cut it off. */
   final: string;
+  /** The model API failure that ended the child instead of a reply; the parent's next request must carry it as the delegation's outcome. */
+  fails?: HttpResponse;
 }
 
 /** One compiled model turn of a trace. */
@@ -105,7 +115,7 @@ export interface ModelTurn {
   call_tools?: CallToolInstruction[];
   /** This turn's delegation instruction(s), each scripted by a following subagent block. */
   delegations?: DelegationInstruction[];
-  fails?: ToolResponse;
+  fails?: HttpResponse;
   /**
    * Set when this is the trace's last turn and it is followed by the
    * `abort` step: `'live'` when this turn is a tool-call
@@ -324,14 +334,19 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
         break;
       }
       case 'subagent': {
-        const briefing = delegationBySubagent.get(step.name)!.prompt;
-        const child: Conversation = { name: step.name, parent: conv.name, turns: [], briefing };
+        const delegation = delegationBySubagent.get(step.name)!;
+        const child: Conversation = { name: step.name, parent: conv.name, turns: [], briefing: delegation.prompt };
         conversations.push(child);
         compileSteps(step.trace.steps, child, conversations);
         // A subagent block always closes a delegation from this same
         // conversation's own turns (parse.ts's pairing) — the child's
-        // final reply is what returns to the parent.
-        delegationBySubagent.get(step.name)!.final = child.turns.at(-1)!.reply!;
+        // final reply is what returns to the parent. A child that never
+        // answered leaves the final empty: its API failure is then the
+        // delegation's outcome, and a child the run's abort cut off owes
+        // the parent nothing at all.
+        const last = child.turns.at(-1)!;
+        delegation.final = last.reply ?? '';
+        if (last.fails !== undefined && !last.compaction) delegation.fails = last.fails;
         openCalls = [];
         break;
       }
@@ -348,7 +363,10 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
       case 'tool': {
         const match = matchOpenCall(openCalls, step.tool, step.args);
         match.compiled.invokeArgs = step.args ?? match.compiled.args;
-        match.compiled.tool_responds = { status: step.response.status, body: step.response.body };
+        match.compiled.tool_responds =
+          'disconnect' in step.response
+            ? { disconnect: true }
+            : { status: step.response.status, body: step.response.body };
         if (step.prompt !== undefined) match.compiled.promptDuring = step.prompt;
         openCalls = openCalls.filter((c) => c !== match);
         break;
@@ -365,39 +383,64 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
   }
 }
 
-// Derived rather than written: a model request after a text reply is the
-// prompt re-opening the run, so that seam is the queued turn; without one,
-// the prompt joined the request that closes the held invocation.
-function promptBoundary(conv: Conversation): TurnBoundary | undefined {
-  let held = -1;
-  let prompt: string | undefined;
+// The trace's mid-run prompts in step order, each numbered into
+// `promptIndex` on the member that holds it — the pairing the runner's
+// holds go by.
+function heldPrompts(conv: Conversation): Array<{ turn: number; prompt: string }> {
+  const held: Array<{ turn: number; prompt: string }> = [];
   for (const [i, turn] of conv.turns.entries()) {
     for (const member of turn.call_tools ?? []) {
       if (member.promptDuring !== undefined) {
-        held = i;
-        prompt = member.promptDuring;
+        member.promptIndex = held.length;
+        held.push({ turn: i, prompt: member.promptDuring });
       }
     }
   }
-  if (prompt === undefined) return undefined;
-  for (let s = held + 1; s < conv.turns.length; s++) {
+  return held;
+}
+
+// Derived rather than written: a model request after a text reply is a
+// delivered prompt re-opening the run, so each such seam is one queued
+// turn; a prompt with no seam of its own joined the request that closes
+// its held invocation. Seams are claimed from the last prompt backwards:
+// a seam can only re-open the run for the latest prompt still unanswered
+// when it appears, so walking forwards would hand an earlier, joined
+// prompt a seam that belongs to a later one.
+function promptBoundaries(conv: Conversation): TurnBoundary[] {
+  const held = heldPrompts(conv);
+  if (held.length === 0) return [];
+  const seams: number[] = [];
+  for (let s = 1; s < conv.turns.length; s++) {
     // A compaction's summary is a reply the mock served, not the run's own
     // answer, so it never marks the seam a queued prompt re-opens.
     const before = conv.turns[s - 1];
-    if (before.reply !== undefined && !before.compaction) return { start: s, prompt };
+    if (before.reply !== undefined && !before.compaction) seams.push(s);
   }
-  // parse.ts requires a model request after a mid-run prompt, so this exists.
-  return { start: held + 1, prompt, joined: true };
-}
-
-/** The prompt the caller sends into a held invocation, when this trace scripts one. */
-export function promptDuringOf(trace: Trace): string | undefined {
-  for (const turn of trace.conversations[0].turns) {
-    for (const member of turn.call_tools ?? []) {
-      if (member.promptDuring !== undefined) return member.promptDuring;
+  const boundaries: TurnBoundary[] = new Array<TurnBoundary>(held.length);
+  let seam = seams.length - 1;
+  for (let k = held.length - 1; k >= 0; k--) {
+    if (seam >= 0 && seams[seam] > held[k].turn) {
+      boundaries[k] = { start: seams[seam], prompt: held[k].prompt };
+      seam -= 1;
+    } else {
+      // parse.ts requires a model request after a mid-run prompt, so this
+      // names it — except where an abort cut the prompt off, and the
+      // boundary points past a trace no request of which reads it.
+      boundaries[k] = { start: held[k].turn + 1, prompt: held[k].prompt, joined: true };
     }
   }
-  return undefined;
+  return boundaries;
+}
+
+/** The prompts the caller sends into held invocations, in step order — one hold each. */
+export function promptsDuringOf(trace: Trace): string[] {
+  const prompts: string[] = [];
+  for (const turn of trace.conversations[0].turns) {
+    for (const member of turn.call_tools ?? []) {
+      if (member.promptDuring !== undefined) prompts.push(member.promptDuring);
+    }
+  }
+  return prompts;
 }
 
 function compileTrace(trace: ParsedTrace, briefing: string): Trace {
@@ -406,8 +449,8 @@ function compileTrace(trace: ParsedTrace, briefing: string): Trace {
   conversations.push(main);
   compileSteps(trace.steps, main, conversations);
   if (trace.abort !== undefined) main.turns.at(-1)!.abort = trace.abort;
-  const boundary = promptBoundary(main);
-  if (boundary) main.followUps = [boundary];
+  const boundaries = promptBoundaries(main);
+  if (boundaries.length > 0) main.followUps = boundaries;
   return { conversations };
 }
 

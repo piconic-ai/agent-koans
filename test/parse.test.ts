@@ -444,7 +444,7 @@ const rows: Row[] = [
         - request: model
           response: "too late"
     `),
-    message: 'when[1]: nothing can follow a model API failure — the agent must stop',
+    message: 'when[1]: nothing can follow a model API failure — the conversation it refused must stop',
   },
   {
     rule: 'nothing follows "abort"',
@@ -544,7 +544,7 @@ const rows: Row[] = [
       'when[1].when[1]: a tool step\'s "prompt" cannot appear inside a subagent block — only the caller\'s own run can be prompted',
   },
   {
-    rule: 'a trace carries at most one mid-run "prompt"',
+    rule: 'queued turns cannot outnumber the prompts sent mid-run',
     yaml: koan(`
       when:
         - request: model
@@ -558,25 +558,35 @@ const rows: Row[] = [
           response: { status: 200 }
           prompt: q
         - request: model
-          response: ok
+          response: one
+        - request: model
+          response: two
+        - request: model
+          response: three
+        - request: model
+          response: four
     `),
-    message: 'when[3]: a trace carries at most one mid-run "prompt" — the caller sends once',
+    message:
+      'when[7]: a prompt sent mid-run opens at most one queued turn each — more model requests follow text replies than prompts were sent',
   },
   {
-    rule: '"abort" and a mid-run "prompt" cannot share a trace',
+    rule: 'a child cut off mid-flight settles unless the abort follows it directly',
     yaml: koan(`
       when:
         - request: model
-          response: { tool: x, args: {} }
-        - request: { tool: x }
-          response: { status: 200 }
-          prompt: p
+          response: { subagent: r, prompt: "go look" }
+        - subagent: r
+          when:
+            - request: model
+              response: { tool: x, args: {} }
+            - request: { tool: x }
+              response: { status: 200 }
         - request: model
           response: ok
         - abort
     `),
     message:
-      'when: a trace carries either "abort" or a mid-run "prompt", not both — cancelling a held invocation is not scripted yet',
+      "when[1]: a subagent block must end with the child's final text reply or its model API failure — what came of the delegation is what returns to the parent",
   },
   {
     rule: 'a mid-run "prompt" needs a model request after it',
@@ -607,7 +617,7 @@ const rows: Row[] = [
           response: three
     `),
     message:
-      'when[4]: a prompt sent mid-run opens at most one queued turn — this is the second model request to follow a text reply',
+      'when[4]: a prompt sent mid-run opens at most one queued turn each — more model requests follow text replies than prompts were sent',
   },
   {
     rule: 'a mid-run "prompt" is a non-empty string',
@@ -672,7 +682,7 @@ const rows: Row[] = [
             - request: model
               response: { tool: x, args: {} }
     `),
-    message: `when[1]: a subagent block must end with the child's final text reply — it is what returns to the parent`,
+    message: `when[1]: a subagent block must end with the child's final text reply or its model API failure — what came of the delegation is what returns to the parent`,
   },
   {
     rule: 'a trace entry needs "request"',
@@ -710,7 +720,7 @@ const rows: Row[] = [
         - request: { tool: x }
           response: "nope"
     `),
-    message: 'when[1].response needs a numeric "status" for a tool request',
+    message: 'when[1].response needs a numeric "status" for a tool request, or "disconnect" for a connection severed without one',
   },
   {
     rule: 'a tool request must follow a model response with a tool-call instruction',
@@ -844,7 +854,7 @@ const rows: Row[] = [
     message: 'when[0].response mixes a tool-call instruction with "status"',
   },
   {
-    rule: 'a model API failure cannot appear inside a subagent block',
+    rule: "a model API failure ends the child's own conversation too",
     yaml: koan(`
       when:
         - request: model
@@ -853,8 +863,10 @@ const rows: Row[] = [
           when:
             - request: model
               response: { status: 401 }
+            - request: model
+              response: "too late"
     `),
-    message: 'when[1].when[0]: a model API failure cannot appear inside a subagent block — it ends the whole run',
+    message: 'when[1].when[1]: nothing can follow a model API failure — the conversation it refused must stop',
   },
   {
     rule: "a model API failure's status is a non-retryable 4xx",
@@ -1143,7 +1155,7 @@ const rows: Row[] = [
       'turns[1].when[0].response needs "compaction: completed" or "compaction: failed" — how the run reported this fold\'s ending to its caller',
   },
   {
-    rule: 'a fold that completed is followed by a model request',
+    rule: 'a fold that completed is followed by a model request, unless it ends the trace',
     yaml: `name: x\n${dedent(`
       given:
         context:
@@ -1158,6 +1170,10 @@ const rows: Row[] = [
           when:
             - request: { type: model, purpose: compaction }
               response: { body: "so far", used_tokens: 5, compaction: completed }
+        - compact: true
+          when:
+            - request: { type: model, purpose: compaction }
+              response: { body: "so far, again", used_tokens: 4, compaction: completed }
     `)}`,
     message:
       'turns[1]: a compaction needs a model request after it — otherwise no request carries its summary',

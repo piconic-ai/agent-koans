@@ -424,9 +424,9 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
   }
 
   const steps: Step[] = [];
-  let sentPrompt = false;
-  let sentPromptAt = -1;
-  let queuedSeam = false;
+  let promptsSent = 0;
+  let lastPromptAt = -1;
+  let queuedSeams = 0;
   for (let i = 0; i < written.length; i++) {
     const at_i = `${at}[${i}]`;
     const prev = steps.at(-1);
@@ -445,8 +445,16 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), false, true);
       if (isProblem(childTrace)) return childTrace;
       const childLast = childTrace.steps[childTrace.steps.length - 1];
-      if (childLast.kind !== 'model' || childLast.response.kind !== 'reply') {
-        return problem(`${at_i}: a subagent block must end with the child's final text reply — it is what returns to the parent`);
+      const settles =
+        childLast.kind === 'model' && (childLast.response.kind === 'reply' || childLast.response.kind === 'api-failure');
+      // A child the run's abort cut off ends wherever the abort caught it;
+      // only the trace's last step can be that child, since the abort
+      // follows it directly.
+      const cutOff = abort && i === written.length - 1;
+      if (!settles && !cutOff) {
+        return problem(
+          `${at_i}: a subagent block must end with the child's final text reply or its model API failure — what came of the delegation is what returns to the parent`,
+        );
       }
       steps.push({ kind: 'subagent', name: block.subagent, trace: childTrace });
       continue;
@@ -500,15 +508,15 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       // can only be the delivery re-opening the run, which is how koan.ts
       // tells a queueing agent from a joining one.
       if (prev?.kind === 'model' && prev.response.kind === 'reply') {
-        if (!sentPrompt) {
+        if (promptsSent === 0) {
           return problem(`${at_i}: a model request cannot follow a text reply here — only a later turn's first request may`);
         }
-        if (queuedSeam) {
+        if (queuedSeams >= promptsSent) {
           return problem(
-            `${at_i}: a prompt sent mid-run opens at most one queued turn — this is the second model request to follow a text reply`,
+            `${at_i}: a prompt sent mid-run opens at most one queued turn each — more model requests follow text replies than prompts were sent`,
           );
         }
-        queuedSeam = true;
+        queuedSeams += 1;
       }
       if (target.purpose !== undefined) {
         const fold = parseCompactionStep(at_i, res, inTurns && i === 0);
@@ -518,7 +526,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       }
       const envelope = parseModelEnvelope(at_i, res);
       if (isProblem(envelope)) return envelope;
-      const response = parseModelResponse(into(ctx, `[${i}]`, envelope.body), inSubagent);
+      const response = parseModelResponse(into(ctx, `[${i}]`, envelope.body));
       if (isProblem(response)) return response;
       steps.push({
         kind: 'model',
@@ -531,10 +539,13 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       // transform, not re-validated against the
       // instruction it closes.
       const reqArgs = target.args;
-      if (typeof res === 'string' || Array.isArray(res) || typeof (res as Record<string, unknown>).status !== 'number') {
-        return problem(`${at_i}.response needs a numeric "status" for a tool request`);
+      const disconnects = res === 'disconnect';
+      if (!disconnects && (typeof res === 'string' || Array.isArray(res) || typeof (res as Record<string, unknown>).status !== 'number')) {
+        return problem(
+          `${at_i}.response needs a numeric "status" for a tool request, or "disconnect" for a connection severed without one`,
+        );
       }
-      const r = res as { status: number; body?: unknown };
+      const r = disconnects ? undefined : (res as { status: number; body?: unknown });
       if (rawPrompt !== undefined) {
         if (inTurns) {
           return problem(
@@ -546,33 +557,28 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
             `${at_i}: a tool step's "prompt" cannot appear inside a subagent block — only the caller's own run can be prompted`,
           );
         }
-        if (sentPrompt) {
-          return problem(`${at_i}: a trace carries at most one mid-run "prompt" — the caller sends once`);
-        }
         if (typeof rawPrompt !== 'string' || rawPrompt.length === 0) {
           return problem(`${at_i}.prompt must be a non-empty string — what the caller sends while this response is held`);
         }
-        sentPrompt = true;
-        sentPromptAt = i;
+        promptsSent += 1;
+        lastPromptAt = i;
       }
       steps.push({
         kind: 'tool',
         tool: reqTool,
         args: reqArgs,
-        response: { status: r.status, body: r.body },
+        response: r === undefined ? { disconnect: true } : { status: r.status, body: r.body },
         ...(typeof rawPrompt === 'string' ? { prompt: rawPrompt } : {}),
       });
     }
   }
 
-  if (abort && sentPrompt) {
+  // An abort cuts the delivered prompt off before any request could carry
+  // it — that is the point of scripting the two together — so the
+  // model-request-after rule holds only for a trace that runs on.
+  if (lastPromptAt !== -1 && !abort && !steps.slice(lastPromptAt + 1).some((s) => s.kind === 'model')) {
     return problem(
-      `${at}: a trace carries either "abort" or a mid-run "prompt", not both — cancelling a held invocation is not scripted yet`,
-    );
-  }
-  if (sentPromptAt !== -1 && !steps.slice(sentPromptAt + 1).some((s) => s.kind === 'model')) {
-    return problem(
-      `${at}[${sentPromptAt}]: a mid-run "prompt" needs a model request after it — otherwise no request carries it`,
+      `${at}[${lastPromptAt}]: a mid-run "prompt" needs a model request after it — otherwise no request carries it`,
     );
   }
 
@@ -700,11 +706,11 @@ function parseFailedCompaction(at: string, res: Record<string, unknown>): Parsed
 /**
  * A model response, discriminated by its written form: a bare
  * string replies, a mapping instructs or fails, a list is a parallel
- * group. `inSubagent` gates the one rule that depends on where this
- * response sits: a model API failure ends the whole run, so it cannot be
- * scripted inside a subagent's own conversation.
+ * group. An API failure may sit in a subagent block too — it is then the
+ * child's ending, and what the trace does with it is the whole-trace
+ * rule apiFailureEndsTheTrace's business.
  */
-function parseModelResponse(ctx: Ctx<unknown>, inSubagent: boolean): Parsed<ModelResponse> {
+function parseModelResponse(ctx: Ctx<unknown>): Parsed<ModelResponse> {
   const { node, at } = ctx;
   if (typeof node === 'string') return { kind: 'reply', text: node };
 
@@ -760,9 +766,6 @@ function parseModelResponse(ctx: Ctx<unknown>, inSubagent: boolean): Parsed<Mode
     return { kind: 'instructions', instructions: [c] };
   }
   if (isMapping(node) && typeof node.status === 'number') {
-    if (inSubagent) {
-      return problem(`${at}: a model API failure cannot appear inside a subagent block — it ends the whole run`);
-    }
     const { status } = node;
     // Only statuses the SDKs surface without retrying keep the trace
     // deterministic: 408/429/5xx are auto-retried by common clients.
@@ -938,6 +941,10 @@ function everyFoldReachesTheConversation(koan: KoanFile): Problem | undefined {
       // Only a fold that completed: a refused one produced no summary to
       // carry, and a run that gives up on the refusal ends right there.
       if (step.kind !== 'compaction' || step.report !== 'completed') continue;
+      // The whole trace's last exchange owes no carrier: nothing after it
+      // may ask the model again — a fold can spend the budget's last
+      // request and end the run's scripted exchanges right there.
+      if (i === steps.length - 1) continue;
       if (steps[i + 1]?.kind !== 'model') {
         return problem(`${at}[${i}]: a compaction needs a model request after it — otherwise no request carries its summary`);
       }
@@ -1110,21 +1117,35 @@ function checkToolMatching(koan: KoanFile, steps: Step[], at: string): Problem |
 }
 
 /**
- * Nothing may follow a model API failure — the agent must stop,
- * including an `abort` that trails the trace. Local adjacency in the old,
- * mutation-based trace form; here a `tool` step following a failed
- * `model` step is a step of its own, and `abort` is not a step at all
- * (koan-spec.ts's header), so seeing whether anything comes after needs a
- * fresh pass over the finished trace.
+ * Nothing may follow a model API failure in its own conversation — the
+ * conversation the endpoint refused stops there. For the main
+ * conversation that ends the run, a trailing `abort` included; for a
+ * subagent's it ends the child, whose parent runs on with the failure as
+ * the delegation's outcome. Local adjacency in the old, mutation-based
+ * trace form; here a `tool` step following a failed `model` step is a
+ * step of its own, and `abort` is not a step at all (koan-spec.ts's
+ * header), so seeing whether anything comes after needs a fresh pass over
+ * the finished trace — one per conversation, since the rule is scoped to
+ * one.
  */
 function apiFailureEndsTheTrace(koan: KoanFile): Problem | undefined {
   for (const { steps, at, abort } of scriptedTraces(koan)) {
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
-      const isLast = i === steps.length - 1;
-      if (step.kind === 'model' && step.response.kind === 'api-failure' && (!isLast || abort !== undefined)) {
-        return problem(`${at}[${i + 1}]: nothing can follow a model API failure — the agent must stop`);
-      }
+    const found = checkApiFailureEnds(steps, at, abort);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function checkApiFailureEnds(steps: Step[], at: string, abort: AbortKind | undefined): Problem | undefined {
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const isLast = i === steps.length - 1;
+    if (step.kind === 'model' && step.response.kind === 'api-failure' && (!isLast || abort !== undefined)) {
+      return problem(`${at}[${i + 1}]: nothing can follow a model API failure — the conversation it refused must stop`);
+    }
+    if (step.kind === 'subagent') {
+      const found = checkApiFailureEnds(step.trace.steps, `${at}[${i}].when`, undefined);
+      if (found) return found;
     }
   }
   return undefined;

@@ -131,7 +131,9 @@ function buildForbidden(trace: Trace): Map<string, ConversationScript['forbidden
     conv.turns.map((t) => t.reply).filter((r): r is string => r !== undefined);
   const toolScalars = (conv: Conversation): string[] =>
     conv.turns.flatMap((t) =>
-      (t.call_tools ?? []).flatMap((m) => (m.tool_responds ? scalarLeaves(m.tool_responds.body) : [])),
+      (t.call_tools ?? []).flatMap((m) =>
+        m.tool_responds && 'status' in m.tool_responds ? scalarLeaves(m.tool_responds.body) : [],
+      ),
     );
   const fileContents = (conv: Conversation): string[] =>
     conv.turns.flatMap((t) => (t.call_tools ?? []).flatMap((m) => (m.readsFile !== undefined ? [m.readsFile] : [])));
@@ -139,6 +141,14 @@ function buildForbidden(trace: Trace): Map<string, ConversationScript['forbidden
     conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.prompt));
   const receivedFinals = (conv: Conversation): string[] =>
     conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.final));
+  // A failure crosses the same seam a final reply does: the endpoint's
+  // refusal is scripted into the conversation it refused, and it is the
+  // delegation's outcome in the conversation that delegated.
+  const failureValues = (fails: { status: number; body?: unknown } | undefined): string[] =>
+    fails === undefined ? [] : [String(fails.status), ...scalarLeaves(fails.body)];
+  const ownFailures = (conv: Conversation): string[] => conv.turns.flatMap((t) => failureValues(t.fails));
+  const receivedFailures = (conv: Conversation): string[] =>
+    conv.turns.flatMap((t) => (t.delegations ?? []).flatMap((d) => failureValues(d.fails)));
 
   const allowed = new Map<string, string[]>();
   for (const conv of trace.conversations) {
@@ -149,6 +159,8 @@ function buildForbidden(trace: Trace): Map<string, ConversationScript['forbidden
       ...fileContents(conv),
       ...issuedPrompts(conv),
       ...receivedFinals(conv),
+      ...ownFailures(conv),
+      ...receivedFailures(conv),
     ]);
   }
 
@@ -230,6 +242,9 @@ function checkCoherence(
     // phrasing is implementation-specific.
     const responds = member.tool_responds;
     if (!responds) continue;
+    // A severed connection scripted no status and no body, so there is
+    // nothing to look for — the closure by id above is the whole check.
+    if (!('status' in responds)) continue;
 
     const { status, body } = responds;
     const failed = status >= 400;
@@ -247,9 +262,19 @@ function checkCoherence(
 
   // Positive flow: each delegate's final reply must reach
   // the parent's next model request — for parallel delegations, every
-  // sibling's, which is what makes the parent join all of them.
+  // sibling's, which is what makes the parent join all of them. A child
+  // that failed instead of answering has its failure carried the same
+  // way: the parent's model cannot react to an outcome it was not told.
   for (const d of delegations) {
-    if (!text.includes(d.final)) {
+    if (d.fails !== undefined) {
+      const indicators = [String(d.fails.status), ...scalarLeaves(d.fails.body)];
+      if (!indicators.some((s) => text.includes(s))) {
+        violations.push(
+          `request #${requestNo}: subagent "${d.subagent}"'s model API failure did not reach ${label(conv)} — ` +
+            `the request carries none of ${JSON.stringify(indicators)}, so the model cannot know the delegation failed`,
+        );
+      }
+    } else if (d.final.length > 0 && !text.includes(d.final)) {
       violations.push(
         `request #${requestNo}: subagent "${d.subagent}"'s final reply did not reach ${label(conv)} — ` +
           `the delegation must be closed with the child's final answer`,
@@ -307,7 +332,9 @@ function turnValues(conv: Conversation, uptoIndex: number): string[] {
   for (const turn of conv.turns.slice(0, uptoIndex)) {
     if (turn.reply !== undefined) values.push(turn.reply);
     for (const member of turn.call_tools ?? []) {
-      if (member.tool_responds) values.push(...scalarLeaves(member.tool_responds.body));
+      if (member.tool_responds && 'status' in member.tool_responds) {
+        values.push(...scalarLeaves(member.tool_responds.body));
+      }
       if (member.readsFile !== undefined) values.push(member.readsFile);
     }
     for (const d of turn.delegations ?? []) values.push(d.final);
@@ -352,16 +379,17 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 }
 
 /**
- * Serve one trace's model turns; records requests and violations. `hold`
- * belongs to the runner; this server only attaches it to the pending
- * invocation the trace holds open, which is where that entry is created.
+ * Serve one trace's model turns; records requests and violations. `holds`
+ * belong to the runner, one per mid-run prompt in step order; this server
+ * only attaches each to the pending invocation whose response is held for
+ * that prompt, which is where the entry is created.
  */
 export function startMockLlm(
   koan: Koan,
   trace: Trace,
   pending: PendingInvocation[],
   delegation: DelegationVocabulary = DEFAULT_DELEGATION,
-  hold?: InvocationHold,
+  holds?: InvocationHold[],
 ): Promise<MockLlm> {
   const state: MockLlm['state'] = { requests: [], served: {}, violations: [] };
   const issuedToolCallIds = new Set<string>();
@@ -434,12 +462,13 @@ export function startMockLlm(
     const entry = conv.turns[index];
 
     if (!entry) {
-      if (liveAbort && conv.name === '') {
+      if (liveAbort) {
         // The world stops answering once the pre-abort script is served:
         // hold the connection open rather than reject it. This request is
         // either racing the caller's abort or arriving after it already
         // landed — both converge on the run having nothing left to wait
-        // for but its own abort settling.
+        // for but its own abort settling. Any conversation's, not just the
+        // main one's: an abort mid-delegation leaves the child racing too.
         return;
       }
       state.violations.push(
@@ -541,11 +570,12 @@ export function startMockLlm(
       callTools.forEach((member, j) => {
         issuedToolCallIds.add(ids[j]);
         if (member.tool_responds) {
+          const hold = member.promptIndex !== undefined ? holds?.[member.promptIndex] : undefined;
           pending.push({
             name: member.name,
             args: member.invokeArgs ?? member.args ?? {},
             respond: member.tool_responds,
-            ...(member.promptDuring !== undefined && hold ? { hold } : {}),
+            ...(hold ? { hold } : {}),
           });
         }
       });

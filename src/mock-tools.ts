@@ -91,6 +91,12 @@ export function startMockTools(pending: PendingInvocation[]): Promise<MockTools>
       await expected.hold.released;
     }
 
+    if ('disconnect' in expected.respond) {
+      // Severed, not answered: no status line ever goes out, so the agent
+      // sees a transport failure rather than an HTTP one.
+      res.socket?.destroy();
+      return;
+    }
     respond(expected.respond.status, expected.respond.body ?? {});
   });
 

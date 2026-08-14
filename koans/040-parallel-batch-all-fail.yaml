@@ -1,0 +1,41 @@
+name: parallel-batch-all-fail
+description: >
+  Every call of a parallel batch fails. A batch is not abandoned because
+  its first member failed: both calls must be made and both closed with
+  their own failure, each reaching the model, which then gives up
+  gracefully.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+    get_local_time:
+      description: "Look up the current local time for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Report the current weather and local time in Tokyo."
+
+when:
+  - request: model
+    response:
+      - { tool: get_weather, args: { city: "Tokyo" } }
+      - { tool: get_local_time, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 503, body: { error: "weather_unavailable" } }
+  - request: { tool: get_local_time }
+    response: { status: 503, body: { error: "clock_unavailable" } }
+  - request: model
+    response: "Neither service answered, so I have nothing to report for Tokyo."
+
+then:
+  status: completed
+  output: { contains: "nothing to report for Tokyo" }

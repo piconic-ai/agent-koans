@@ -25,8 +25,7 @@ when:
     response:
       - { tool: read_file, args: { path: "location.txt" } }
       - { tool: get_local_time, args: { city: "Tokyo" } }
-  # No tool request for read_file: it is the agent's own tool, executed
-  # against KOAN_WORKSPACE, never the mock tool server.
+  - request: { tool: read_file }
   - request: { tool: get_local_time }
     response: { status: 200, body: { time: "14:05" } }
   - request: model

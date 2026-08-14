@@ -155,6 +155,15 @@ export type Step =
   | { kind: 'model'; response: ModelResponse; used_tokens?: number }
   /** `prompt` is one the caller sends while this invocation is held open. */
   | { kind: 'tool'; tool: string; args?: ParsedArgs; response: ToolResponse; prompt?: string }
+  /**
+   * A tool request written without a `response`: the agent executed the
+   * call itself — `read_file`, against the run's workspace. No response,
+   * because a response is what a mock answered and nothing observable
+   * answers this call; what must surface instead is the named file's
+   * content in the conversation's next model request. `args`
+   * disambiguates a repeated name within a group, as on a `tool` step.
+   */
+  | { kind: 'internal'; tool: string; args?: ParsedArgs }
   | { kind: 'subagent'; name: string; trace: Trace }
   /**
    * The extra model request an agent makes to fold a conversation that has

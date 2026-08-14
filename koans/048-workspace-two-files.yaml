@@ -14,10 +14,10 @@ prompt: "Summarize incident INC-4407 from opened.md and closed.md."
 when:
   - request: model
     response: { tool: read_file, args: { path: "opened.md" } }
-  # No tool request: read_file is the agent's own tool, executed
-  # against KOAN_WORKSPACE, never the mock tool server.
+  - request: { tool: read_file }
   - request: model
     response: { tool: read_file, args: { path: "closed.md" } }
+  - request: { tool: read_file }
   - request: model
     response: "INC-4407 opened at 03:12 UTC and was closed by K-9-4471."
 

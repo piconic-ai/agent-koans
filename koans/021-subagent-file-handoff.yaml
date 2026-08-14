@@ -18,8 +18,7 @@ when:
     when:
       - request: model
         response: { tool: read_file, args: { path: "report.md" } }
-      # No tool request: read_file is the agent's own tool, executed
-      # against KOAN_WORKSPACE, never the mock tool server.
+      - request: { tool: read_file }
       - request: model
         response: "A 4-minute 503 outage, incident INC-4407."
   - request: model

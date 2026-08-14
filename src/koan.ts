@@ -58,11 +58,12 @@ export interface CallToolInstruction {
   tool_responds?: ToolResponse;
   /** A prompt the caller sends while this invocation is held open. */
   promptDuring?: string;
+  /** Set by a response-less tool request: the agent executes this call itself. Resolved to `readsFile` once the trace has compiled. */
+  internal?: true;
   /**
-   * Content of the `given.files` entry named by `args.path`, set when this
-   * instruction has no following tool request: an internal read the agent
-   * executes with a tool of its own, never the tool server. The next model
-   * request of the same conversation must carry this content.
+   * Content of the `given.files` entry named by `args.path`, for an
+   * instruction the agent executes itself. The conversation's next model
+   * request must carry it.
    */
   readsFile?: string;
 }
@@ -352,6 +353,12 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
         openCalls = openCalls.filter((c) => c !== match);
         break;
       }
+      case 'internal': {
+        const match = matchOpenCall(openCalls, step.tool, step.args);
+        match.compiled.internal = true;
+        openCalls = openCalls.filter((c) => c !== match);
+        break;
+      }
       default:
         assertNever(step);
     }
@@ -440,17 +447,14 @@ function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): { 
   return { trace: { conversations }, turnSpecs };
 }
 
-// An instruction that names a `given.files` entry and has no tool request
-// is an internal read, never a tool-server call: the runner must see the file's
-// content flow into the conversation's next model request. Marked after
-// the trace compiles, since `tool_responds` is only known then.
-function markInternalReads(trace: Trace, files: Record<string, string>): void {
+// After compiling rather than in compileSteps, which never sees
+// `given.files`. parse.ts proved `args.path` names an entry, so the
+// lookup cannot miss.
+function resolveInternalReads(trace: Trace, files: Record<string, string>): void {
   for (const conv of trace.conversations) {
     for (const turn of conv.turns) {
       for (const member of turn.call_tools ?? []) {
-        if (member.tool_responds !== undefined) continue;
-        const p = member.args?.path;
-        if (typeof p === 'string' && files[p] !== undefined) member.readsFile = files[p];
+        if (member.internal === true) member.readsFile = files[member.args?.path as string];
       }
     }
   }
@@ -499,7 +503,7 @@ function compileKoan(parsed: KoanFile): Koan {
   }
 
   for (const trace of Object.values(traces)) {
-    markInternalReads(trace, given.files ?? {});
+    resolveInternalReads(trace, given.files ?? {});
   }
 
   const then = parsed.body.kind === 'turns' ? {} : compileJudgment(parsed.body.then);

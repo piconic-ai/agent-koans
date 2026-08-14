@@ -1224,6 +1224,93 @@ const rows: Row[] = [
       'turns[1].when scripts 1 step(s) — an ask brings about the fold and nothing else, since without a prompt there is no other work',
   },
   {
+    rule: 'a tool request carries only "tool" and "args"',
+    yaml: koan(`
+      given:
+        files:
+          report.md: content
+      when:
+        - request: model
+          response: { tool: read_file, args: { path: report.md } }
+        - request: { tool: read_file, arg: { path: report.md } }
+        - request: model
+          response: done
+    `),
+    message: 'when[1].request has unknown key "arg" — a tool request carries only "tool" and "args"',
+  },
+  {
+    rule: 'an internal request follows the instruction it executes',
+    yaml: koan(`
+      given:
+        files:
+          report.md: content
+      when:
+        - request: { tool: read_file }
+        - request: model
+          response: done
+    `),
+    message: 'when[0]: a request with no response is the agent executing a call itself — it must follow a model response containing a tool-call instruction',
+  },
+  {
+    rule: 'an internal request names a call of the group',
+    yaml: koan(`
+      given:
+        files:
+          report.md: content
+      when:
+        - request: model
+          response: { tool: read_file, args: { path: report.md } }
+        - request: { tool: read_notes }
+        - request: model
+          response: done
+    `),
+    message: 'when[1].request.tool is "read_notes" but the preceding model response requests "read_file"',
+  },
+  {
+    rule: "a declared tool's request carries its response",
+    yaml: koan(`
+      given:
+        files:
+          report.md: content
+        tools:
+          read_file:
+            input_schema: { type: object }
+      when:
+        - request: model
+          response: { tool: read_file, args: { path: report.md } }
+        - request: { tool: read_file }
+        - request: model
+          response: done
+    `),
+    message: 'when[1]: "read_file" is declared in given.tools — a declared tool runs at the tool server, so its request carries the response it answered with',
+  },
+  {
+    rule: "an internal request reads the run's workspace",
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: read_file, args: { path: report.md } }
+        - request: { tool: read_file }
+        - request: model
+          response: done
+    `),
+    message: "when[1]: an internal request is the agent reading the run's workspace — the call's args.path must name a given.files entry",
+  },
+  {
+    rule: 'a call that names a workspace file cannot be left to an absence',
+    yaml: koan(`
+      given:
+        files:
+          report.md: content
+      when:
+        - request: model
+          response: { tool: read_file, args: { path: report.md } }
+        - request: model
+          response: done
+    `),
+    message: 'when[1]: the call to "read_file" names given.files["report.md"] but no step says what became of it — a request with no response, "- request: { tool: read_file }", says the agent executed it itself',
+  },
+  {
     rule: 'a trace fits the model-request budget',
     yaml: koan(`
       given:

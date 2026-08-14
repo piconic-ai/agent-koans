@@ -457,7 +457,6 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     const res = entry?.response;
     const rawPrompt = entry?.prompt;
     if (req === undefined || req === null) return problem(`${at_i} needs "request"`);
-    if (res === undefined || res === null) return problem(`${at_i} needs "response"`);
 
     // A misspelled key would otherwise be dropped in silence, and the two
     // that can be dropped hurt most: a mistyped `prompt` leaves a koan
@@ -471,6 +470,18 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     }
     const target = parseRequestTarget(at_i, req);
     if (isProblem(target)) return target;
+
+    // Which calls a response-less request may close (koan-spec.ts) is a
+    // whole-trace question, left to the tool-request matching in
+    // `constraints`.
+    if (target.kind === 'tool' && res === undefined) {
+      if (rawPrompt !== undefined) {
+        return problem(`${at_i}: "prompt" belongs on the tool step whose response is held open — an internal request holds nothing`);
+      }
+      steps.push({ kind: 'internal', tool: target.tool, ...(target.args !== undefined ? { args: target.args } : {}) });
+      continue;
+    }
+    if (res === undefined || res === null) return problem(`${at_i} needs "response"`);
 
     if (target.kind === 'model') {
       if (rawPrompt !== undefined) {
@@ -583,6 +594,11 @@ type RequestTarget =
 function parseRequestTarget(at: string, req: unknown): Parsed<RequestTarget> {
   if (req === 'model') return { kind: 'model' };
   if (isMapping(req) && typeof req.tool === 'string') {
+    for (const key of Object.keys(req)) {
+      if (key !== 'tool' && key !== 'args') {
+        return problem(`${at}.request has unknown key "${key}" — a tool request carries only "tool" and "args"`);
+      }
+    }
     // No shape check on the request's own args: it is a declared
     // transform, not re-validated against the instruction it closes.
     return { kind: 'tool', tool: req.tool, args: req.args as ParsedArgs | undefined };
@@ -976,7 +992,7 @@ function unresolvedDelegationMessage(at: string, unresolved: Array<{ subagent: s
  */
 function everyToolRequestMatchesAnOpenCall(koan: KoanFile): Problem | undefined {
   for (const { steps, at } of scriptedTraces(koan)) {
-    const found = checkToolMatching(steps, at);
+    const found = checkToolMatching(koan, steps, at);
     if (found) return found;
   }
   return undefined;
@@ -984,21 +1000,47 @@ function everyToolRequestMatchesAnOpenCall(koan: KoanFile): Problem | undefined 
 
 type CallInstruction = Extract<Instruction, { kind: 'call' }>;
 
-function checkToolMatching(steps: Step[], at: string): Problem | undefined {
+// Not inferred as internal the way it once was: absence must keep meaning
+// "never executed", so a call that looks like an internal read has to be
+// closed by a written step.
+function unclosedInternalRead(
+  koan: KoanFile,
+  pending: CallInstruction[] | undefined,
+  closed: Set<CallInstruction>,
+  at: string,
+): Problem | undefined {
+  for (const call of pending ?? []) {
+    if (closed.has(call)) continue;
+    if (call.tool in koan.given.tools) continue;
+    const p = argsValueOf(call.args)?.path;
+    if (typeof p === 'string' && koan.given.files?.[p] !== undefined) {
+      return problem(
+        `${at}: the call to "${call.tool}" names given.files["${p}"] but no step says what became of it — a request with no response, "- request: { tool: ${call.tool} }", says the agent executed it itself`,
+      );
+    }
+  }
+  return undefined;
+}
+
+function checkToolMatching(koan: KoanFile, steps: Step[], at: string): Problem | undefined {
   let pending: CallInstruction[] | undefined;
   let closed = new Set<CallInstruction>();
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const at_i = `${at}[${i}]`;
     if (step.kind === 'model') {
+      const left = unclosedInternalRead(koan, pending, closed, at_i);
+      if (left) return left;
       pending = step.response.kind === 'instructions' ? step.response.instructions.filter(isCall) : undefined;
       closed = new Set();
       continue;
     }
     if (step.kind === 'subagent') {
+      const left = unclosedInternalRead(koan, pending, closed, at_i);
+      if (left) return left;
       pending = undefined;
       closed = new Set();
-      const found = checkToolMatching(step.trace.steps, `${at_i}.when`);
+      const found = checkToolMatching(koan, step.trace.steps, `${at_i}.when`);
       if (found) return found;
       continue;
     }
@@ -1007,8 +1049,13 @@ function checkToolMatching(steps: Step[], at: string): Problem | undefined {
     // still come.
     if (step.kind === 'compaction') continue;
 
+    const what = step.kind === 'tool' ? 'a tool request' : 'an internal request';
     if (pending === undefined) {
-      return problem(`${at_i}: a tool request must follow a model response containing a tool-call instruction`);
+      return problem(
+        step.kind === 'tool'
+          ? `${at_i}: a tool request must follow a model response containing a tool-call instruction`
+          : `${at_i}: a request with no response is the agent executing a call itself — it must follow a model response containing a tool-call instruction`,
+      );
     }
     const open = pending.filter((c) => c.tool === step.tool && !closed.has(c));
     let member: CallInstruction;
@@ -1016,7 +1063,13 @@ function checkToolMatching(steps: Step[], at: string): Problem | undefined {
       member = open[0];
     } else if (open.length === 0) {
       const named = pending.some((c) => c.tool === step.tool);
-      if (named) return problem(`${at_i}: the preceding tool-call instruction for "${step.tool}" already has a tool request`);
+      if (named) {
+        return problem(
+          step.kind === 'tool'
+            ? `${at_i}: the preceding tool-call instruction for "${step.tool}" already has a tool request`
+            : `${at_i}: the preceding tool-call instruction for "${step.tool}" is already closed`,
+        );
+      }
       return problem(
         `${at_i}.request.tool is "${step.tool}" but the preceding model response requests ${pending.map((c) => `"${c.tool}"`).join(', ')}`,
       );
@@ -1036,11 +1089,24 @@ function checkToolMatching(steps: Step[], at: string): Problem | undefined {
     closed.add(member);
     if (argsValueOf(member.args) === undefined) {
       return problem(
-        `${at_i}: "${step.tool}"'s arguments do not parse as a JSON object — argument fidelity is undefined, so the agent must refuse the call instead; no tool request can follow it`,
+        `${at_i}: "${step.tool}"'s arguments do not parse as a JSON object — argument fidelity is undefined, so the agent must refuse the call instead; no ${what.replace(/^an? /, '')} can follow it`,
       );
     }
+    if (step.kind === 'internal') {
+      if (member.tool in koan.given.tools) {
+        return problem(
+          `${at_i}: "${member.tool}" is declared in given.tools — a declared tool runs at the tool server, so its request carries the response it answered with`,
+        );
+      }
+      const p = argsValueOf(member.args)?.path;
+      if (typeof p !== 'string' || koan.given.files?.[p] === undefined) {
+        return problem(
+          `${at_i}: an internal request is the agent reading the run's workspace — the call's args.path must name a given.files entry`,
+        );
+      }
+    }
   }
-  return undefined;
+  return unclosedInternalRead(koan, pending, closed, `${at}[${steps.length}]`);
 }
 
 /**

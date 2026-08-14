@@ -2,10 +2,9 @@ name: workspace-read
 description: >
   The main conversation reads a workspace file directly, with no
   subagent involved. "read_file" names a tool the run did not declare,
-  so it must not reach the tool server; naming a given.files
-  entry as args.path marks it instead as the agent's own internal read,
-  whose content must flow into the conversation's next model request and
-  the final answer.
+  so it must not reach the tool server; its request carries no response,
+  since the agent answers it itself, and the file's content must flow
+  into the conversation's next model request and the final answer.
 
 given:
   files:
@@ -16,8 +15,7 @@ prompt: "Summarize the incident. The details are in report.md."
 when:
   - request: model
     response: { tool: read_file, args: { path: "report.md" } }
-  # No tool request: read_file is the agent's own tool, executed
-  # against KOAN_WORKSPACE, never the mock tool server.
+  - request: { tool: read_file }
   - request: model
     response: "Summary: a 4-minute 503 outage, incident INC-4407."
 

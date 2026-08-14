@@ -49,15 +49,25 @@ export function createDeclaredTool(def: ToolDef, toolsBaseUrl: string): Tool {
         return `Error: invalid arguments for "${def.name}": ${validationErrors.join('; ')}`;
       }
 
-      const res = await fetch(`${toolsBaseUrl}/invoke/${encodeURIComponent(def.name)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        // `args`, not the declared properties of it: an argument the schema
-        // never mentioned is still the model's, and dropping it here would
-        // rewrite the call before the tool ever saw it.
-        body: JSON.stringify(args),
-        signal,
-      });
+      let res: Response;
+      try {
+        res = await fetch(`${toolsBaseUrl}/invoke/${encodeURIComponent(def.name)}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          // `args`, not the declared properties of it: an argument the schema
+          // never mentioned is still the model's, and dropping it here would
+          // rewrite the call before the tool ever saw it.
+          body: JSON.stringify(args),
+          signal,
+        });
+      } catch (err) {
+        // Not rethrown: a transport failure is a tool failure like any
+        // other, and it is the model's to react to (SPEC.md §4) — thrown,
+        // it would end the run instead. An abort is the caller's, though,
+        // and must keep unwinding the turn.
+        if (signal.aborted) throw err;
+        return `Error: tool "${def.name}" request failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
       const body = await res.text();
       if (!res.ok) {
         return `Error: tool "${def.name}" failed with status ${res.status}: ${body}`;

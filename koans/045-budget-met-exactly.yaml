@@ -1,0 +1,37 @@
+name: budget-met-exactly
+description: >
+  The run declares a model-request budget and the model converges on the
+  last request the budget permits. A budget is a ceiling, not a quota to
+  spend or a reason to stop early: the agent must make that last request
+  and the run must complete with its answer.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+  limits:
+    max_model_requests: 3
+
+prompt: "Compare the current temperature in Tokyo and Osaka."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: model
+    response: { tool: get_weather, args: { city: "Osaka" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 33 } }
+  # The third request of three: the budget is met, not exceeded.
+  - request: model
+    response: "Osaka (33°C) is warmer than Tokyo (31°C)."
+
+then:
+  status: completed
+  output: { matches: "33.*31|31.*33" }

@@ -273,6 +273,8 @@ it cannot drift from the contract it indexes.
 | [042-subagent-direct-answer](./koans/042-subagent-direct-answer.yaml) | The delegate answers its briefing without calling anything. A subagent is not obliged to use a tool any more than the main conversation is (011): the child's first reply is its final answer, and it is what returns to the parent. |
 | [043-subagent-tool-failure](./koans/043-subagent-tool-failure.yaml) | A tool fails inside the delegate. The failure is the child's to handle: it reaches the child's model and stops there, so the parent learns of it only through the child's final answer, and the run still completes. |
 | [044-sequential-delegation](./koans/044-sequential-delegation.yaml) | Two delegations, one after the other, each in its own model response. The second child is briefed after the first has answered, and neither child may see the other's work: what crosses between them is only what the parent writes into the second briefing. |
+| [045-budget-met-exactly](./koans/045-budget-met-exactly.yaml) | The run declares a model-request budget and the model converges on the last request the budget permits. A budget is a ceiling, not a quota to spend or a reason to stop early: the agent must make that last request and the run must complete with its answer. |
+| [046-model-api-failure-midway](./koans/046-model-api-failure-midway.yaml) | The model endpoint rejects a request made in the middle of the run, after a tool call has already succeeded. Work already done is no reason to press on: the agent must not re-issue the request, must not invoke anything further, and must end the run as failed. |
 
 <!-- koan-index:end -->
 

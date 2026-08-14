@@ -270,6 +270,9 @@ it cannot drift from the contract it indexes.
 | [039-parallel-same-tool](./koans/039-parallel-same-tool.yaml) | One response requests the same tool twice with different arguments. The two calls are told apart by their arguments alone, so the agent must invoke the tool once per city — not once for the pair — and close each call with its own result. |
 | [040-parallel-batch-all-fail](./koans/040-parallel-batch-all-fail.yaml) | Every call of a parallel batch fails. A batch is not abandoned because its first member failed: both calls must be made and both closed with their own failure, each reaching the model, which then gives up gracefully. |
 | [041-parallel-three-calls](./koans/041-parallel-three-calls.yaml) | A parallel group of three, rather than the pair of 015. A batch has no size the agent may assume: all three calls must be invoked and closed before the model is asked again. |
+| [042-subagent-direct-answer](./koans/042-subagent-direct-answer.yaml) | The delegate answers its briefing without calling anything. A subagent is not obliged to use a tool any more than the main conversation is (011): the child's first reply is its final answer, and it is what returns to the parent. |
+| [043-subagent-tool-failure](./koans/043-subagent-tool-failure.yaml) | A tool fails inside the delegate. The failure is the child's to handle: it reaches the child's model and stops there, so the parent learns of it only through the child's final answer, and the run still completes. |
+| [044-sequential-delegation](./koans/044-sequential-delegation.yaml) | Two delegations, one after the other, each in its own model response. The second child is briefed after the first has answered, and neither child may see the other's work: what crosses between them is only what the parent writes into the second briefing. |
 
 <!-- koan-index:end -->
 

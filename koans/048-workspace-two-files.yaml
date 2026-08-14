@@ -1,0 +1,26 @@
+name: workspace-two-files
+description: >
+  Two workspace files, read one after the other. Each read must flow into
+  the conversation's next model request, so the second read does not
+  displace the first: the final answer is drawn from both files.
+
+given:
+  files:
+    opened.md: "Incident INC-4407 opened at 03:12 UTC."
+    closed.md: "Incident INC-4407 was closed by operator K-9-4471."
+
+prompt: "Summarize incident INC-4407 from opened.md and closed.md."
+
+when:
+  - request: model
+    response: { tool: read_file, args: { path: "opened.md" } }
+  # No tool request: read_file is the agent's own tool, executed
+  # against KOAN_WORKSPACE, never the mock tool server.
+  - request: model
+    response: { tool: read_file, args: { path: "closed.md" } }
+  - request: model
+    response: "INC-4407 opened at 03:12 UTC and was closed by K-9-4471."
+
+then:
+  status: completed
+  output: { matches: "03:12.*K-9-4471" }

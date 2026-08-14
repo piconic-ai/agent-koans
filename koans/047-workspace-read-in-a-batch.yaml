@@ -1,0 +1,37 @@
+name: workspace-read-in-a-batch
+description: >
+  One response asks for a workspace read and a declared tool at once. A
+  parallel group may mix the two kinds: the read is executed internally
+  and never reaches the tool server, the declared call does reach it, and
+  both must be closed before the model is asked again — an agent that
+  runs the two kinds in separate rounds leaves one of them open.
+
+given:
+  files:
+    location.txt: "The office to report on is in Osaka."
+  tools:
+    get_local_time:
+      description: "Look up the current local time for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Report the local time in Tokyo, and say where the office is. Its location is in location.txt."
+
+when:
+  - request: model
+    response:
+      - { tool: read_file, args: { path: "location.txt" } }
+      - { tool: get_local_time, args: { city: "Tokyo" } }
+  # No tool request for read_file: it is the agent's own tool, executed
+  # against KOAN_WORKSPACE, never the mock tool server.
+  - request: { tool: get_local_time }
+    response: { status: 200, body: { time: "14:05" } }
+  - request: model
+    response: "It is 14:05 in Tokyo, and the office is in Osaka."
+
+then:
+  status: completed
+  output: { matches: "14:05.*Osaka" }

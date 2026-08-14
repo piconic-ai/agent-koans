@@ -275,6 +275,8 @@ it cannot drift from the contract it indexes.
 | [044-sequential-delegation](./koans/044-sequential-delegation.yaml) | Two delegations, one after the other, each in its own model response. The second child is briefed after the first has answered, and neither child may see the other's work: what crosses between them is only what the parent writes into the second briefing. |
 | [045-budget-met-exactly](./koans/045-budget-met-exactly.yaml) | The run declares a model-request budget and the model converges on the last request the budget permits. A budget is a ceiling, not a quota to spend or a reason to stop early: the agent must make that last request and the run must complete with its answer. |
 | [046-model-api-failure-midway](./koans/046-model-api-failure-midway.yaml) | The model endpoint rejects a request made in the middle of the run, after a tool call has already succeeded. Work already done is no reason to press on: the agent must not re-issue the request, must not invoke anything further, and must end the run as failed. |
+| [047-workspace-read-in-a-batch](./koans/047-workspace-read-in-a-batch.yaml) | One response asks for a workspace read and a declared tool at once. A parallel group may mix the two kinds: the read is executed internally and never reaches the tool server, the declared call does reach it, and both must be closed before the model is asked again — an agent that runs the two kinds in separate rounds leaves one of them open. |
+| [048-workspace-two-files](./koans/048-workspace-two-files.yaml) | Two workspace files, read one after the other. Each read must flow into the conversation's next model request, so the second read does not displace the first: the final answer is drawn from both files. |
 
 <!-- koan-index:end -->
 

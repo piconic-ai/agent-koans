@@ -1,0 +1,33 @@
+name: abort-during-delegation
+description: >
+  The caller aborts while a delegate is mid-task: the child's tool call
+  has returned, and whatever the child asks for next goes unanswered. The
+  abort stops the whole tree — the child does not press on to a final
+  answer, the parent never hears one, and neither may ask the world for
+  anything further. The run settles aborted.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Have the researcher prepare the Tokyo report."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Look up the current temperature in Tokyo." }
+  - subagent: researcher
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Tokyo" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 31 } }
+  - abort
+
+then:
+  status: aborted

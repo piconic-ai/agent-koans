@@ -94,7 +94,10 @@ run's state must *do*.
 returns, whatever breaks inside you. A run still `running` past the
 runner's timeout fails the koan.
 
-**Abort.** A run in progress MUST then settle `aborted`. A run that has
+**Abort.** A run in progress MUST then settle `aborted`. An abort covers
+everything of the run still unsettled: the turn in flight, a prompt
+accepted but not yet answered, and a delegation mid-task all stop with
+it — nothing may serve any of them afterwards. A run that has
 already settled MUST keep the state it settled on: a late abort never
 rewrites a committed result, and repeated aborts are idempotent.
 
@@ -108,9 +111,11 @@ A prompt sent to a run still `running` MUST be accepted too, and MUST NOT
 then be dropped: the run MUST reach a terminal state carrying an answer to
 it. Whether it joins the turn already in flight, at that turn's next
 boundary, or waits and runs as its own turn once that one settles, is
-yours to choose — both conform. A queueing agent MAY report a terminal
-state in between, since that is the earlier submission settling, and a
-prompt sent to a settled run re-opens it.
+yours to choose — both conform, for each such prompt independently. A
+queueing agent MAY report a terminal state in between, since that is the
+earlier submission settling, and a prompt sent to a settled run re-opens
+it. However they run, prompts form a queue: what the caller sent earlier
+MUST NOT be answered after what it sent later.
 
 **Context.** A run MAY declare the model's context window and the share of
 it at which the agent compacts — folds the conversation into a summary and
@@ -281,6 +286,9 @@ it cannot drift from the contract it indexes.
 | [050-follow-up-delegation](./koans/050-follow-up-delegation.yaml) | A follow-up turn delegates. The parent must carry its own earlier turn into this one, and the child must still see only its briefing: a conversation's history belongs to the conversation that holds it, and a delegate opens a new one however long the parent's has grown. |
 | [051-compaction-below-threshold](./koans/051-compaction-below-threshold.yaml) | The run declares a threshold and the conversation stays well below it. A declared threshold is not an instruction to fold whenever convenient: with room left, the agent must carry the history as it stands into the next turn — the trace has no compaction step for one to consume. |
 | [052-compaction-asked-below-threshold](./koans/052-compaction-asked-below-threshold.yaml) | The caller asks for a fold while the conversation sits far below the threshold the run declared. The threshold says when the agent folds on its own, and 051 shows it holding here; the ask is the caller's, and it folds the conversation anyway. |
+| [053-two-prompts-while-running](./koans/053-two-prompts-while-running.yaml) | Two prompts are delivered while one turn is still running — one during each held invocation of a parallel batch, so both are accepted before either could be answered. Submissions form a queue: neither prompt may be lost, and their answers come in the order they arrived. Two processes are acceptable, and the koan is silent about which: both deliveries join the live conversation at its next turn boundary, or each waits and runs as its own turn, first-come first-served. |
+| [054-abort-clears-the-queue](./koans/054-abort-clears-the-queue.yaml) | A second prompt is delivered while a tool invocation is held open, and the caller then aborts — the delivery is provably accepted and provably unanswered when the abort lands. An abort covers every submission still unsettled, the queued prompt included: the trace ends here, so no model request may serve that prompt afterwards, and the run settles aborted. |
+| [055-abort-during-delegation](./koans/055-abort-during-delegation.yaml) | The caller aborts while a delegate is mid-task: the child's tool call has returned, and whatever the child asks for next goes unanswered. The abort stops the whole tree — the child does not press on to a final answer, the parent never hears one, and neither may ask the world for anything further. The run settles aborted. |
 
 <!-- koan-index:end -->
 

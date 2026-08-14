@@ -131,6 +131,11 @@ export function createAgent(
       // see "aborted" already committed rather than overwrite it as failed.
       session.state.status = 'aborted';
       session.state.error = 'aborted by caller';
+      // The queue too, not just the turn in flight: an abort covers every
+      // submission still unsettled (SPEC.md §3), and a prompt accepted
+      // but unanswered is exactly that. A prompt arriving after this
+      // still re-opens the run — the queue empties, it does not close.
+      session.queued.length = 0;
       session.turn?.abort();
     }
     return true;

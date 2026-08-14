@@ -117,6 +117,14 @@ earlier submission settling, and a prompt sent to a settled run re-opens
 it. However they run, prompts form a queue: what the caller sent earlier
 MUST NOT be answered after what it sent later.
 
+**Delegation.** The subagents a run declares are available to every
+conversation of the run — a delegate MAY delegate in turn, and what each
+conversation may see of another holds at every depth: a briefing in, a
+final answer out. A delegate whose own model request is refused loses
+only the delegation: the refusal is the delegation's outcome and MUST
+reach the conversation that delegated, the way a final answer would
+have — what it means for the run stays that conversation's to decide.
+
 **Context.** A run MAY declare the model's context window and the share of
 it at which the agent compacts — folds the conversation into a summary and
 carries on from it. Where a run declares no threshold, and where it
@@ -289,6 +297,9 @@ it cannot drift from the contract it indexes.
 | [053-two-prompts-while-running](./koans/053-two-prompts-while-running.yaml) | Two prompts are delivered while one turn is still running — one during each held invocation of a parallel batch, so both are accepted before either could be answered. Submissions form a queue: neither prompt may be lost, and their answers come in the order they arrived. Two processes are acceptable, and the koan is silent about which: both deliveries join the live conversation at its next turn boundary, or each waits and runs as its own turn, first-come first-served. |
 | [054-abort-clears-the-queue](./koans/054-abort-clears-the-queue.yaml) | A second prompt is delivered while a tool invocation is held open, and the caller then aborts — the delivery is provably accepted and provably unanswered when the abort lands. An abort covers every submission still unsettled, the queued prompt included: the trace ends here, so no model request may serve that prompt afterwards, and the run settles aborted. |
 | [055-abort-during-delegation](./koans/055-abort-during-delegation.yaml) | The caller aborts while a delegate is mid-task: the child's tool call has returned, and whatever the child asks for next goes unanswered. The abort stops the whole tree — the child does not press on to a final answer, the parent never hears one, and neither may ask the world for anything further. The run settles aborted. |
+| [056-subagent-model-failure](./koans/056-subagent-model-failure.yaml) | The delegate's model request is rejected with 401. The refusal ends the child's conversation, but it is the delegation's outcome, not the run's: it must reach the parent's model as what came of the task — without the child's request being re-issued — and the parent still closes the run normally. 013 ends the run because the conversation that lost its model was the run's own; a delegate losing it loses only the delegation. |
+| [057-delegation-in-a-batch](./koans/057-delegation-in-a-batch.yaml) | One model response asks for an ordinary tool call and a delegation at once. A parallel group may mix the two kinds, the way 047 mixes a workspace read with a declared tool: the call reaches the tool server, the delegate runs a conversation of its own, and both must be closed — the tool's result and the child's final answer both in hand — before the model is asked again. |
+| [058-nested-delegation](./koans/058-nested-delegation.yaml) | A delegate delegates in turn. The subagents a run declares are available to every conversation of the run, and isolation recurses with them: the parent sees only the coordinator's final, the coordinator sees only the field lookup's final, and the station code the grandchild's tool returned reaches neither of the conversations above it. |
 
 <!-- koan-index:end -->
 

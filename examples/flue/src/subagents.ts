@@ -21,6 +21,12 @@ export interface RunSubagentDef {
  * deliberately left unset on each definition: omitted, it inherits the
  * parent's turn (here, the `koan/default` model the run's own requests
  * use), which is what keeps a delegate's model requests reaching the mock.
+ *
+ * Each delegate's render mounts the run's subagents again: the run
+ * declares them for every conversation of the run (SPEC.md §3), so a
+ * delegate may delegate in turn. The self-reference cannot recurse
+ * unboundedly — a declaration's `agent` renders only when a delegation
+ * actually instantiates it.
  */
 export function useRunSubagents(
   subagents: RunSubagentDef[],
@@ -35,6 +41,7 @@ export function useRunSubagents(
       agent: () => {
         useRunTools(tools, toolsBaseUrl);
         useReadFileTool(workspaceDir);
+        useRunSubagents(subagents, tools, toolsBaseUrl, workspaceDir);
         return 'You are a subagent delegated a focused task by another agent. Complete it and reply with your final answer.';
       },
     });

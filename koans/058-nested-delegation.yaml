@@ -1,0 +1,44 @@
+name: nested-delegation
+description: >
+  A delegate delegates in turn. The subagents a run declares are
+  available to every conversation of the run, and isolation recurses
+  with them: the parent sees only the coordinator's final, the
+  coordinator sees only the field lookup's final, and the station code
+  the grandchild's tool returned reaches neither of the conversations
+  above it.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Have the coordinator gather the Tokyo reading."
+
+when:
+  - request: model
+    response: { subagent: coordinator, prompt: "Gather the Tokyo reading for the report." }
+  - subagent: coordinator
+    when:
+      - request: model
+        response: { subagent: field-lookup, prompt: "Read the Tokyo station." }
+      - subagent: field-lookup
+        when:
+          - request: model
+            response: { tool: get_weather, args: { city: "Tokyo" } }
+          - request: { tool: get_weather }
+            response: { status: 200, body: { temp: 31, station: "TK-77" } }
+          - request: model
+            response: "Tokyo reads 31°C at its station."
+      - request: model
+        response: "The Tokyo reading is 31°C."
+  - request: model
+    response: "Tokyo is at 31°C."
+
+then:
+  status: completed
+  output: { contains: "31" }

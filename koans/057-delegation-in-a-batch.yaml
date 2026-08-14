@@ -1,0 +1,38 @@
+name: delegation-in-a-batch
+description: >
+  One model response asks for an ordinary tool call and a delegation at
+  once. A parallel group may mix the two kinds, the way 047 mixes a
+  workspace read with a declared tool: the call reaches the tool server,
+  the delegate runs a conversation of its own, and both must be closed —
+  the tool's result and the child's final answer both in hand — before
+  the model is asked again.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Report Tokyo yourself and have the researcher cover Osaka."
+
+when:
+  - request: model
+    response:
+      - { tool: get_weather, args: { city: "Tokyo" } }
+      - { subagent: osaka-researcher, prompt: "Look up the current temperature in Osaka." }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - subagent: osaka-researcher
+    when:
+      - request: model
+        response: "Osaka is at 28°C."
+  - request: model
+    response: "Tokyo is at 31°C and Osaka at 28°C."
+
+then:
+  status: completed
+  output: { contains: "28" }

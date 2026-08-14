@@ -1,0 +1,72 @@
+name: second-fold
+description: >
+  The conversation crosses the run's threshold twice. Folding is not a
+  once-per-run event: the second crossing owes the same fold, the same
+  report to the caller, and the same carrying-forward that 028 shows for
+  the first. What the second fold folds is the conversation as it then
+  stands — the first summary and everything after it — so a code that
+  only the first summary still carried must survive into the second, and
+  from there into the final answer.
+
+given:
+  context:
+    window: 100000
+    compaction: 90%
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+turns:
+  - prompt: "Look up incident INC-4407 and confirm it is logged."
+    when:
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-4407" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-9-4471" } }
+      # 95000 of the declared 100000 is past the 90% the run compacts at.
+      - request: model
+        response:
+          body: "Incident INC-4407 is logged."
+          used_tokens: 95000
+
+  - prompt: "Now confirm INC-5513 as well."
+    when:
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          body: "Earlier: incident INC-4407 has operator code K-9-4471."
+          used_tokens: 20000
+          compaction: completed
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-5513" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "M-2-8830" } }
+      # The window fills a second time, against the folded history.
+      - request: model
+        response:
+          body: "Incident INC-5513 is logged."
+          used_tokens: 95000
+
+  - prompt: "Give me both operator codes."
+    when:
+      # The second fold: the first summary is by now the only thing still
+      # carrying K-9-4471, and it folds into this one rather than out of
+      # the conversation.
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          body: "Earlier: INC-4407 has operator code K-9-4471, and INC-5513 has M-2-8830."
+          used_tokens: 21000
+          compaction: completed
+      - request: model
+        response: "K-9-4471 and M-2-8830."
+    then:
+      status: completed
+      output: { contains: "K-9-4471" }

@@ -130,7 +130,9 @@ it at which the agent compacts — folds the conversation into a summary and
 carries on from it. Where a run declares no threshold, and where it
 declares no context at all, you MUST NOT compact. Where it declares one,
 the size to compare against is the last `usage.prompt_tokens` the model
-endpoint reported for that conversation, not an estimate of your own. Once
+endpoint reported for that conversation, not an estimate of your own —
+and each conversation's own: a delegate's usage never stands in for the
+run's, however large it grows. Once
 that size reaches the threshold, you MUST have compacted by the time the
 conversation's next turn issues its first model request — whether you fold
 it down before the running turn's next request, or once that turn settles,
@@ -300,6 +302,8 @@ it cannot drift from the contract it indexes.
 | [056-subagent-model-failure](./koans/056-subagent-model-failure.yaml) | The delegate's model request is rejected with 401. The refusal ends the child's conversation, but it is the delegation's outcome, not the run's: it must reach the parent's model as what came of the task — without the child's request being re-issued — and the parent still closes the run normally. 013 ends the run because the conversation that lost its model was the run's own; a delegate losing it loses only the delegation. |
 | [057-delegation-in-a-batch](./koans/057-delegation-in-a-batch.yaml) | One model response asks for an ordinary tool call and a delegation at once. A parallel group may mix the two kinds, the way 047 mixes a workspace read with a declared tool: the call reaches the tool server, the delegate runs a conversation of its own, and both must be closed — the tool's result and the child's final answer both in hand — before the model is asked again. |
 | [058-nested-delegation](./koans/058-nested-delegation.yaml) | A delegate delegates in turn. The subagents a run declares are available to every conversation of the run, and isolation recurses with them: the parent sees only the coordinator's final, the coordinator sees only the field lookup's final, and the station code the grandchild's tool returned reaches neither of the conversations above it. |
+| [059-second-fold](./koans/059-second-fold.yaml) | The conversation crosses the run's threshold twice. Folding is not a once-per-run event: the second crossing owes the same fold, the same report to the caller, and the same carrying-forward that 028 shows for the first. What the second fold folds is the conversation as it then stands — the first summary and everything after it — so a code that only the first summary still carried must survive into the second, and from there into the final answer. |
+| [060-subagent-usage](./koans/060-subagent-usage.yaml) | A delegate's conversation grows to 95000 of the run's declared 100000 window — past the 90% threshold — while the parent's own stays small. The size a threshold is compared against is each conversation's own reported usage, never another conversation's of the same run: the child's growth is not the parent's, so the parent must not fold, and the next turn opens on the history as it stands — the trace has no compaction step for one to consume (051). |
 
 <!-- koan-index:end -->
 

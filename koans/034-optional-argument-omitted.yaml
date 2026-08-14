@@ -1,0 +1,31 @@
+name: optional-argument-omitted
+description: >
+  The schema declares "units" but does not require it, and the model's
+  call leaves it out. Optional means optional: the agent must invoke the
+  tool with the arguments as the model wrote them — neither rejecting the
+  call as incomplete nor filling the missing field in itself.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+          units: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: model
+    response: "The weather in Tokyo is 31°C."
+
+then:
+  status: completed
+  output: { contains: "31" }

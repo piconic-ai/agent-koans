@@ -1,0 +1,35 @@
+name: nested-object-argument
+description: >
+  One argument is an object of its own, whose fields the schema never
+  describes. The agent must pass the whole structure through to the tool
+  as the model wrote it — not flattened, not pruned to the fields the
+  schema names.
+
+given:
+  tools:
+    search_incidents:
+      description: "Search the incident log"
+      input_schema:
+        type: object
+        properties:
+          query: { type: string }
+          filter: { type: object }
+        required: [query]
+
+prompt: "Find high-severity checkout incidents, at most five of them."
+
+when:
+  - request: model
+    response:
+      tool: search_incidents
+      args:
+        query: "checkout"
+        filter: { severity: "high", limit: 5 }
+  - request: { tool: search_incidents }
+    response: { status: 200, body: { incidents: ["INC-4407"] } }
+  - request: model
+    response: "One high-severity checkout incident: INC-4407."
+
+then:
+  status: completed
+  output: { contains: "INC-4407" }

@@ -1,0 +1,49 @@
+name: compaction-asked-below-threshold
+description: >
+  The caller asks for a fold while the conversation sits far below the
+  threshold the run declared. The threshold says when the agent folds on
+  its own, and 051 shows it holding here; the ask is the caller's, and it
+  folds the conversation anyway.
+
+given:
+  context:
+    window: 100000
+    compaction: 90%
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+turns:
+  - prompt: "Look up incident INC-4407 and confirm it is logged."
+    when:
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-4407" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-9-4471" } }
+      - request: model
+        response:
+          body: "Incident INC-4407 is logged."
+          used_tokens: 40000
+
+  - compact: true
+    when:
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          body: "Earlier: incident INC-4407 has operator code K-9-4471."
+          used_tokens: 8000
+          compaction: completed
+
+  - prompt: "What was that incident's operator code?"
+    when:
+      - request: model
+        response: "The operator code is K-9-4471."
+    then:
+      status: completed
+      output: { contains: "K-9-4471" }

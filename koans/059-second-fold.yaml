@@ -6,7 +6,10 @@ description: >
   the first. What the second fold folds is the conversation as it then
   stands — the first summary and everything after it — so a code that
   only the first summary still carried must survive into the second, and
-  from there into the final answer.
+  from there into the final answer. How many requests that second fold
+  costs is the implementation's own choice (SPEC.md §3): one-request and
+  two-request (a history summary and a still-open turn's own, however the
+  two requests order) shapes both conform.
 
 given:
   context:
@@ -54,19 +57,37 @@ turns:
           used_tokens: 95000
 
   - prompt: "Give me both operator codes."
-    when:
-      # The second fold: the first summary is by now the only thing still
-      # carrying K-9-4471, and it folds into this one rather than out of
-      # the conversation.
-      - request:
-          type: model
-          purpose: compaction
-        response:
-          body: "Earlier: INC-4407 has operator code K-9-4471, and INC-5513 has M-2-8830."
-          used_tokens: 21000
-          compaction: completed
-      - request: model
-        response: "K-9-4471 and M-2-8830."
+    # The second fold: the first summary is by now the only thing still
+    # carrying K-9-4471, and it must survive whichever conforming shape
+    # this fold takes.
+    one_of:
+      one-request:
+        # The whole conversation folds down in a single request, the way
+        # the first fold (turn 2, above) does.
+        - request:
+            type: model
+            purpose: compaction
+          response:
+            body: "Earlier: INC-4407 has operator code K-9-4471, and INC-5513 has M-2-8830."
+            used_tokens: 21000
+            compaction: completed
+        - request: model
+          response: "K-9-4471 and M-2-8830."
+      split-turn:
+        # Two requests answer this one fold — one for the older history,
+        # one for the turn that was still open — arriving in either
+        # order; both replies must still surface in what comes next.
+        - request:
+            type: model
+            purpose: compaction
+          response:
+            body:
+              - "Earlier: INC-4407 has operator code K-9-4471."
+              - "This turn: INC-5513 was looked up; its operator code is M-2-8830."
+            used_tokens: 21000
+            compaction: completed
+        - request: model
+          response: "K-9-4471 and M-2-8830."
     then:
       status: completed
       output: { contains: "K-9-4471" }

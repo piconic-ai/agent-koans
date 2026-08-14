@@ -5,5 +5,4 @@ delegation:
 
 skip:
   014-malformed-arguments: "pi-ai's parseStreamingJson silently repairs malformed JSON via partial-json instead of erroring, has no strict mode, and useTool() never exposes the raw wire string to intercept (upstream: @earendil-works/pi-ai)."
-  059-second-fold: "Flue compacts eagerly when the reply that crossed the threshold lands, so a second fold always cuts mid-turn and issues two summarization requests (history + turn prefix); a koan scripts a fold as exactly one model request, and the runtime offers no way to defer or merge the split (upstream: @flue/runtime)."
   060-subagent-usage: "Flue resolves threshold compaction for delegate conversations from the same session config as the parent's, with no per-delegate override (useModel is unavailable in a subagent render and SubagentDefinition carries no compaction field), and compacts eagerly on the reply that crossed the threshold — a delegate whose final reply reports past-threshold usage spends an unscripted summarization request (upstream: @flue/runtime)."

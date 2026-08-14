@@ -107,20 +107,13 @@ interface ConversationScript {
   forbidden: Array<{ value: string; reason: string }>;
 }
 
-// Builds the negative information-flow sets. Every value
-// scripted into one conversation is forbidden from appearing in every
-// other conversation's requests, with one exception: a value that is
-// also legitimately visible *in the target* (its own `allowed` set,
-// below) is dropped, since `includes` could not tell the two apart from
-// a leaked one. This is what makes a crossing sanctioned, by construction
-// rather than by hand-picking which value kinds cross which relation: a
-// child's briefing is visible to the parent that issued it (the parent's
-// own `issuedPrompts`), a child's final reply is visible to the parent
-// that received it (`receivedFinals`), and both are visible to the child
-// itself (its own openings/replies) — nothing else needs to single out
-// parent/child/sibling cases, or omit a value kind (file contents, most
-// notably) from one of them by oversight.
-function buildForbidden(trace: Trace): Map<string, ConversationScript['forbidden']> {
+// Every value scripted into one conversation — its opening(s), replies,
+// tool-response scalars, file contents, and what a delegation carried
+// each way. Shared by `buildForbidden` (below, the negative-flow set) and
+// `buildIdentifying` (routing's third tier): both start from the same
+// "what does this conversation legitimately carry" list, just apply
+// opposite questions to it.
+function conversationValues(trace: Trace): Map<string, string[]> {
   // Every user turn's prompt, not just the first: a `turns:` koan's main
   // conversation opens more than one (conv.followUps).
   const openings = (conv: Conversation): string[] => [
@@ -163,11 +156,30 @@ function buildForbidden(trace: Trace): Map<string, ConversationScript['forbidden
       ...receivedFailures(conv),
     ]);
   }
+  return allowed;
+}
 
+// Builds the negative information-flow sets. Every value
+// scripted into one conversation is forbidden from appearing in every
+// other conversation's requests, with one exception: a value that is
+// also legitimately visible *in the target* (its own `allowed` set,
+// below) is dropped, since `includes` could not tell the two apart from
+// a leaked one. This is what makes a crossing sanctioned, by construction
+// rather than by hand-picking which value kinds cross which relation: a
+// child's briefing is visible to the parent that issued it (the parent's
+// own `issuedPrompts`), a child's final reply is visible to the parent
+// that received it (`receivedFinals`), and both are visible to the child
+// itself (its own openings/replies) — nothing else needs to single out
+// parent/child/sibling cases, or omit a value kind (file contents, most
+// notably) from one of them by oversight.
+function buildForbidden(
+  allowed: Map<string, string[]>,
+  conversations: Conversation[],
+): Map<string, ConversationScript['forbidden']> {
   const forbidden = new Map<string, ConversationScript['forbidden']>();
-  for (const target of trace.conversations) {
+  for (const target of conversations) {
     const entries: ConversationScript['forbidden'] = [];
-    for (const source of trace.conversations) {
+    for (const source of conversations) {
       if (source.name === target.name) continue;
       const values = allowed.get(source.name) ?? [];
       const visible = allowed.get(target.name) ?? [];
@@ -180,6 +192,29 @@ function buildForbidden(trace: Trace): Map<string, ConversationScript['forbidden
     forbidden.set(target.name, entries);
   }
   return forbidden;
+}
+
+// Values routing's third tier may match a request on: for each
+// conversation, the values `conversationValues` collected for it that no
+// OTHER conversation's own values contain — so a match can only mean
+// "this text came from this conversation's script", never "this text
+// happens to also be visible over there". A fold-member request that
+// carries none of these routes nowhere, the same as one that carries
+// neither a briefing nor a served summary.
+function buildIdentifying(allowed: Map<string, string[]>): Map<string, string[]> {
+  const identifying = new Map<string, string[]>();
+  for (const [name, values] of allowed) {
+    const unique = [...new Set(values)].filter((value) => {
+      if (value.length === 0) return false;
+      for (const [otherName, otherValues] of allowed) {
+        if (otherName === name) continue;
+        if (otherValues.some((v) => v.includes(value))) return false;
+      }
+      return true;
+    });
+    identifying.set(name, unique);
+  }
+  return identifying;
 }
 
 // Never matched against wording: failure phrasing is framework-specific,
@@ -284,21 +319,28 @@ function checkCoherence(
 }
 
 // Asks for less than `checkTurnBoundary` does — the new turn's prompt and
-// the summary, but not the earlier turns' values verbatim: carrying those
-// is what the fold was asked to stop doing.
+// every summary the fold was served, but not the earlier turns' values
+// verbatim: carrying those is what the fold was asked to stop doing. A
+// fold served by more than one request (koan-spec.ts's header) still
+// owes each of its replies, whatever it combined them into — a checked
+// value is never the combined text itself, since how a fold's several
+// replies become one carried-forward history is the implementation's own
+// choice (SPEC.md §3).
 function checkCompacted(
-  summary: string,
+  summaries: string[],
   boundary: TurnBoundary | undefined,
   requestNo: number,
   messages: ChatMessage[],
   violations: string[],
 ): void {
   const text = requestText(messages);
-  if (!text.includes(summary)) {
-    violations.push(
-      `request #${requestNo}: the compaction's summary did not reach the conversation it summarized — ` +
-        `the reply to a compaction request must be folded back in`,
-    );
+  for (const summary of summaries) {
+    if (!text.includes(summary)) {
+      violations.push(
+        `request #${requestNo}: a compaction's summary did not reach the conversation it summarized ` +
+          `(${JSON.stringify(summary)} is missing) — every reply a fold's request(s) received must be folded back in`,
+      );
+    }
   }
   if (boundary !== undefined && !text.includes(boundary.prompt)) {
     violations.push(`request #${requestNo}: the new turn's prompt is missing from the request`);
@@ -395,7 +437,9 @@ export function startMockLlm(
   const issuedToolCallIds = new Set<string>();
   const givenToolNames = Object.keys(koan.given.tools);
   const scripts = trace.conversations.map((conv): ConversationScript => ({ conv, served: 0, forbidden: [] }));
-  const forbidden = buildForbidden(trace);
+  const allowed = conversationValues(trace);
+  const forbidden = buildForbidden(allowed, trace.conversations);
+  const identifying = buildIdentifying(allowed);
   for (const script of scripts) {
     script.forbidden = forbidden.get(script.conv.name) ?? [];
     state.served[script.conv.name] = 0;
@@ -422,9 +466,21 @@ export function startMockLlm(
     // the fold on its summary identifies it instead — which the contract
     // already requires the next request to carry.
     const text = requestText(messages);
-    return scripts.find((s) =>
+    const byServedSummary = scripts.find((s) =>
       s.conv.turns.slice(0, s.served).some((t) => t.compaction !== undefined && text.includes(t.reply as string)),
     );
+    if (byServedSummary) return byServedSummary;
+    // A fold served by more than one request need not carry either of the
+    // above in every one of them (a request that only summarizes a
+    // conversation's own in-progress turn, say — SPEC.md §3: what a fold's
+    // request carries is the implementation's choice). Among the
+    // conversations currently owed a fold request, attribute this one to
+    // whichever's scripted values — unique to it, by construction
+    // (buildIdentifying) — the text carries; ambiguous or unmatched stays
+    // unrouted, same as an ordinary request naming nothing scripted.
+    const awaitingFold = scripts.filter((s) => s.conv.turns[s.served]?.compaction !== undefined);
+    const matches = awaitingFold.filter((s) => (identifying.get(s.conv.name) ?? []).some((v) => text.includes(v)));
+    return matches.length === 1 ? matches[0] : undefined;
   };
 
   const server = http.createServer(async (req, res) => {
@@ -453,7 +509,8 @@ export function startMockLlm(
     if (!script) {
       state.violations.push(
         `request #${requestNo} matches no scripted conversation — its first user message carries neither the task nor any briefing, ` +
-          `and it carries no summary of a conversation already folded down`,
+          `it carries no summary of a conversation already folded down, and it carries nothing unique to a conversation ` +
+          `currently owed a fold request`,
       );
       return respond(400, { error: { message: 'mock LLM: request matches no scripted conversation' } });
     }
@@ -521,7 +578,7 @@ export function startMockLlm(
       // The request after a fold is the one that must carry its summary,
       // and it is usually the first of the turn the caller prompted next.
       if (previous.compaction === 'completed') {
-        checkCompacted(previous.reply as string, followUp, requestNo, messages, state.violations);
+        checkCompacted(previous.foldSummaries!, followUp, requestNo, messages, state.violations);
       } else if (followUp) {
         // Nothing was folded, so nothing was replaced: this request owes
         // the earlier turns the way any other follow-up does.

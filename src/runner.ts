@@ -168,7 +168,11 @@ function foldsEnded(run: RunState): number {
 // implementation's, and the same failure in two vocabularies is the same
 // failure.
 function judgeReportedFolds(trace: Trace, run: RunState): string[] {
-  const folds = trace.conversations.flatMap((c) => c.turns.filter((t) => t.compaction));
+  // One fold, one report — however many requests it cost (koan-spec.ts's
+  // header): only a group's leader (`foldMember` `0`, or absent for a
+  // failed fold, which is always one request) counts, so a fold served by
+  // several requests is still counted once here.
+  const folds = trace.conversations.flatMap((c) => c.turns.filter((t) => t.compaction && (t.foldMember ?? 0) === 0));
   const reported = (run.events ?? []).filter((e) => e.type === 'compaction');
   // A fold's beginning is the request itself; the koan writes only how it
   // ended, so that is the only phase read off the trace.

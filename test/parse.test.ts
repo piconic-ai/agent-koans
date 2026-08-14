@@ -395,7 +395,7 @@ const rows: Row[] = [
             response: ok
         extra: 1
     `),
-    message: 'turns[0] has unknown key "extra" — a prompt entry carries only "prompt", "when", and "then"',
+    message: 'turns[0] has unknown key "extra" — a prompt entry carries only "prompt", "when", "one_of", and "then"',
   },
   {
     rule: 'a turn\'s "when" is a non-empty list',
@@ -1238,6 +1238,142 @@ const rows: Row[] = [
     `)}`,
     message:
       'turns[1].when scripts 1 step(s) — an ask brings about the fold and nothing else, since without a prompt there is no other work',
+  },
+  {
+    rule: "a fold's body list needs at least two summaries",
+    yaml: `name: x\n${dedent(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - compact: true
+          when:
+            - request: { type: model, purpose: compaction }
+              response: { body: ["only one"], used_tokens: 5, compaction: completed }
+    `)}`,
+    message:
+      'turns[1].when[0].response.body is a list of 1 — a fold served by more than one request needs at least two summaries; write the single string form for one',
+  },
+  {
+    rule: "a fold's list summary is a non-empty string",
+    yaml: `name: x\n${dedent(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - compact: true
+          when:
+            - request: { type: model, purpose: compaction }
+              response: { body: ["one", ""], used_tokens: 5, compaction: completed }
+    `)}`,
+    message: 'turns[1].when[0].response.body[1] must be a non-empty string',
+  },
+  {
+    rule: 'no summary of a fold may equal or contain another',
+    yaml: `name: x\n${dedent(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - compact: true
+          when:
+            - request: { type: model, purpose: compaction }
+              response: { body: ["ab", "xab y"], used_tokens: 5, compaction: completed }
+    `)}`,
+    message:
+      'turns[1].when[0].response.body[0] and [1] are not distinct — no summary may equal or contain another, since the request after the fold must be shown to carry each on its own',
+  },
+  {
+    rule: '"one_of" needs at least two variants',
+    yaml: turnsKoan(`
+      - prompt: a
+        one_of:
+          only-one:
+            - request: model
+              response: ok
+    `),
+    message: 'turns[0].one_of needs at least two variants — use "when" for a single trace',
+  },
+  {
+    rule: 'a turn carries either "when" or "one_of", not both',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request: model
+            response: ok
+        one_of:
+          x:
+            - request: model
+              response: ok
+          y:
+            - request: model
+              response: ok2
+    `),
+    message: 'turns[0] carries both "when" and "one_of" — a turn\'s own trace is one or the other',
+  },
+  {
+    rule: 'a koan writes "one_of" on at most one turn',
+    yaml: `name: x\n${dedent(`
+      turns:
+        - prompt: a
+          one_of:
+            x:
+              - request: model
+                response: ok
+            y:
+              - request: model
+                response: ok2
+        - prompt: b
+          one_of:
+            p:
+              - request: model
+                response: done
+            q:
+              - request: model
+                response: done2
+    `)}`,
+    message: 'turns[1].one_of: a koan may write "one_of" on at most one turn — turns[0] already does',
+  },
+  {
+    rule: "an ask's one_of variant brings about a fold and nothing else",
+    yaml: `name: x\n${dedent(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - compact: true
+          one_of:
+            bad:
+              - request: model
+                response: ok2
+            good:
+              - request: { type: model, purpose: compaction }
+                response: { body: "so far", used_tokens: 5, compaction: completed }
+    `)}`,
+    message:
+      'turns[1].one_of.bad scripts 1 step(s) — an ask brings about the fold and nothing else, since without a prompt there is no other work',
+  },
+  {
+    rule: "a fold's every request counts against the model-request budget",
+    yaml: `name: x\n${dedent(`
+      given:
+        limits:
+          max_model_requests: 2
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - compact: true
+          when:
+            - request: { type: model, purpose: compaction }
+              response: { body: ["one", "two"], used_tokens: 5, compaction: completed }
+    `)}`,
+    message: 'turns scripts 3 model requests, more than given.limits.max_model_requests (2) permits',
   },
   {
     rule: 'a tool request carries only "tool" and "args"',

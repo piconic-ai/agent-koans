@@ -1,0 +1,30 @@
+name: tool-failure-without-body
+description: >
+  The tool server fails with a status and nothing else. There is no error
+  text to pass on, so the status itself is what the model must be told —
+  a failure the agent reports as a bare result would leave the model
+  reading it as success.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Osaka and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Osaka" } }
+  - request: { tool: get_weather }
+    response: { status: 500 }
+  - request: model
+    response: "The weather service failed, so I have no reading for Osaka."
+
+then:
+  status: completed
+  output: { contains: "no reading for Osaka" }

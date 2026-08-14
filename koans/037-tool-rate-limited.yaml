@@ -1,0 +1,33 @@
+name: tool-rate-limited
+description: >
+  The tool server answers 429. A rate limit is a tool failure like any
+  other: it must reach the model, and the agent must not retry it on its
+  own — the follow-up call is the model's, and it succeeds.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 429, body: { error: "rate_limited" } }
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: model
+    response: "The weather in Tokyo is 31°C."
+
+then:
+  status: completed
+  output: { contains: "31" }

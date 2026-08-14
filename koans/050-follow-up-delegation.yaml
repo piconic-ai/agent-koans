@@ -1,0 +1,42 @@
+name: follow-up-delegation
+description: >
+  A follow-up turn delegates. The parent must carry its own earlier turn
+  into this one, and the child must still see only its briefing: a
+  conversation's history belongs to the conversation that holds it, and a
+  delegate opens a new one however long the parent's has grown.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+turns:
+  - prompt: "What is the capital of Japan?"
+    when:
+      - request: model
+        response: "The capital of Japan is Tokyo."
+    then:
+      status: completed
+      output: { contains: "Tokyo" }
+  - prompt: "Now have a researcher find the current temperature in Osaka."
+    when:
+      - request: model
+        response: { subagent: researcher, prompt: "Look up the current temperature in Osaka." }
+      - subagent: researcher
+        when:
+          - request: model
+            response: { tool: get_weather, args: { city: "Osaka" } }
+          - request: { tool: get_weather }
+            response: { status: 200, body: { temp: 28, station: "OS-12" } }
+          - request: model
+            response: "Osaka is 28°C."
+      - request: model
+        response: "The researcher reports 28°C in Osaka."
+    then:
+      status: completed
+      output: { contains: "28" }

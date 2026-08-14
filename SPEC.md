@@ -277,6 +277,8 @@ it cannot drift from the contract it indexes.
 | [046-model-api-failure-midway](./koans/046-model-api-failure-midway.yaml) | The model endpoint rejects a request made in the middle of the run, after a tool call has already succeeded. Work already done is no reason to press on: the agent must not re-issue the request, must not invoke anything further, and must end the run as failed. |
 | [047-workspace-read-in-a-batch](./koans/047-workspace-read-in-a-batch.yaml) | One response asks for a workspace read and a declared tool at once. A parallel group may mix the two kinds: the read is executed internally and never reaches the tool server, the declared call does reach it, and both must be closed before the model is asked again — an agent that runs the two kinds in separate rounds leaves one of them open. |
 | [048-workspace-two-files](./koans/048-workspace-two-files.yaml) | Two workspace files, read one after the other. Each read must flow into the conversation's next model request, so the second read does not displace the first: the final answer is drawn from both files. |
+| [049-three-turns](./koans/049-three-turns.yaml) | A third turn, where 022 has two. History does not thin out as it grows: the last turn's request must still carry both earlier turns, which is what lets the model answer from them without looking anything up again. |
+| [050-follow-up-delegation](./koans/050-follow-up-delegation.yaml) | A follow-up turn delegates. The parent must carry its own earlier turn into this one, and the child must still see only its briefing: a conversation's history belongs to the conversation that holds it, and a delegate opens a new one however long the parent's has grown. |
 
 <!-- koan-index:end -->
 

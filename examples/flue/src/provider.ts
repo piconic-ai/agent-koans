@@ -18,6 +18,17 @@ import type { Config } from './config.js';
  */
 export const CONTEXT_WINDOW = 128_000;
 
+/**
+ * The delegate model's window. Large and finite rather than the model's
+ * usual size, because a delegate conversation is a conversation the run
+ * declared no context for, and it must not threshold-fold on its own
+ * (SPEC.md §3, koans/060) — a window no conversation's usage ever reaches
+ * keeps Flue's `usage >= contextWindow - reserveTokens` trigger from firing.
+ * Not `Infinity` or `0`: Flue treats `contextWindow <= 0` as "unknown", a
+ * different code path whose behavior this fix does not want to depend on.
+ */
+export const DELEGATE_CONTEXT_WINDOW = 1_000_000_000;
+
 // A fold the caller asked with words of its own: they belong to the
 // request Flue is about to send, and Flue's summarizing prompt has no
 // room for them (compaction.ts).
@@ -55,6 +66,18 @@ export function createKoanProvider(model: Config['model']) {
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: CONTEXT_WINDOW,
+        maxTokens: 8192,
+      },
+      {
+        id: 'delegate',
+        name: 'Mock model (delegate)',
+        api: 'openai-completions',
+        provider: 'koan',
+        baseUrl: model.baseUrl,
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: DELEGATE_CONTEXT_WINDOW,
         maxTokens: 8192,
       },
     ],

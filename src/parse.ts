@@ -1547,7 +1547,11 @@ function usedTokensFitTheWindow(koan: KoanFile): Problem | undefined {
             return problem(`${turn.at}[${i}]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of`);
           }
         } else if (written > context.window) {
-          return problem(`${turn.at}[${i}]: used_tokens (${written}) is larger than given.context.window (${context.window})`);
+          // Named by the declaration that actually applies: a delegate's
+          // overflow against its own declared window would otherwise be
+          // reported against the run's, which may not even exist.
+          const declared = name === undefined ? 'given.context.window' : `given.subagents["${name}"].context.window`;
+          return problem(`${turn.at}[${i}]: used_tokens (${written}) is larger than ${declared} (${context.window})`);
         }
         if (written < used && step.kind !== 'compaction') {
           return problem(

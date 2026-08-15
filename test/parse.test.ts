@@ -1119,7 +1119,7 @@ const rows: Row[] = [
         - request: model
           response: ok
     `),
-    message: 'when[1].when[0]: used_tokens (101) is larger than given.context.window (100)',
+    message: 'when[1].when[0]: used_tokens (101) is larger than given.subagents["researcher"].context.window (100)',
   },
   {
     rule: "a delegate's own threshold, once crossed, forbids a further model request the same way the run's does",

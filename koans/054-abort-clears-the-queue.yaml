@@ -1,0 +1,30 @@
+name: abort-clears-the-queue
+description: >
+  A second prompt is delivered while a tool invocation is held open, and
+  the caller then aborts — the delivery is provably accepted and provably
+  unanswered when the abort lands. An abort covers every submission still
+  unsettled, the queued prompt included: the trace ends here, so no model
+  request may serve that prompt afterwards, and the run settles aborted.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+    prompt: "Also report Osaka."
+  - abort
+
+then:
+  status: aborted

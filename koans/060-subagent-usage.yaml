@@ -1,0 +1,40 @@
+name: subagent-usage
+description: >
+  A delegate's conversation grows to 95000 of the run's declared 100000
+  window — past the 90% threshold — while the parent's own stays small.
+  The size a threshold is compared against is each conversation's own
+  reported usage, never another conversation's of the same run: the
+  child's growth is not the parent's, so the parent must not fold, and
+  the next turn opens on the history as it stands — the trace has no
+  compaction step for one to consume (051).
+
+given:
+  context:
+    window: 100000
+    compaction: 90%
+  tools: {}
+
+turns:
+  - prompt: "Have the researcher study Tokyo in depth."
+    when:
+      - request: model
+        response: { subagent: researcher, prompt: "Study Tokyo in depth and report the temperature." }
+      - subagent: researcher
+        when:
+          # The child's conversation, not the parent's, is what grew.
+          - request: model
+            response:
+              body: "Tokyo is at 31°C."
+              used_tokens: 95000
+      - request: model
+        response:
+          body: "The researcher reports Tokyo at 31°C."
+          used_tokens: 12000
+
+  - prompt: "What temperature did that come to?"
+    when:
+      - request: model
+        response: "31°C."
+    then:
+      status: completed
+      output: { contains: "31" }

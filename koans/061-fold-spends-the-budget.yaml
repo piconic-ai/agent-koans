@@ -1,0 +1,35 @@
+name: fold-spends-the-budget
+description: >
+  The summarizing request is an ordinary request to the model endpoint,
+  so it draws from the run's model-request budget the way any other
+  request does (016). A budget of 2 is spent by one reply and one
+  asked-for fold; the follow-up prompt finds nothing left, and the run
+  must end aborted without asking the model anything — the trace has no
+  request left for it to make.
+
+given:
+  limits: { max_model_requests: 2 }
+  context:
+    window: 100000
+    compaction: off
+  tools: {}
+
+turns:
+  - prompt: "Confirm incident INC-4407 is logged."
+    when:
+      - request: model
+        response: { body: "Incident INC-4407 is logged.", used_tokens: 1200 }
+
+  - compact: true
+    when:
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          body: "Earlier: incident INC-4407 is logged."
+          used_tokens: 300
+          compaction: completed
+
+  - prompt: "Anything else on file?"
+    then:
+      status: aborted

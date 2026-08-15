@@ -107,6 +107,58 @@ interface ConversationScript {
   forbidden: Array<{ value: string; reason: string }>;
 }
 
+// Every value scripted into one conversation — its opening(s), replies,
+// tool-response scalars, file contents, and what a delegation carried
+// each way. Shared by `buildForbidden` (below, the negative-flow set) and
+// `buildIdentifying` (routing's third tier): both start from the same
+// "what does this conversation legitimately carry" list, just apply
+// opposite questions to it.
+function conversationValues(trace: Trace): Map<string, string[]> {
+  // Every user turn's prompt, not just the first: a `turns:` koan's main
+  // conversation opens more than one (conv.followUps).
+  const openings = (conv: Conversation): string[] => [
+    conv.briefing,
+    ...(conv.followUps?.map((f) => f.prompt) ?? []),
+  ];
+  const replies = (conv: Conversation): string[] =>
+    conv.turns.map((t) => t.reply).filter((r): r is string => r !== undefined);
+  const toolScalars = (conv: Conversation): string[] =>
+    conv.turns.flatMap((t) =>
+      (t.call_tools ?? []).flatMap((m) =>
+        m.tool_responds && 'status' in m.tool_responds ? scalarLeaves(m.tool_responds.body) : [],
+      ),
+    );
+  const fileContents = (conv: Conversation): string[] =>
+    conv.turns.flatMap((t) => (t.call_tools ?? []).flatMap((m) => (m.readsFile !== undefined ? [m.readsFile] : [])));
+  const issuedPrompts = (conv: Conversation): string[] =>
+    conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.prompt));
+  const receivedFinals = (conv: Conversation): string[] =>
+    conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.final));
+  // A failure crosses the same seam a final reply does: the endpoint's
+  // refusal is scripted into the conversation it refused, and it is the
+  // delegation's outcome in the conversation that delegated.
+  const failureValues = (fails: { status: number; body?: unknown } | undefined): string[] =>
+    fails === undefined ? [] : [String(fails.status), ...scalarLeaves(fails.body)];
+  const ownFailures = (conv: Conversation): string[] => conv.turns.flatMap((t) => failureValues(t.fails));
+  const receivedFailures = (conv: Conversation): string[] =>
+    conv.turns.flatMap((t) => (t.delegations ?? []).flatMap((d) => failureValues(d.fails)));
+
+  const allowed = new Map<string, string[]>();
+  for (const conv of trace.conversations) {
+    allowed.set(conv.name, [
+      ...openings(conv),
+      ...replies(conv),
+      ...toolScalars(conv),
+      ...fileContents(conv),
+      ...issuedPrompts(conv),
+      ...receivedFinals(conv),
+      ...ownFailures(conv),
+      ...receivedFailures(conv),
+    ]);
+  }
+  return allowed;
+}
+
 // Builds the negative information-flow sets. Every value
 // scripted into one conversation is forbidden from appearing in every
 // other conversation's requests, with one exception: a value that is
@@ -120,42 +172,14 @@ interface ConversationScript {
 // itself (its own openings/replies) — nothing else needs to single out
 // parent/child/sibling cases, or omit a value kind (file contents, most
 // notably) from one of them by oversight.
-function buildForbidden(trace: Trace): Map<string, ConversationScript['forbidden']> {
-  // Every user turn's prompt, not just the first: a `turns:` koan's main
-  // conversation opens more than one (conv.followUps).
-  const openings = (conv: Conversation): string[] => [
-    conv.briefing,
-    ...(conv.followUps?.map((f) => f.prompt) ?? []),
-  ];
-  const replies = (conv: Conversation): string[] =>
-    conv.turns.map((t) => t.reply).filter((r): r is string => r !== undefined);
-  const toolScalars = (conv: Conversation): string[] =>
-    conv.turns.flatMap((t) =>
-      (t.call_tools ?? []).flatMap((m) => (m.tool_responds ? scalarLeaves(m.tool_responds.body) : [])),
-    );
-  const fileContents = (conv: Conversation): string[] =>
-    conv.turns.flatMap((t) => (t.call_tools ?? []).flatMap((m) => (m.readsFile !== undefined ? [m.readsFile] : [])));
-  const issuedPrompts = (conv: Conversation): string[] =>
-    conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.prompt));
-  const receivedFinals = (conv: Conversation): string[] =>
-    conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.final));
-
-  const allowed = new Map<string, string[]>();
-  for (const conv of trace.conversations) {
-    allowed.set(conv.name, [
-      ...openings(conv),
-      ...replies(conv),
-      ...toolScalars(conv),
-      ...fileContents(conv),
-      ...issuedPrompts(conv),
-      ...receivedFinals(conv),
-    ]);
-  }
-
+function buildForbidden(
+  allowed: Map<string, string[]>,
+  conversations: Conversation[],
+): Map<string, ConversationScript['forbidden']> {
   const forbidden = new Map<string, ConversationScript['forbidden']>();
-  for (const target of trace.conversations) {
+  for (const target of conversations) {
     const entries: ConversationScript['forbidden'] = [];
-    for (const source of trace.conversations) {
+    for (const source of conversations) {
       if (source.name === target.name) continue;
       const values = allowed.get(source.name) ?? [];
       const visible = allowed.get(target.name) ?? [];
@@ -168,6 +192,29 @@ function buildForbidden(trace: Trace): Map<string, ConversationScript['forbidden
     forbidden.set(target.name, entries);
   }
   return forbidden;
+}
+
+// Values routing's third tier may match a request on: for each
+// conversation, the values `conversationValues` collected for it that no
+// OTHER conversation's own values contain — so a match can only mean
+// "this text came from this conversation's script", never "this text
+// happens to also be visible over there". A fold-member request that
+// carries none of these routes nowhere, the same as one that carries
+// neither a briefing nor a served summary.
+function buildIdentifying(allowed: Map<string, string[]>): Map<string, string[]> {
+  const identifying = new Map<string, string[]>();
+  for (const [name, values] of allowed) {
+    const unique = [...new Set(values)].filter((value) => {
+      if (value.length === 0) return false;
+      for (const [otherName, otherValues] of allowed) {
+        if (otherName === name) continue;
+        if (otherValues.some((v) => v.includes(value))) return false;
+      }
+      return true;
+    });
+    identifying.set(name, unique);
+  }
+  return identifying;
 }
 
 // Never matched against wording: failure phrasing is framework-specific,
@@ -230,6 +277,9 @@ function checkCoherence(
     // phrasing is implementation-specific.
     const responds = member.tool_responds;
     if (!responds) continue;
+    // A severed connection scripted no status and no body, so there is
+    // nothing to look for — the closure by id above is the whole check.
+    if (!('status' in responds)) continue;
 
     const { status, body } = responds;
     const failed = status >= 400;
@@ -247,9 +297,19 @@ function checkCoherence(
 
   // Positive flow: each delegate's final reply must reach
   // the parent's next model request — for parallel delegations, every
-  // sibling's, which is what makes the parent join all of them.
+  // sibling's, which is what makes the parent join all of them. A child
+  // that failed instead of answering has its failure carried the same
+  // way: the parent's model cannot react to an outcome it was not told.
   for (const d of delegations) {
-    if (!text.includes(d.final)) {
+    if (d.fails !== undefined) {
+      const indicators = [String(d.fails.status), ...scalarLeaves(d.fails.body)];
+      if (!indicators.some((s) => text.includes(s))) {
+        violations.push(
+          `request #${requestNo}: subagent "${d.subagent}"'s model API failure did not reach ${label(conv)} — ` +
+            `the request carries none of ${JSON.stringify(indicators)}, so the model cannot know the delegation failed`,
+        );
+      }
+    } else if (d.final.length > 0 && !text.includes(d.final)) {
       violations.push(
         `request #${requestNo}: subagent "${d.subagent}"'s final reply did not reach ${label(conv)} — ` +
           `the delegation must be closed with the child's final answer`,
@@ -259,21 +319,28 @@ function checkCoherence(
 }
 
 // Asks for less than `checkTurnBoundary` does — the new turn's prompt and
-// the summary, but not the earlier turns' values verbatim: carrying those
-// is what the fold was asked to stop doing.
+// every summary the fold was served, but not the earlier turns' values
+// verbatim: carrying those is what the fold was asked to stop doing. A
+// fold served by more than one request (koan-spec.ts's header) still
+// owes each of its replies, whatever it combined them into — a checked
+// value is never the combined text itself, since how a fold's several
+// replies become one carried-forward history is the implementation's own
+// choice (SPEC.md §3).
 function checkCompacted(
-  summary: string,
+  summaries: string[],
   boundary: TurnBoundary | undefined,
   requestNo: number,
   messages: ChatMessage[],
   violations: string[],
 ): void {
   const text = requestText(messages);
-  if (!text.includes(summary)) {
-    violations.push(
-      `request #${requestNo}: the compaction's summary did not reach the conversation it summarized — ` +
-        `the reply to a compaction request must be folded back in`,
-    );
+  for (const summary of summaries) {
+    if (!text.includes(summary)) {
+      violations.push(
+        `request #${requestNo}: a compaction's summary did not reach the conversation it summarized ` +
+          `(${JSON.stringify(summary)} is missing) — every reply a fold's request(s) received must be folded back in`,
+      );
+    }
   }
   if (boundary !== undefined && !text.includes(boundary.prompt)) {
     violations.push(`request #${requestNo}: the new turn's prompt is missing from the request`);
@@ -307,7 +374,9 @@ function turnValues(conv: Conversation, uptoIndex: number): string[] {
   for (const turn of conv.turns.slice(0, uptoIndex)) {
     if (turn.reply !== undefined) values.push(turn.reply);
     for (const member of turn.call_tools ?? []) {
-      if (member.tool_responds) values.push(...scalarLeaves(member.tool_responds.body));
+      if (member.tool_responds && 'status' in member.tool_responds) {
+        values.push(...scalarLeaves(member.tool_responds.body));
+      }
       if (member.readsFile !== undefined) values.push(member.readsFile);
     }
     for (const d of turn.delegations ?? []) values.push(d.final);
@@ -352,22 +421,25 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 }
 
 /**
- * Serve one trace's model turns; records requests and violations. `hold`
- * belongs to the runner; this server only attaches it to the pending
- * invocation the trace holds open, which is where that entry is created.
+ * Serve one trace's model turns; records requests and violations. `holds`
+ * belong to the runner, one per mid-run prompt in step order; this server
+ * only attaches each to the pending invocation whose response is held for
+ * that prompt, which is where the entry is created.
  */
 export function startMockLlm(
   koan: Koan,
   trace: Trace,
   pending: PendingInvocation[],
   delegation: DelegationVocabulary = DEFAULT_DELEGATION,
-  hold?: InvocationHold,
+  holds?: InvocationHold[],
 ): Promise<MockLlm> {
   const state: MockLlm['state'] = { requests: [], served: {}, violations: [] };
   const issuedToolCallIds = new Set<string>();
   const givenToolNames = Object.keys(koan.given.tools);
   const scripts = trace.conversations.map((conv): ConversationScript => ({ conv, served: 0, forbidden: [] }));
-  const forbidden = buildForbidden(trace);
+  const allowed = conversationValues(trace);
+  const forbidden = buildForbidden(allowed, trace.conversations);
+  const identifying = buildIdentifying(allowed);
   for (const script of scripts) {
     script.forbidden = forbidden.get(script.conv.name) ?? [];
     state.served[script.conv.name] = 0;
@@ -394,9 +466,21 @@ export function startMockLlm(
     // the fold on its summary identifies it instead — which the contract
     // already requires the next request to carry.
     const text = requestText(messages);
-    return scripts.find((s) =>
+    const byServedSummary = scripts.find((s) =>
       s.conv.turns.slice(0, s.served).some((t) => t.compaction !== undefined && text.includes(t.reply as string)),
     );
+    if (byServedSummary) return byServedSummary;
+    // A fold served by more than one request need not carry either of the
+    // above in every one of them (a request that only summarizes a
+    // conversation's own in-progress turn, say — SPEC.md §3: what a fold's
+    // request carries is the implementation's choice). Among the
+    // conversations currently owed a fold request, attribute this one to
+    // whichever's scripted values — unique to it, by construction
+    // (buildIdentifying) — the text carries; ambiguous or unmatched stays
+    // unrouted, same as an ordinary request naming nothing scripted.
+    const awaitingFold = scripts.filter((s) => s.conv.turns[s.served]?.compaction !== undefined);
+    const matches = awaitingFold.filter((s) => (identifying.get(s.conv.name) ?? []).some((v) => text.includes(v)));
+    return matches.length === 1 ? matches[0] : undefined;
   };
 
   const server = http.createServer(async (req, res) => {
@@ -425,7 +509,8 @@ export function startMockLlm(
     if (!script) {
       state.violations.push(
         `request #${requestNo} matches no scripted conversation — its first user message carries neither the task nor any briefing, ` +
-          `and it carries no summary of a conversation already folded down`,
+          `it carries no summary of a conversation already folded down, and it carries nothing unique to a conversation ` +
+          `currently owed a fold request`,
       );
       return respond(400, { error: { message: 'mock LLM: request matches no scripted conversation' } });
     }
@@ -434,12 +519,13 @@ export function startMockLlm(
     const entry = conv.turns[index];
 
     if (!entry) {
-      if (liveAbort && conv.name === '') {
+      if (liveAbort) {
         // The world stops answering once the pre-abort script is served:
         // hold the connection open rather than reject it. This request is
         // either racing the caller's abort or arriving after it already
         // landed — both converge on the run having nothing left to wait
-        // for but its own abort settling.
+        // for but its own abort settling. Any conversation's, not just the
+        // main one's: an abort mid-delegation leaves the child racing too.
         return;
       }
       state.violations.push(
@@ -492,7 +578,7 @@ export function startMockLlm(
       // The request after a fold is the one that must carry its summary,
       // and it is usually the first of the turn the caller prompted next.
       if (previous.compaction === 'completed') {
-        checkCompacted(previous.reply as string, followUp, requestNo, messages, state.violations);
+        checkCompacted(previous.foldSummaries!, followUp, requestNo, messages, state.violations);
       } else if (followUp) {
         // Nothing was folded, so nothing was replaced: this request owes
         // the earlier turns the way any other follow-up does.
@@ -541,11 +627,12 @@ export function startMockLlm(
       callTools.forEach((member, j) => {
         issuedToolCallIds.add(ids[j]);
         if (member.tool_responds) {
+          const hold = member.promptIndex !== undefined ? holds?.[member.promptIndex] : undefined;
           pending.push({
             name: member.name,
             args: member.invokeArgs ?? member.args ?? {},
             respond: member.tool_responds,
-            ...(member.promptDuring !== undefined && hold ? { hold } : {}),
+            ...(hold ? { hold } : {}),
           });
         }
       });

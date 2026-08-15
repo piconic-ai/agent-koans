@@ -21,6 +21,7 @@ import type {
   Step,
   Trace as ParsedTrace,
   Turn as ParsedTurn,
+  TurnTrace as ParsedTurnTrace,
 } from './koan-spec.js';
 import { isProblem, parseKoanFile } from './parse.js';
 
@@ -31,10 +32,16 @@ export interface ToolDef {
 }
 
 /** A scripted HTTP response of a mocked party (tool server or model API). */
-export interface ToolResponse {
+export interface HttpResponse {
   status: number;
   body?: unknown;
 }
+
+/**
+ * What the tool mock does with a permitted invocation: answer it, or
+ * sever the connection without answering.
+ */
+export type ToolResponse = HttpResponse | { disconnect: true };
 
 /**
  * One tool-call instruction inside a model response — one entry of a
@@ -58,6 +65,8 @@ export interface CallToolInstruction {
   tool_responds?: ToolResponse;
   /** A prompt the caller sends while this invocation is held open. */
   promptDuring?: string;
+  /** This prompt's position among the trace's mid-run prompts, in step order — which hold the runner pairs it with. */
+  promptIndex?: number;
   /** Set by a response-less tool request: the agent executes this call itself. Resolved to `readsFile` once the trace has compiled. */
   internal?: true;
   /**
@@ -77,8 +86,10 @@ export interface DelegationInstruction {
   subagent: string;
   /** The briefing that opens the delegate's conversation. */
   prompt: string;
-  /** The delegate's final reply, lifted from the subagent block that scripts it. */
+  /** The delegate's final reply, lifted from the subagent block that scripts it. Empty when the child never answered — it failed, or the run's abort cut it off. */
   final: string;
+  /** The model API failure that ended the child instead of a reply; the parent's next request must carry it as the delegation's outcome. */
+  fails?: HttpResponse;
 }
 
 /** One compiled model turn of a trace. */
@@ -99,13 +110,23 @@ export interface ModelTurn {
   usedTokens: number;
   /** Set on the auxiliary request that folds the conversation down: how the run reported its ending. `reply` is the summary served to it. */
   compaction?: CompactionReport;
-  /** What the caller's ask said about how to fold; this request must carry it. */
+  /**
+   * Set on every member of a completed fold: the whole group's summaries
+   * (one request, or several — koan-spec.ts's header), so a check run
+   * against any one member can require every one of them to resurface.
+   * `foldMember` is this member's position within the group; `0` marks
+   * the group's leader, which is what a fold's reported events are
+   * counted once per (runner.ts), however many requests it cost.
+   */
+  foldSummaries?: string[];
+  foldMember?: number;
+  /** What the caller's ask said about how to fold; every request the fold costs must carry it. */
   asked?: string;
   /** This turn's tool-call instruction(s); more than one means a parallel group. */
   call_tools?: CallToolInstruction[];
   /** This turn's delegation instruction(s), each scripted by a following subagent block. */
   delegations?: DelegationInstruction[];
-  fails?: ToolResponse;
+  fails?: HttpResponse;
   /**
    * Set when this is the trace's last turn and it is followed by the
    * `abort` step: `'live'` when this turn is a tool-call
@@ -324,31 +345,51 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
         break;
       }
       case 'subagent': {
-        const briefing = delegationBySubagent.get(step.name)!.prompt;
-        const child: Conversation = { name: step.name, parent: conv.name, turns: [], briefing };
+        const delegation = delegationBySubagent.get(step.name)!;
+        const child: Conversation = { name: step.name, parent: conv.name, turns: [], briefing: delegation.prompt };
         conversations.push(child);
         compileSteps(step.trace.steps, child, conversations);
         // A subagent block always closes a delegation from this same
         // conversation's own turns (parse.ts's pairing) — the child's
-        // final reply is what returns to the parent.
-        delegationBySubagent.get(step.name)!.final = child.turns.at(-1)!.reply!;
+        // final reply is what returns to the parent. A child that never
+        // answered leaves the final empty: its API failure is then the
+        // delegation's outcome, and a child the run's abort cut off owes
+        // the parent nothing at all.
+        const last = child.turns.at(-1)!;
+        delegation.final = last.reply ?? '';
+        if (last.fails !== undefined && !last.compaction) delegation.fails = last.fails;
         openCalls = [];
         break;
       }
       case 'compaction': {
         // `openCalls` survives: folding a conversation down is not what
         // closes a call, so one still open across it stays open.
-        conv.turns.push(
-          step.report === 'failed'
-            ? { fails: step.fails, usedTokens: carried(), compaction: 'failed' }
-            : { reply: step.summary, usedTokens: step.used_tokens, compaction: 'completed' },
-        );
+        if (step.report === 'failed') {
+          conv.turns.push({ fails: step.fails, usedTokens: carried(), compaction: 'failed' });
+        } else {
+          // One fold, one member turn per scripted summary (koan-spec.ts's
+          // header): each is its own wire request/response, all reporting
+          // the same post-fold `used_tokens` — that is what the fold
+          // shrank the conversation to, however many requests it took.
+          step.summaries.forEach((summary, foldMember) => {
+            conv.turns.push({
+              reply: summary,
+              usedTokens: step.used_tokens,
+              compaction: 'completed',
+              foldSummaries: step.summaries,
+              foldMember,
+            });
+          });
+        }
         break;
       }
       case 'tool': {
         const match = matchOpenCall(openCalls, step.tool, step.args);
         match.compiled.invokeArgs = step.args ?? match.compiled.args;
-        match.compiled.tool_responds = { status: step.response.status, body: step.response.body };
+        match.compiled.tool_responds =
+          'disconnect' in step.response
+            ? { disconnect: true }
+            : { status: step.response.status, body: step.response.body };
         if (step.prompt !== undefined) match.compiled.promptDuring = step.prompt;
         openCalls = openCalls.filter((c) => c !== match);
         break;
@@ -365,39 +406,64 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
   }
 }
 
-// Derived rather than written: a model request after a text reply is the
-// prompt re-opening the run, so that seam is the queued turn; without one,
-// the prompt joined the request that closes the held invocation.
-function promptBoundary(conv: Conversation): TurnBoundary | undefined {
-  let held = -1;
-  let prompt: string | undefined;
+// The trace's mid-run prompts in step order, each numbered into
+// `promptIndex` on the member that holds it — the pairing the runner's
+// holds go by.
+function heldPrompts(conv: Conversation): Array<{ turn: number; prompt: string }> {
+  const held: Array<{ turn: number; prompt: string }> = [];
   for (const [i, turn] of conv.turns.entries()) {
     for (const member of turn.call_tools ?? []) {
       if (member.promptDuring !== undefined) {
-        held = i;
-        prompt = member.promptDuring;
+        member.promptIndex = held.length;
+        held.push({ turn: i, prompt: member.promptDuring });
       }
     }
   }
-  if (prompt === undefined) return undefined;
-  for (let s = held + 1; s < conv.turns.length; s++) {
+  return held;
+}
+
+// Derived rather than written: a model request after a text reply is a
+// delivered prompt re-opening the run, so each such seam is one queued
+// turn; a prompt with no seam of its own joined the request that closes
+// its held invocation. Seams are claimed from the last prompt backwards:
+// a seam can only re-open the run for the latest prompt still unanswered
+// when it appears, so walking forwards would hand an earlier, joined
+// prompt a seam that belongs to a later one.
+function promptBoundaries(conv: Conversation): TurnBoundary[] {
+  const held = heldPrompts(conv);
+  if (held.length === 0) return [];
+  const seams: number[] = [];
+  for (let s = 1; s < conv.turns.length; s++) {
     // A compaction's summary is a reply the mock served, not the run's own
     // answer, so it never marks the seam a queued prompt re-opens.
     const before = conv.turns[s - 1];
-    if (before.reply !== undefined && !before.compaction) return { start: s, prompt };
+    if (before.reply !== undefined && !before.compaction) seams.push(s);
   }
-  // parse.ts requires a model request after a mid-run prompt, so this exists.
-  return { start: held + 1, prompt, joined: true };
-}
-
-/** The prompt the caller sends into a held invocation, when this trace scripts one. */
-export function promptDuringOf(trace: Trace): string | undefined {
-  for (const turn of trace.conversations[0].turns) {
-    for (const member of turn.call_tools ?? []) {
-      if (member.promptDuring !== undefined) return member.promptDuring;
+  const boundaries: TurnBoundary[] = new Array<TurnBoundary>(held.length);
+  let seam = seams.length - 1;
+  for (let k = held.length - 1; k >= 0; k--) {
+    if (seam >= 0 && seams[seam] > held[k].turn) {
+      boundaries[k] = { start: seams[seam], prompt: held[k].prompt };
+      seam -= 1;
+    } else {
+      // parse.ts requires a model request after a mid-run prompt, so this
+      // names it — except where an abort cut the prompt off, and the
+      // boundary points past a trace no request of which reads it.
+      boundaries[k] = { start: held[k].turn + 1, prompt: held[k].prompt, joined: true };
     }
   }
-  return undefined;
+  return boundaries;
+}
+
+/** The prompts the caller sends into held invocations, in step order — one hold each. */
+export function promptsDuringOf(trace: Trace): string[] {
+  const prompts: string[] = [];
+  for (const turn of trace.conversations[0].turns) {
+    for (const member of turn.call_tools ?? []) {
+      if (member.promptDuring !== undefined) prompts.push(member.promptDuring);
+    }
+  }
+  return prompts;
 }
 
 function compileTrace(trace: ParsedTrace, briefing: string): Trace {
@@ -406,8 +472,8 @@ function compileTrace(trace: ParsedTrace, briefing: string): Trace {
   conversations.push(main);
   compileSteps(trace.steps, main, conversations);
   if (trace.abort !== undefined) main.turns.at(-1)!.abort = trace.abort;
-  const boundary = promptBoundary(main);
-  if (boundary) main.followUps = [boundary];
+  const boundaries = promptBoundaries(main);
+  if (boundaries.length > 0) main.followUps = boundaries;
   return { conversations };
 }
 
@@ -417,14 +483,48 @@ function compileJudgment(then: ParsedJudgment | undefined): Judgment {
 }
 
 /**
- * Compiles a `turns:` koan into one Trace: a single main
- * conversation whose turn boundaries are recorded in `followUps`, plus
- * any subagent conversations delegated to from inside a turn. Turn 1's
- * prompt becomes the conversation's `briefing` (what `POST /runs`
+ * Compiles a `turns:` koan into one Trace per conforming shape: a single
+ * main conversation whose turn boundaries are recorded in `followUps`,
+ * plus any subagent conversations delegated to from inside a turn. Turn
+ * 1's prompt becomes the conversation's `briefing` (what `POST /runs`
  * submits); turn 2 onward each append a `followUps` boundary and their
  * own steps to the same conversation.
+ *
+ * Ordinarily one Trace, keyed `''`. A koan whose one `one_of` turn
+ * (parse.ts's own one-per-koan rule) names N variants compiles to N,
+ * keyed by variant name — the same "try each until one passes" shape
+ * `variants` bodies already produce (runner.ts's `runKoan`), needed here
+ * because how many requests a fold costs is an implementation's own
+ * choice (SPEC.md §3), so one turn may legitimately have more than one
+ * conforming shape. `turnSpecs` — the prompts and judgments the runner
+ * drives turn by turn — never vary by variant: only a chosen variant's
+ * wire steps do.
  */
-function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): { trace: Trace; turnSpecs: TurnSpec[] } {
+function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): {
+  traces: Record<string, Trace>;
+  turnSpecs: TurnSpec[];
+} {
+  const turnSpecs: TurnSpec[] = turns.map((t) =>
+    t.kind === 'compact'
+      ? { kind: 'compact', ...(t.instructions !== undefined ? { instructions: t.instructions } : {}) }
+      : { kind: 'prompt', prompt: t.prompt, then: compileJudgment(t.then) },
+  );
+
+  const oneOfIndex = turns.findIndex((t) => t.trace?.kind === 'one_of');
+  if (oneOfIndex === -1) return { traces: { '': compileTurnsVariant(turns) }, turnSpecs };
+
+  const variantsTurnTrace = turns[oneOfIndex].trace as Extract<ParsedTurnTrace, { kind: 'one_of' }>;
+  const traces: Record<string, Trace> = {};
+  for (const variant of Object.keys(variantsTurnTrace.variants)) {
+    traces[variant] = compileTurnsVariant(turns, oneOfIndex, variant);
+  }
+  return { traces, turnSpecs };
+}
+
+// One conforming shape of a `turns:` koan's whole conversation: every
+// turn's own steps in order — the one `one_of` turn's named choice where
+// `turnIndex` names it, every other turn's single `when` trace otherwise.
+function compileTurnsVariant(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]], turnIndex = -1, variant?: string): Trace {
   const conversations: Conversation[] = [];
   const followUps: TurnBoundary[] = [];
   // parse.ts requires the first entry to be a prompt: a run starts from one.
@@ -432,19 +532,29 @@ function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): { 
   const main: Conversation = { name: '', turns: [], briefing: opening.prompt, followUps };
   conversations.push(main);
 
-  const turnSpecs: TurnSpec[] = [];
   for (const [i, t] of turns.entries()) {
     if (t.kind === 'prompt' && i > 0) followUps.push({ start: main.turns.length, prompt: t.prompt });
-    if (t.trace) compileSteps(t.trace.steps, main, conversations);
-    if (t.kind === 'compact') {
-      if (t.instructions !== undefined) main.turns[main.turns.length - 1].asked = t.instructions;
-      turnSpecs.push({ kind: 'compact', ...(t.instructions !== undefined ? { instructions: t.instructions } : {}) });
-      continue;
+    const steps = turnStepsOf(t, i === turnIndex ? variant : undefined);
+    const before = main.turns.length;
+    if (steps) compileSteps(steps, main, conversations);
+    if (t.kind === 'compact' && t.instructions !== undefined) {
+      // Every request the fold costs carries the ask, not just one member
+      // of a many-request group (SPEC.md §3: the words must reach the
+      // request that summarizes, and here that is every one of them).
+      for (let k = before; k < main.turns.length; k++) main.turns[k].asked = t.instructions;
     }
-    turnSpecs.push({ kind: 'prompt', prompt: t.prompt, then: compileJudgment(t.then) });
   }
 
-  return { trace: { conversations }, turnSpecs };
+  return { conversations };
+}
+
+// A turn's own steps: `when`'s single trace, or the named member of
+// `one_of`'s variants this compile is walking — `pickVariant` is only
+// ever set for the one turn a koan may write `one_of` on.
+function turnStepsOf(t: ParsedTurn, pickVariant: string | undefined): Step[] | undefined {
+  if (t.trace === undefined) return undefined;
+  if (t.trace.kind === 'one') return t.trace.trace.steps;
+  return t.trace.variants[pickVariant as string].steps;
 }
 
 // After compiling rather than in compileSteps, which never sees
@@ -494,7 +604,7 @@ function compileKoan(parsed: KoanFile): Koan {
       break;
     case 'turns': {
       const compiled = compileTurnsTrace(parsed.body.turns);
-      traces = { '': compiled.trace };
+      traces = compiled.traces;
       turns = compiled.turnSpecs;
       break;
     }

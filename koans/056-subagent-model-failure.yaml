@@ -1,0 +1,25 @@
+name: subagent-model-failure
+description: >
+  The delegate's model request is rejected with 401. The refusal ends the
+  child's conversation, but it is the delegation's outcome, not the
+  run's: it must reach the parent's model as what came of the task —
+  without the child's request being re-issued — and the parent still
+  closes the run normally. 013 ends the run because the conversation
+  that lost its model was the run's own; a delegate losing it loses only
+  the delegation.
+
+prompt: "Have the researcher check the Tokyo temperature."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Look up the current temperature in Tokyo." }
+  - subagent: researcher
+    when:
+      - request: model
+        response: { status: 401, body: { error: "unauthorized" } }
+  - request: model
+    response: "The lookup could not be completed: the researcher lost access to its model."
+
+then:
+  status: completed
+  output: { contains: "could not" }

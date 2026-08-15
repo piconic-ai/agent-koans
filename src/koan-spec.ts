@@ -93,7 +93,7 @@ export type Turn = PromptTurn | CompactTurn;
 export interface PromptTurn {
   kind: 'prompt';
   prompt: string;
-  trace?: Trace;
+  trace?: TurnTrace;
   /** Defaulted to `{ status: 'completed' }` while parsing, never absent here. */
   then: Judgment;
 }
@@ -113,8 +113,20 @@ export interface CompactTurn {
   kind: 'compact';
   instructions?: string;
   /** The fold the ask brings about, and nothing else: without a prompt there is no other work. */
-  trace: Trace;
+  trace: TurnTrace;
 }
+
+/**
+ * What a `turns:` entry's own trace is: one step list (`when:`), or a
+ * choice among named ones (`one_of:`) — the same "more than one
+ * conforming process" escape the top-level body already has, needed here
+ * because how many requests a fold costs is an implementation's own
+ * choice (SPEC.md §3), so one turn can legitimately have more than one
+ * conforming shape. A koan may write `one_of` on at most one turn: naming
+ * every combination of every turn's variants is not a thing this format
+ * takes on.
+ */
+export type TurnTrace = { kind: 'one'; trace: Trace } | { kind: 'one_of'; variants: Record<string, Trace> };
 
 /**
  * One conversation's expected wire log. `abort` is not a step: it may only
@@ -166,27 +178,41 @@ export type Step =
   | { kind: 'internal'; tool: string; args?: ParsedArgs }
   | { kind: 'subagent'; name: string; trace: Trace }
   /**
-   * The extra model request an agent makes to fold a conversation that has
-   * reached `given.context.compaction` down to a summary — written as a
-   * model request with `purpose: compaction`, since that is what it is.
-   * Its response carries everything the fold produced: `summary` (written
-   * `body`) is what the mock replies, and the conversation's next request
-   * must carry that reply; `used_tokens` is what the conversation shrank
-   * to; `report` (written `compaction`) is how the run reported the fold's
+   * The extra model request(s) an agent makes to fold a conversation that
+   * has reached `given.context.compaction` down to a summary — written as
+   * a model request with `purpose: compaction`, since that is what it is.
+   * Its response carries everything the fold produced: `summaries`
+   * (written `body`, a string or a non-empty list of them) is what the
+   * mock replies, and the conversation's next request must carry every
+   * one of them; `used_tokens` is what the conversation shrank to;
+   * `report` (written `compaction`) is how the run reported the fold's
    * ending to its caller. The request itself is the fold beginning, so
    * only its ending is written.
    *
+   * One fold, not necessarily one request: how many summarizing requests
+   * a fold costs is an implementation's own choice (SPEC.md §3), so
+   * `body` written as a list scripts a fold answered by that many
+   * requests, served in whichever order they arrive — the koan does not
+   * say which request gets which reply, only that every reply is one this
+   * fold serves and must resurface. A single `used_tokens` and a single
+   * `report` still cover the whole fold: the conversation shrinks once,
+   * and is told of once, however many requests that took. A one-element
+   * list is a style error, the same as a one-element parallel group
+   * (ModelResponse's header) — write the bare-string form instead.
+   *
    * A fold that failed has neither of the first two — nothing was
    * summarized and nothing shrank — so it carries the failure the model
-   * endpoint answered with instead, and the same `report`.
+   * endpoint answered with instead, and the same `report`. A failed fold
+   * is always one request: a partial failure inside a many-request fold
+   * is not something this format scripts.
    *
    * A shape of its own rather than a `model` step carrying optional
    * fields: a fold's response is a summary and never a tool call, and what
    * it must carry depends on how it ended, neither of which a shared shape
    * could say.
    */
-  | { kind: 'compaction'; summary: string; used_tokens: number; report: 'completed' }
-  | { kind: 'compaction'; fails: ToolResponse; report: 'failed' };
+  | { kind: 'compaction'; summaries: [string, ...string[]]; used_tokens: number; report: 'completed' }
+  | { kind: 'compaction'; fails: HttpToolResponse; report: 'failed' };
 
 /**
  * How a fold ended, as its run reported it to its caller. A fold that
@@ -229,10 +255,18 @@ export type Args =
 export type ParsedArgs = Record<string, unknown>;
 
 /** The tool server's scripted HTTP response. */
-export interface ToolResponse {
+export interface HttpToolResponse {
   status: number;
   body?: unknown;
 }
+
+/**
+ * What the mock tool server does with a permitted invocation: answer it,
+ * or sever the connection without answering (`response: disconnect` in
+ * YAML). A union rather than an optional `status`, so a response that
+ * answers always has one to answer with.
+ */
+export type ToolResponse = HttpToolResponse | { disconnect: true };
 
 /** `then`: the run's outcome after the trace settles. */
 export interface Judgment {

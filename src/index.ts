@@ -6,6 +6,7 @@ export type {
   Conversation,
   DelegationInstruction,
   DiscoveredKoan,
+  HttpResponse,
   Judgment,
   Koan,
   Matcher,

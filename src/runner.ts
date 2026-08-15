@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { DelegationVocabulary } from './config.js';
-import { promptDuringOf, type Judgment, type Koan, type Matcher, type Trace } from './koan.js';
+import { promptsDuringOf, type Judgment, type Koan, type Matcher, type Trace } from './koan.js';
 import { startMockLlm } from './mock-llm.js';
 import { startMockTools } from './mock-tools.js';
 import { createHold, type PendingInvocation } from './pending.js';
@@ -168,7 +168,11 @@ function foldsEnded(run: RunState): number {
 // implementation's, and the same failure in two vocabularies is the same
 // failure.
 function judgeReportedFolds(trace: Trace, run: RunState): string[] {
-  const folds = trace.conversations.flatMap((c) => c.turns.filter((t) => t.compaction));
+  // One fold, one report — however many requests it cost (koan-spec.ts's
+  // header): only a group's leader (`foldMember` `0`, or absent for a
+  // failed fold, which is always one request) counts, so a fold served by
+  // several requests is still counted once here.
+  const folds = trace.conversations.flatMap((c) => c.turns.filter((t) => t.compaction && (t.foldMember ?? 0) === 0));
   const reported = (run.events ?? []).filter((e) => e.type === 'compaction');
   // A fold's beginning is the request itself; the koan writes only how it
   // ended, so that is the only phase read off the trace.
@@ -201,11 +205,11 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
 
 async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<string[]> {
   const pending: PendingInvocation[] = [];
-  // Created here rather than inside a mock: both it and this driver hold
-  // one end of the same window.
-  const promptDuring = promptDuringOf(trace);
-  const hold = promptDuring !== undefined ? createHold() : undefined;
-  const llm = await startMockLlm(koan, trace, pending, agent.delegation, hold);
+  // Created here rather than inside a mock: both ends of each window are
+  // held by this driver and the tool mock, one hold per mid-run prompt.
+  const promptsDuring = promptsDuringOf(trace);
+  const holds = promptsDuring.map(() => createHold());
+  const llm = await startMockLlm(koan, trace, pending, agent.delegation, holds);
   const tools = await startMockTools(pending);
   const port = await getFreePort();
   const base = `http://127.0.0.1:${port}`;
@@ -282,12 +286,12 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       const abortKind = trace.conversations[0].turns.at(-1)?.abort;
       const deadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
 
-      if (abortKind === 'live') {
-        // Fire the abort exactly when the trace says the caller does: as
-        // soon as every step before it has been observed on the wire. A
-        // request that then races ahead of the abort landing is parked by
-        // the mock (mock-llm.ts), not rejected here — so whichever one
-        // wins, the run has nothing left to do but settle aborted.
+      // Fire the abort exactly when the trace says the caller does: as
+      // soon as every step before it has been observed on the wire. A
+      // request that then races ahead of the abort landing is parked by
+      // the mock (mock-llm.ts), not rejected here — so whichever one
+      // wins, the run has nothing left to do but settle aborted.
+      const waitForPreAbortSteps = async () => {
         while (!(llm.state.requests.length >= totalTurns && pending.length === 0)) {
           if (Date.now() > deadline) {
             throw new Error(
@@ -297,19 +301,26 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
           }
           await sleep(100);
         }
+      };
+      const postAbort = async () => {
         const abortRes = await fetch(`${base}/runs/${runId}/abort`, { method: 'POST' });
         if (abortRes.status !== 202 && abortRes.status !== 200) {
           throw new Error(`POST /runs/${runId}/abort returned ${abortRes.status}, expected 202 or 200`);
         }
+      };
+
+      if (abortKind === 'live' && promptsDuring.length === 0) {
+        await waitForPreAbortSteps();
+        await postAbort();
       }
 
-      if (promptDuring !== undefined && hold) {
+      for (const [k, promptDuring] of promptsDuring.entries()) {
         await within(
-          hold.engaged,
+          holds[k].engaged,
           Date.now() + (agent.runTimeoutMs ?? 15_000),
           () =>
-            `the tool invocation the trace holds open was never made within ${agent.runTimeoutMs ?? 15_000}ms, ` +
-            `so the mid-run prompt was never sent`,
+            `the tool invocation the trace holds open for mid-run prompt #${k + 1} was never made within ` +
+            `${agent.runTimeoutMs ?? 15_000}ms, so that prompt was never sent`,
         );
         try {
           const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {
@@ -322,10 +333,17 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
               `POST /runs/${runId}/prompts returned ${promptRes.status} for a run still running, expected 202 or 200`,
             );
           }
+          // A live abort scripted after a delivered prompt lands while the
+          // delivery's invocation is still held, so the prompt is provably
+          // accepted and provably unanswered when the abort arrives.
+          if (abortKind === 'live' && k === promptsDuring.length - 1) {
+            await waitForPreAbortSteps();
+            await postAbort();
+          }
         } finally {
           // Released even on failure: the tool mock is parked on this,
           // and its server cannot close until it returns.
-          hold.release();
+          holds[k].release();
         }
       }
 
@@ -336,7 +354,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         base,
         runId,
         agent.runTimeoutMs ?? 15_000,
-        promptDuring !== undefined ? scriptConsumed : undefined,
+        promptsDuring.length > 0 ? scriptConsumed : undefined,
       );
 
       // Every turn but the last is judged here, against its own `then`;

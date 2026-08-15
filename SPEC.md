@@ -94,7 +94,10 @@ run's state must *do*.
 returns, whatever breaks inside you. A run still `running` past the
 runner's timeout fails the koan.
 
-**Abort.** A run in progress MUST then settle `aborted`. A run that has
+**Abort.** A run in progress MUST then settle `aborted`. An abort covers
+everything of the run still unsettled: the turn in flight, a prompt
+accepted but not yet answered, and a delegation mid-task all stop with
+it — nothing may serve any of them afterwards. A run that has
 already settled MUST keep the state it settled on: a late abort never
 rewrites a committed result, and repeated aborts are idempotent.
 
@@ -108,22 +111,37 @@ A prompt sent to a run still `running` MUST be accepted too, and MUST NOT
 then be dropped: the run MUST reach a terminal state carrying an answer to
 it. Whether it joins the turn already in flight, at that turn's next
 boundary, or waits and runs as its own turn once that one settles, is
-yours to choose — both conform. A queueing agent MAY report a terminal
-state in between, since that is the earlier submission settling, and a
-prompt sent to a settled run re-opens it.
+yours to choose — both conform, for each such prompt independently. A
+queueing agent MAY report a terminal state in between, since that is the
+earlier submission settling, and a prompt sent to a settled run re-opens
+it. However they run, prompts form a queue: what the caller sent earlier
+MUST NOT be answered after what it sent later.
+
+**Delegation.** The subagents a run declares are available to every
+conversation of the run — a delegate MAY delegate in turn, and what each
+conversation may see of another holds at every depth: a briefing in, a
+final answer out. A delegate whose own model request is refused loses
+only the delegation: the refusal is the delegation's outcome and MUST
+reach the conversation that delegated, the way a final answer would
+have — what it means for the run stays that conversation's to decide.
 
 **Context.** A run MAY declare the model's context window and the share of
 it at which the agent compacts — folds the conversation into a summary and
 carries on from it. Where a run declares no threshold, and where it
 declares no context at all, you MUST NOT compact. Where it declares one,
 the size to compare against is the last `usage.prompt_tokens` the model
-endpoint reported for that conversation, not an estimate of your own. Once
+endpoint reported for that conversation, not an estimate of your own —
+and each conversation's own: a delegate's usage never stands in for the
+run's, however large it grows. Once
 that size reaches the threshold, you MUST have compacted by the time the
 conversation's next turn issues its first model request — whether you fold
 it down before the running turn's next request, or once that turn settles,
 is yours. Summarizing is an ordinary request to the same endpoint; what it
-carries is yours to choose, and its reply MUST reach the conversation it
-summarized.
+carries is yours to choose, its reply MUST reach the conversation it
+summarized, and it draws from the run's model-request budget the way any
+other request does. A fold MAY be served by more than one such request —
+how many is yours too — and every one of their replies MUST reach the
+conversation, however you combine them.
 
 A fold MUST also be reported to the caller: an entry in the run's `events`
 when it begins, and one when it ends saying whether it completed or
@@ -158,7 +176,9 @@ your business. A tool call is answered with a `role: "tool"` message whose
 `tool_call_id` matches it.
 
 You execute a declared tool at `POST {KOAN_TOOLS_URL}/invoke/{name}`, the
-parsed arguments as the body. A status of 400 or above is a failure.
+parsed arguments as the body. A status of 400 or above is a failure. So
+is a connection severed before any answer arrived: nothing came back,
+and nothing is not success.
 
 What you do with any of this — when to invoke a tool, when to refuse one,
 when to retry, when to give up — is the koans' business, below.
@@ -281,6 +301,16 @@ it cannot drift from the contract it indexes.
 | [050-follow-up-delegation](./koans/050-follow-up-delegation.yaml) | A follow-up turn delegates. The parent must carry its own earlier turn into this one, and the child must still see only its briefing: a conversation's history belongs to the conversation that holds it, and a delegate opens a new one however long the parent's has grown. |
 | [051-compaction-below-threshold](./koans/051-compaction-below-threshold.yaml) | The run declares a threshold and the conversation stays well below it. A declared threshold is not an instruction to fold whenever convenient: with room left, the agent must carry the history as it stands into the next turn — the trace has no compaction step for one to consume. |
 | [052-compaction-asked-below-threshold](./koans/052-compaction-asked-below-threshold.yaml) | The caller asks for a fold while the conversation sits far below the threshold the run declared. The threshold says when the agent folds on its own, and 051 shows it holding here; the ask is the caller's, and it folds the conversation anyway. |
+| [053-two-prompts-while-running](./koans/053-two-prompts-while-running.yaml) | Two prompts are delivered while one turn is still running — one during each held invocation of a parallel batch, so both are accepted before either could be answered. Submissions form a queue: neither prompt may be lost, and their answers come in the order they arrived. Two processes are acceptable, and the koan is silent about which: both deliveries join the live conversation at its next turn boundary, or each waits and runs as its own turn, first-come first-served. |
+| [054-abort-clears-the-queue](./koans/054-abort-clears-the-queue.yaml) | A second prompt is delivered while a tool invocation is held open, and the caller then aborts — the delivery is provably accepted and provably unanswered when the abort lands. An abort covers every submission still unsettled, the queued prompt included: the trace ends here, so no model request may serve that prompt afterwards, and the run settles aborted. |
+| [055-abort-during-delegation](./koans/055-abort-during-delegation.yaml) | The caller aborts while a delegate is mid-task: the child's tool call has returned, and whatever the child asks for next goes unanswered. The abort stops the whole tree — the child does not press on to a final answer, the parent never hears one, and neither may ask the world for anything further. The run settles aborted. |
+| [056-subagent-model-failure](./koans/056-subagent-model-failure.yaml) | The delegate's model request is rejected with 401. The refusal ends the child's conversation, but it is the delegation's outcome, not the run's: it must reach the parent's model as what came of the task — without the child's request being re-issued — and the parent still closes the run normally. 013 ends the run because the conversation that lost its model was the run's own; a delegate losing it loses only the delegation. |
+| [057-delegation-in-a-batch](./koans/057-delegation-in-a-batch.yaml) | One model response asks for an ordinary tool call and a delegation at once. A parallel group may mix the two kinds, the way 047 mixes a workspace read with a declared tool: the call reaches the tool server, the delegate runs a conversation of its own, and both must be closed — the tool's result and the child's final answer both in hand — before the model is asked again. |
+| [058-nested-delegation](./koans/058-nested-delegation.yaml) | A delegate delegates in turn. The subagents a run declares are available to every conversation of the run, and isolation recurses with them: the parent sees only the coordinator's final, the coordinator sees only the field lookup's final, and the station code the grandchild's tool returned reaches neither of the conversations above it. |
+| [059-second-fold](./koans/059-second-fold.yaml) | The conversation crosses the run's threshold twice. Folding is not a once-per-run event: the second crossing owes the same fold, the same report to the caller, and the same carrying-forward that 028 shows for the first. What the second fold folds is the conversation as it then stands — the first summary and everything after it — so a code that only the first summary still carried must survive into the second, and from there into the final answer. How many requests that second fold costs is the implementation's own choice (SPEC.md §3): one-request and two-request (a history summary and a still-open turn's own, however the two requests order) shapes both conform. |
+| [060-subagent-usage](./koans/060-subagent-usage.yaml) | A delegate's conversation grows to 95000 of the run's declared 100000 window — past the 90% threshold — while the parent's own stays small. The size a threshold is compared against is each conversation's own reported usage, never another conversation's of the same run: the child's growth is not the parent's, so the parent must not fold, and the next turn opens on the history as it stands — the trace has no compaction step for one to consume (051). |
+| [061-fold-spends-the-budget](./koans/061-fold-spends-the-budget.yaml) | The summarizing request is an ordinary request to the model endpoint, so it draws from the run's model-request budget the way any other request does (016). A budget of 2 is spent by one reply and one asked-for fold; the follow-up prompt finds nothing left, and the run must end aborted without asking the model anything — the trace has no request left for it to make. |
+| [062-tool-connection-drop](./koans/062-tool-connection-drop.yaml) | The tool server accepts the invocation and severs the connection without answering — no status, no body, unlike 038's bare status. There is nothing to pass on but the fact of failure, and that fact must reach the model rather than end the run: a transport failure is a tool failure like any other. The agent must not retry the invocation on its own — one call, one invocation — and the model gives up gracefully. |
 
 <!-- koan-index:end -->
 

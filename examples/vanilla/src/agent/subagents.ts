@@ -46,7 +46,17 @@ export function createSubagentTool(subagents: SubagentDef[], delegate: Delegate)
 
       // The briefing, and nothing else: what the parent knows is the
       // parent's, and what the parent gets back is this one answer.
-      const text = await delegate(prompt, signal);
+      let text: string | undefined;
+      try {
+        text = await delegate(prompt, signal);
+      } catch (err) {
+        // Not rethrown: losing the model ends the child's conversation,
+        // not the run — the parent's model decides what a failed
+        // delegation means (SPEC.md §3). An abort is the caller's, though,
+        // and settles the run itself.
+        if (signal.aborted) throw err;
+        return `Error: subagent "${name}" failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
       return text ?? `Error: subagent "${name}" did not finish before the model-request budget ran out`;
     },
   };

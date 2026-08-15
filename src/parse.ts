@@ -55,6 +55,7 @@ import type {
   ToolDef,
   Trace,
   Turn,
+  TurnTrace,
 } from './koan-spec.js';
 
 interface Ctx<T = unknown> {
@@ -258,26 +259,45 @@ function parseBody(ctx: Ctx<KoanFile>, raw: Record<string, unknown>): Parsed<Bod
 }
 
 // Two passes over the raw list, like the shape of the koan itself: every
-// entry's own fields validate before any entry's `when` is parsed, so a
-// shape error in entry 0's `then` is reported even when entry 1's `when`
-// is merely empty.
+// entry's own fields validate before any entry's `when`/`one_of` is
+// parsed, so a shape error in entry 0's `then` is reported even when
+// entry 1's `when` is merely empty.
 function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
   if (!Array.isArray(rawTurns) || rawTurns.length === 0) return problem('"turns" must be a non-empty list of turn entries');
   if (rawTurns.length < 2) return problem('"turns" needs at least two entries — a 1-turn koan is just "when"');
 
   const thens: Judgment[] = [];
+  // Which turn, if any, has already claimed the koan's one "one_of" —
+  // how many requests a fold costs is an implementation's own choice
+  // (SPEC.md §3), so a turn may need more than one conforming shape;
+  // naming every combination across more than one such turn is not a
+  // thing this format takes on.
+  let oneOfTurnAt = -1;
   for (let i = 0; i < rawTurns.length; i++) {
     const rt = (rawTurns[i] ?? {}) as Record<string, unknown>;
     const asking = rt.compact !== undefined;
     for (const key of Object.keys(rt)) {
-      const allowed = asking ? key === 'compact' || key === 'when' : key === 'prompt' || key === 'when' || key === 'then';
+      const allowed = asking
+        ? key === 'compact' || key === 'when' || key === 'one_of'
+        : key === 'prompt' || key === 'when' || key === 'one_of' || key === 'then';
       if (!allowed) {
         return problem(
           asking
-            ? `turns[${i}] has unknown key "${key}" — an entry asking for a fold carries only "compact" and "when"`
-            : `turns[${i}] has unknown key "${key}" — a prompt entry carries only "prompt", "when", and "then"`,
+            ? `turns[${i}] has unknown key "${key}" — an entry asking for a fold carries only "compact", "when", and "one_of"`
+            : `turns[${i}] has unknown key "${key}" — a prompt entry carries only "prompt", "when", "one_of", and "then"`,
         );
       }
+    }
+    if (rt.when !== undefined && rt.one_of !== undefined) {
+      return problem(`turns[${i}] carries both "when" and "one_of" — a turn's own trace is one or the other`);
+    }
+    if (rt.one_of !== undefined) {
+      if (oneOfTurnAt !== -1) {
+        return problem(
+          `turns[${i}].one_of: a koan may write "one_of" on at most one turn — turns[${oneOfTurnAt}] already does`,
+        );
+      }
+      oneOfTurnAt = i;
     }
     if (asking) {
       // A string is what the ask said about how to fold; `true` is an ask
@@ -314,44 +334,101 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
     const last = i === rawTurns.length - 1;
     // Omitted only where nothing could follow: a prompt the agent answers
     // with no model request at all ends the koan by definition.
-    if (rt.when === undefined && rt.compact === undefined && last) {
+    if (rt.when === undefined && rt.one_of === undefined && rt.compact === undefined && last) {
       turns.push({ kind: 'prompt', prompt: rt.prompt as string, then: thens[i] });
       continue;
     }
-    if (!Array.isArray(rt.when) || rt.when.length === 0) {
-      return problem(`turns[${i}].when must be a non-empty list of trace steps`);
-    }
-    const trace = parseTrace(into(ctx, `turns[${i}].when`, rt.when), true, false);
-    if (isProblem(trace)) return trace;
+    const turnTrace = parseTurnTraceField(ctx, rt, i);
+    if (isProblem(turnTrace)) return turnTrace;
     if (rt.compact !== undefined) {
-      if (trace.steps.length !== 1 || trace.steps[0].kind !== 'compaction') {
-        return problem(
-          `turns[${i}].when scripts ${trace.steps.length} step(s) — an ask brings about the fold and nothing else, since without a prompt there is no other work`,
-        );
-      }
+      const err = checkEachVariant(turnTrace, i, checkCompactStep);
+      if (err) return err;
       turns.push({
         kind: 'compact',
         ...(typeof rt.compact === 'string' ? { instructions: rt.compact } : {}),
-        trace,
+        trace: turnTrace,
       });
       continue;
     }
     if (!last) {
-      const end = trace.steps[trace.steps.length - 1];
       // An intermediate turn can only be judged "completed" by ending in
       // a plain reply — the one seam where a later turn's first request
-      // is allowed to continue the same conversation.
-      if (end.kind !== 'model' || end.response.kind !== 'reply') {
-        return problem(
-          `turns[${i}].when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one`,
-        );
-      }
+      // is allowed to continue the same conversation. Every conforming
+      // shape owes it, not just the one written first.
+      const err = checkEachVariant(turnTrace, i, checkEndsInReply);
+      if (err) return err;
     }
-    turns.push({ kind: 'prompt', prompt: rt.prompt as string, trace, then: thens[i] });
+    turns.push({ kind: 'prompt', prompt: rt.prompt as string, trace: turnTrace, then: thens[i] });
   }
 
   if (turns[0].kind !== 'prompt') return problem('turns[0] must be a prompt — a run starts from one');
   return { kind: 'turns', turns: turns as [Turn, Turn, ...Turn[]] };
+}
+
+// A turn's own trace: `when` (one step list) or `one_of` (named
+// variants, at least two) — never both, checked in the pass before this
+// one runs.
+function parseTurnTraceField(ctx: Ctx<KoanFile>, rt: Record<string, unknown>, i: number): Parsed<TurnTrace> {
+  if (rt.one_of !== undefined) {
+    const rawOneOf = rt.one_of;
+    if (typeof rawOneOf !== 'object' || rawOneOf === null || Array.isArray(rawOneOf)) {
+      return problem(`turns[${i}].one_of must be a mapping of variant name to a list of trace steps`);
+    }
+    const entries = Object.entries(rawOneOf as Record<string, unknown>);
+    if (entries.length < 2) return problem(`turns[${i}].one_of needs at least two variants — use "when" for a single trace`);
+    const variants: Record<string, Trace> = {};
+    for (const [variant, rawSteps] of entries) {
+      if (!Array.isArray(rawSteps) || rawSteps.length === 0) {
+        return problem(`turns[${i}].one_of.${variant} must be a non-empty list of trace steps`);
+      }
+      const trace = parseTrace(into(ctx, `turns[${i}].one_of.${variant}`, rawSteps), true, false);
+      if (isProblem(trace)) return trace;
+      variants[variant] = trace;
+    }
+    return { kind: 'one_of', variants };
+  }
+  if (!Array.isArray(rt.when) || rt.when.length === 0) {
+    return problem(`turns[${i}].when must be a non-empty list of trace steps`);
+  }
+  const trace = parseTrace(into(ctx, `turns[${i}].when`, rt.when), true, false);
+  if (isProblem(trace)) return trace;
+  return { kind: 'one', trace };
+}
+
+// Applies `check` to every trace a turn's own `TurnTrace` scripts — the
+// one trace `when` writes, or each named variant `one_of` writes — so a
+// rule that must hold for whichever conforming shape a koan picks is
+// checked against all of them, not just the one written first.
+function checkEachVariant(
+  turnTrace: TurnTrace,
+  i: number,
+  check: (trace: Trace, at: string) => Problem | undefined,
+): Problem | undefined {
+  if (turnTrace.kind === 'one') return check(turnTrace.trace, `turns[${i}].when`);
+  for (const [variant, trace] of Object.entries(turnTrace.variants)) {
+    const found = check(trace, `turns[${i}].one_of.${variant}`);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function checkCompactStep(trace: Trace, at: string): Problem | undefined {
+  if (trace.steps.length !== 1 || trace.steps[0].kind !== 'compaction') {
+    return problem(
+      `${at} scripts ${trace.steps.length} step(s) — an ask brings about the fold and nothing else, since without a prompt there is no other work`,
+    );
+  }
+  return undefined;
+}
+
+function checkEndsInReply(trace: Trace, at: string): Problem | undefined {
+  const end = trace.steps[trace.steps.length - 1];
+  if (end.kind !== 'model' || end.response.kind !== 'reply') {
+    return problem(
+      `${at} must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one`,
+    );
+  }
+  return undefined;
 }
 
 function parseJudgment(ctx: Ctx<unknown>): Parsed<Judgment> {
@@ -424,9 +501,9 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
   }
 
   const steps: Step[] = [];
-  let sentPrompt = false;
-  let sentPromptAt = -1;
-  let queuedSeam = false;
+  let promptsSent = 0;
+  let lastPromptAt = -1;
+  let queuedSeams = 0;
   for (let i = 0; i < written.length; i++) {
     const at_i = `${at}[${i}]`;
     const prev = steps.at(-1);
@@ -445,8 +522,16 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), false, true);
       if (isProblem(childTrace)) return childTrace;
       const childLast = childTrace.steps[childTrace.steps.length - 1];
-      if (childLast.kind !== 'model' || childLast.response.kind !== 'reply') {
-        return problem(`${at_i}: a subagent block must end with the child's final text reply — it is what returns to the parent`);
+      const settles =
+        childLast.kind === 'model' && (childLast.response.kind === 'reply' || childLast.response.kind === 'api-failure');
+      // A child the run's abort cut off ends wherever the abort caught it;
+      // only the trace's last step can be that child, since the abort
+      // follows it directly.
+      const cutOff = abort && i === written.length - 1;
+      if (!settles && !cutOff) {
+        return problem(
+          `${at_i}: a subagent block must end with the child's final text reply or its model API failure — what came of the delegation is what returns to the parent`,
+        );
       }
       steps.push({ kind: 'subagent', name: block.subagent, trace: childTrace });
       continue;
@@ -500,15 +585,15 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       // can only be the delivery re-opening the run, which is how koan.ts
       // tells a queueing agent from a joining one.
       if (prev?.kind === 'model' && prev.response.kind === 'reply') {
-        if (!sentPrompt) {
+        if (promptsSent === 0) {
           return problem(`${at_i}: a model request cannot follow a text reply here — only a later turn's first request may`);
         }
-        if (queuedSeam) {
+        if (queuedSeams >= promptsSent) {
           return problem(
-            `${at_i}: a prompt sent mid-run opens at most one queued turn — this is the second model request to follow a text reply`,
+            `${at_i}: a prompt sent mid-run opens at most one queued turn each — more model requests follow text replies than prompts were sent`,
           );
         }
-        queuedSeam = true;
+        queuedSeams += 1;
       }
       if (target.purpose !== undefined) {
         const fold = parseCompactionStep(at_i, res, inTurns && i === 0);
@@ -518,7 +603,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       }
       const envelope = parseModelEnvelope(at_i, res);
       if (isProblem(envelope)) return envelope;
-      const response = parseModelResponse(into(ctx, `[${i}]`, envelope.body), inSubagent);
+      const response = parseModelResponse(into(ctx, `[${i}]`, envelope.body));
       if (isProblem(response)) return response;
       steps.push({
         kind: 'model',
@@ -531,10 +616,13 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       // transform, not re-validated against the
       // instruction it closes.
       const reqArgs = target.args;
-      if (typeof res === 'string' || Array.isArray(res) || typeof (res as Record<string, unknown>).status !== 'number') {
-        return problem(`${at_i}.response needs a numeric "status" for a tool request`);
+      const disconnects = res === 'disconnect';
+      if (!disconnects && (typeof res === 'string' || Array.isArray(res) || typeof (res as Record<string, unknown>).status !== 'number')) {
+        return problem(
+          `${at_i}.response needs a numeric "status" for a tool request, or "disconnect" for a connection severed without one`,
+        );
       }
-      const r = res as { status: number; body?: unknown };
+      const r = disconnects ? undefined : (res as { status: number; body?: unknown });
       if (rawPrompt !== undefined) {
         if (inTurns) {
           return problem(
@@ -546,33 +634,28 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
             `${at_i}: a tool step's "prompt" cannot appear inside a subagent block — only the caller's own run can be prompted`,
           );
         }
-        if (sentPrompt) {
-          return problem(`${at_i}: a trace carries at most one mid-run "prompt" — the caller sends once`);
-        }
         if (typeof rawPrompt !== 'string' || rawPrompt.length === 0) {
           return problem(`${at_i}.prompt must be a non-empty string — what the caller sends while this response is held`);
         }
-        sentPrompt = true;
-        sentPromptAt = i;
+        promptsSent += 1;
+        lastPromptAt = i;
       }
       steps.push({
         kind: 'tool',
         tool: reqTool,
         args: reqArgs,
-        response: { status: r.status, body: r.body },
+        response: r === undefined ? { disconnect: true } : { status: r.status, body: r.body },
         ...(typeof rawPrompt === 'string' ? { prompt: rawPrompt } : {}),
       });
     }
   }
 
-  if (abort && sentPrompt) {
+  // An abort cuts the delivered prompt off before any request could carry
+  // it — that is the point of scripting the two together — so the
+  // model-request-after rule holds only for a trace that runs on.
+  if (lastPromptAt !== -1 && !abort && !steps.slice(lastPromptAt + 1).some((s) => s.kind === 'model')) {
     return problem(
-      `${at}: a trace carries either "abort" or a mid-run "prompt", not both — cancelling a held invocation is not scripted yet`,
-    );
-  }
-  if (sentPromptAt !== -1 && !steps.slice(sentPromptAt + 1).some((s) => s.kind === 'model')) {
-    return problem(
-      `${at}[${sentPromptAt}]: a mid-run "prompt" needs a model request after it — otherwise no request carries it`,
+      `${at}[${lastPromptAt}]: a mid-run "prompt" needs a model request after it — otherwise no request carries it`,
     );
   }
 
@@ -670,15 +753,62 @@ function parseCompactionStep(at: string, res: unknown, mayFoldHere: boolean): Pa
       return problem(`${at}.response has unknown key "${key}" — a completed compaction carries only "body", "used_tokens", and "compaction"`);
     }
   }
-  if (typeof res.body !== 'string' || res.body.trim().length === 0) {
-    return problem(`${at}.response.body for a compaction must be the summary served to it (a non-empty string)`);
-  }
+  const summaries = parseFoldSummaries(at, res.body);
+  if (isProblem(summaries)) return summaries;
   const used = parseUsedTokens(at, res.used_tokens);
   if (isProblem(used)) return used;
   if (used === undefined) {
     return problem(`${at}.response needs "used_tokens" — what the conversation shrank to, which is half of what a fold does`);
   }
-  return { kind: 'compaction', summary: res.body, used_tokens: used, report: 'completed' };
+  return { kind: 'compaction', summaries, used_tokens: used, report: 'completed' };
+}
+
+/**
+ * `body`: the summary served to a fold's one request, or — for a fold an
+ * implementation serves by more than one summarizing request (SPEC.md
+ * §3: how many is the implementation's own choice) — a list of every
+ * summary those requests are served, in no particular order (the wire
+ * order is not the koan's to say). A one-element list is a style error,
+ * the same as a one-element parallel group: write the bare-string form.
+ * No summary may equal or contain another — the request that follows the
+ * fold has to be shown to carry each one on its own, and a contained
+ * summary's own check would never fail on its account.
+ */
+function parseFoldSummaries(at: string, raw: unknown): Parsed<[string, ...string[]]> {
+  if (typeof raw === 'string') {
+    if (raw.trim().length === 0) {
+      return problem(
+        `${at}.response.body for a compaction must be the summary served to it (a non-empty string), or a list of two or more for a fold served by that many requests`,
+      );
+    }
+    return [raw];
+  }
+  if (Array.isArray(raw)) {
+    if (raw.length < 2) {
+      return problem(
+        `${at}.response.body is a list of ${raw.length} — a fold served by more than one request needs at least two summaries; write the single string form for one`,
+      );
+    }
+    for (const [i, s] of raw.entries()) {
+      if (typeof s !== 'string' || s.trim().length === 0) {
+        return problem(`${at}.response.body[${i}] must be a non-empty string`);
+      }
+    }
+    const summaries = raw as string[];
+    for (let a = 0; a < summaries.length; a++) {
+      for (let b = a + 1; b < summaries.length; b++) {
+        if (summaries[a].includes(summaries[b]) || summaries[b].includes(summaries[a])) {
+          return problem(
+            `${at}.response.body[${a}] and [${b}] are not distinct — no summary may equal or contain another, since the request after the fold must be shown to carry each on its own`,
+          );
+        }
+      }
+    }
+    return summaries as [string, ...string[]];
+  }
+  return problem(
+    `${at}.response.body for a compaction must be the summary served to it (a non-empty string), or a list of two or more for a fold served by that many requests`,
+  );
 }
 
 // A fold the model endpoint refused. `status` is restricted the same way a
@@ -700,11 +830,11 @@ function parseFailedCompaction(at: string, res: Record<string, unknown>): Parsed
 /**
  * A model response, discriminated by its written form: a bare
  * string replies, a mapping instructs or fails, a list is a parallel
- * group. `inSubagent` gates the one rule that depends on where this
- * response sits: a model API failure ends the whole run, so it cannot be
- * scripted inside a subagent's own conversation.
+ * group. An API failure may sit in a subagent block too — it is then the
+ * child's ending, and what the trace does with it is the whole-trace
+ * rule apiFailureEndsTheTrace's business.
  */
-function parseModelResponse(ctx: Ctx<unknown>, inSubagent: boolean): Parsed<ModelResponse> {
+function parseModelResponse(ctx: Ctx<unknown>): Parsed<ModelResponse> {
   const { node, at } = ctx;
   if (typeof node === 'string') return { kind: 'reply', text: node };
 
@@ -760,9 +890,6 @@ function parseModelResponse(ctx: Ctx<unknown>, inSubagent: boolean): Parsed<Mode
     return { kind: 'instructions', instructions: [c] };
   }
   if (isMapping(node) && typeof node.status === 'number') {
-    if (inSubagent) {
-      return problem(`${at}: a model API failure cannot appear inside a subagent block — it ends the whole run`);
-    }
     const { status } = node;
     // Only statuses the SDKs surface without retrying keep the trace
     // deterministic: 408/429/5xx are auto-retried by common clients.
@@ -924,9 +1051,49 @@ function scriptedTraces(koan: KoanFile): ScriptedTrace[] {
       abort: trace.abort,
     }));
   }
-  const steps = body.turns.flatMap((t) => t.trace?.steps ?? []);
   const opening = body.turns[0] as Extract<Turn, { kind: 'prompt' }>;
-  return [{ steps, at: 'turns', opening: { label: 'turns[0].prompt', text: opening.prompt } }];
+  return turnsScriptedConversations(body.turns).map(({ label, conv }) => ({
+    steps: conv.flatMap((t) => t.steps),
+    at: label,
+    opening: { label: 'turns[0].prompt', text: opening.prompt },
+  }));
+}
+
+// One entry per conforming shape of a `turns:` koan's whole conversation:
+// the turns as written, when no turn carries `one_of`, or one per named
+// variant of the one turn that does (a koan writes `one_of` on at most
+// one turn — parseTurnsBody's own rule). Every other turn contributes its
+// single `when` trace unchanged. Shared by `scriptedTraces` (which
+// flattens each entry into one step list) and `scriptedConversations`
+// (which needs the turn-by-turn boundaries kept apart).
+function turnsScriptedConversations(turns: Turn[]): Array<{ label: string; conv: ScriptedConversation }> {
+  const oneOfIndex = turns.findIndex((t) => t.trace?.kind === 'one_of');
+  const stepsOf = (t: Turn): Step[] => (t.trace?.kind === 'one' ? t.trace.trace.steps : []);
+
+  const build = (variant?: string): ScriptedConversation =>
+    turns.map((t, i) => {
+      if (oneOfIndex !== -1 && i === oneOfIndex && variant !== undefined) {
+        const variantsTurnTrace = t.trace as Extract<TurnTrace, { kind: 'one_of' }>;
+        return {
+          steps: variantsTurnTrace.variants[variant].steps,
+          at: `turns[${i}].one_of.${variant}`,
+          ...(t.kind === 'compact' ? { compact: true as const } : {}),
+        };
+      }
+      return {
+        steps: stepsOf(t),
+        at: `turns[${i}].when`,
+        ...(t.kind === 'compact' ? { compact: true as const } : {}),
+      };
+    });
+
+  if (oneOfIndex === -1) return [{ label: 'turns', conv: build() }];
+
+  const variantsTurnTrace = turns[oneOfIndex].trace as Extract<TurnTrace, { kind: 'one_of' }>;
+  return Object.keys(variantsTurnTrace.variants).map((variant) => ({
+    label: `turns.one_of.${variant}`,
+    conv: build(variant),
+  }));
 }
 
 // Across entries, not within one: the fold an ask brings about is an
@@ -938,6 +1105,10 @@ function everyFoldReachesTheConversation(koan: KoanFile): Problem | undefined {
       // Only a fold that completed: a refused one produced no summary to
       // carry, and a run that gives up on the refusal ends right there.
       if (step.kind !== 'compaction' || step.report !== 'completed') continue;
+      // The whole trace's last exchange owes no carrier: nothing after it
+      // may ask the model again — a fold can spend the budget's last
+      // request and end the run's scripted exchanges right there.
+      if (i === steps.length - 1) continue;
       if (steps[i + 1]?.kind !== 'model') {
         return problem(`${at}[${i}]: a compaction needs a model request after it — otherwise no request carries its summary`);
       }
@@ -1110,21 +1281,35 @@ function checkToolMatching(koan: KoanFile, steps: Step[], at: string): Problem |
 }
 
 /**
- * Nothing may follow a model API failure — the agent must stop,
- * including an `abort` that trails the trace. Local adjacency in the old,
- * mutation-based trace form; here a `tool` step following a failed
- * `model` step is a step of its own, and `abort` is not a step at all
- * (koan-spec.ts's header), so seeing whether anything comes after needs a
- * fresh pass over the finished trace.
+ * Nothing may follow a model API failure in its own conversation — the
+ * conversation the endpoint refused stops there. For the main
+ * conversation that ends the run, a trailing `abort` included; for a
+ * subagent's it ends the child, whose parent runs on with the failure as
+ * the delegation's outcome. Local adjacency in the old, mutation-based
+ * trace form; here a `tool` step following a failed `model` step is a
+ * step of its own, and `abort` is not a step at all (koan-spec.ts's
+ * header), so seeing whether anything comes after needs a fresh pass over
+ * the finished trace — one per conversation, since the rule is scoped to
+ * one.
  */
 function apiFailureEndsTheTrace(koan: KoanFile): Problem | undefined {
   for (const { steps, at, abort } of scriptedTraces(koan)) {
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
-      const isLast = i === steps.length - 1;
-      if (step.kind === 'model' && step.response.kind === 'api-failure' && (!isLast || abort !== undefined)) {
-        return problem(`${at}[${i + 1}]: nothing can follow a model API failure — the agent must stop`);
-      }
+    const found = checkApiFailureEnds(steps, at, abort);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function checkApiFailureEnds(steps: Step[], at: string, abort: AbortKind | undefined): Problem | undefined {
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const isLast = i === steps.length - 1;
+    if (step.kind === 'model' && step.response.kind === 'api-failure' && (!isLast || abort !== undefined)) {
+      return problem(`${at}[${i + 1}]: nothing can follow a model API failure — the conversation it refused must stop`);
+    }
+    if (step.kind === 'subagent') {
+      const found = checkApiFailureEnds(step.trace.steps, `${at}[${i}].when`, undefined);
+      if (found) return found;
     }
   }
   return undefined;
@@ -1227,14 +1412,10 @@ function scriptedConversations(koan: KoanFile): ScriptedConversation[] {
 
   const body = koan.body;
   if (body.kind === 'turns') {
-    found.push(
-      body.turns.map((t, i) => ({
-        steps: t.trace?.steps ?? [],
-        at: `turns[${i}].when`,
-        ...(t.kind === 'compact' ? { compact: true as const } : {}),
-      })),
-    );
-    for (const [i, t] of body.turns.entries()) addSubagents(t.trace?.steps ?? [], `turns[${i}].when`);
+    for (const { conv } of turnsScriptedConversations(body.turns)) {
+      found.push(conv);
+      for (const turn of conv) addSubagents(turn.steps, turn.at);
+    }
     return found;
   }
 
@@ -1353,7 +1534,11 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
 function countModelRequests(steps: Step[]): number {
   let n = 0;
   for (const step of steps) {
-    if (step.kind === 'model' || step.kind === 'compaction') n++;
+    if (step.kind === 'model') n++;
+    // A completed fold costs one request per scripted summary — however
+    // many an implementation chooses to spend (SPEC.md §3) — a failed one
+    // is always the single request the endpoint refused.
+    else if (step.kind === 'compaction') n += step.report === 'completed' ? step.summaries.length : 1;
     else if (step.kind === 'subagent') n += countModelRequests(step.trace.steps);
   }
   return n;

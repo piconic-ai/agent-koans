@@ -1,0 +1,33 @@
+name: tool-connection-drop
+description: >
+  The tool server accepts the invocation and severs the connection
+  without answering — no status, no body, unlike 038's bare status.
+  There is nothing to pass on but the fact of failure, and that fact
+  must reach the model rather than end the run: a transport failure is a
+  tool failure like any other. The agent must not retry the invocation
+  on its own — one call, one invocation — and the model gives up
+  gracefully.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: disconnect
+  - request: model
+    response: "The weather service is unreachable right now."
+
+then:
+  status: completed
+  output: { contains: "unreachable" }

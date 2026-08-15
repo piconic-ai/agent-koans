@@ -1,0 +1,76 @@
+name: two-prompts-while-running
+description: >
+  Two prompts are delivered while one turn is still running — one during
+  each held invocation of a parallel batch, so both are accepted before
+  either could be answered. Submissions form a queue: neither prompt may
+  be lost, and their answers come in the order they arrived. Two
+  processes are acceptable, and the koan is silent about which: both
+  deliveries join the live conversation at its next turn boundary, or
+  each waits and runs as its own turn, first-come first-served.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and Osaka and report both."
+
+one_of:
+  queue-each:
+    - request: model
+      response:
+        - { tool: get_weather, args: { city: "Tokyo" } }
+        - { tool: get_weather, args: { city: "Osaka" } }
+    - request: { tool: get_weather, args: { city: "Tokyo" } }
+      response: { status: 200, body: { temp: 31 } }
+      prompt: "Also report Nagoya."
+    - request: { tool: get_weather, args: { city: "Osaka" } }
+      response: { status: 200, body: { temp: 28 } }
+      prompt: "And Sapporo too."
+    - request: model
+      response: "Tokyo is at 31°C and Osaka at 28°C."
+    # The queued turns run in admission order: Nagoya's, then Sapporo's.
+    - request: model
+      response: { tool: get_weather, args: { city: "Nagoya" } }
+    - request: { tool: get_weather }
+      response: { status: 200, body: { temp: 33 } }
+    - request: model
+      response: "Nagoya is at 33°C."
+    - request: model
+      response: { tool: get_weather, args: { city: "Sapporo" } }
+    - request: { tool: get_weather }
+      response: { status: 200, body: { temp: 21 } }
+    - request: model
+      response: "Sapporo is at 21°C."
+
+  join-both:
+    - request: model
+      response:
+        - { tool: get_weather, args: { city: "Tokyo" } }
+        - { tool: get_weather, args: { city: "Osaka" } }
+    - request: { tool: get_weather, args: { city: "Tokyo" } }
+      response: { status: 200, body: { temp: 31 } }
+      prompt: "Also report Nagoya."
+    - request: { tool: get_weather, args: { city: "Osaka" } }
+      response: { status: 200, body: { temp: 28 } }
+      prompt: "And Sapporo too."
+    # One request closes the batch and carries both deliveries.
+    - request: model
+      response:
+        - { tool: get_weather, args: { city: "Nagoya" } }
+        - { tool: get_weather, args: { city: "Sapporo" } }
+    - request: { tool: get_weather, args: { city: "Nagoya" } }
+      response: { status: 200, body: { temp: 33 } }
+    - request: { tool: get_weather, args: { city: "Sapporo" } }
+      response: { status: 200, body: { temp: 21 } }
+    - request: model
+      response: "Nagoya is at 33°C and Sapporo at 21°C."
+
+then:
+  status: completed
+  output: { contains: "21" }

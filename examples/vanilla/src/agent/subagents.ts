@@ -3,15 +3,30 @@
 // declared; what does not is how a delegate's conversation runs — that is
 // the loop again, reached through the `delegate` this file is handed.
 import { parseArgs, type Tool } from './tools.js';
+import type { RunContext } from './window.js';
 
-/** A delegate declared by the run (SPEC.md §3). */
+/**
+ * A delegate declared by the run (SPEC.md §3). `context` provisions this
+ * delegate's own conversation the way a run's `context` provisions its
+ * own; absent, the delegate has no window and no threshold.
+ */
 export interface SubagentDef {
   name: string;
   description?: string;
+  context?: RunContext;
 }
 
-/** Run a briefing as a conversation of its own; `undefined` when the budget ran out first. */
-export type Delegate = (prompt: string, signal: AbortSignal) => Promise<string | undefined>;
+/**
+ * Run a briefing as a conversation of its own; `undefined` when the budget
+ * ran out first. `context` is the matched `SubagentDef`'s own — absent for
+ * a delegate the run declared none for, which is what leaves that
+ * conversation's window and threshold both unset.
+ */
+export type Delegate = (
+  prompt: string,
+  context: RunContext | undefined,
+  signal: AbortSignal,
+) => Promise<string | undefined>;
 
 /**
  * Make delegation runnable, over the delegates the run declared.
@@ -37,7 +52,8 @@ export function createSubagentTool(subagents: SubagentDef[], delegate: Delegate)
       const args = parseArgs(argsJson);
       const name = typeof args?.name === 'string' ? args.name : undefined;
       const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined;
-      if (!name || !subagents.some((s) => s.name === name)) {
+      const def = subagents.find((s) => s.name === name);
+      if (!name || !def) {
         return `Error: unknown subagent "${String(name)}"`;
       }
       if (prompt === undefined) {
@@ -48,7 +64,7 @@ export function createSubagentTool(subagents: SubagentDef[], delegate: Delegate)
       // parent's, and what the parent gets back is this one answer.
       let text: string | undefined;
       try {
-        text = await delegate(prompt, signal);
+        text = await delegate(prompt, def.context, signal);
       } catch (err) {
         // Not rethrown: losing the model ends the child's conversation,
         // not the run — the parent's model decides what a failed

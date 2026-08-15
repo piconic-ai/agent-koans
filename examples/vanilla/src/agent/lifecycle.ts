@@ -69,7 +69,10 @@ export function createAgent(
     const session: RunSession = {
       state,
       run: createRun(parts, setup, (event) => state.events.push(event)),
-      conversation: { messages: opening(prompt, definition.system), size: { used: 0 } },
+      // The run's own `context` provisions the run's own conversation
+      // (SPEC.md §3) — a delegate's conversation carries its own instead
+      // (run.ts's `delegate`), never this one.
+      conversation: { messages: opening(prompt, definition.system), size: { used: 0 }, context: setup.context },
       queued: [],
     };
     sessions.set(state.run_id, session);

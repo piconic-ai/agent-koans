@@ -8,7 +8,7 @@
 import { foldOnThreshold } from './compaction.js';
 import type { ChatMessage, ToolCall } from './model.js';
 import type { Run } from './run.js';
-import { checkRoom, reachedThreshold, type ConversationSize } from './window.js';
+import { checkRoom, reachedThreshold, type ConversationSize, type RunContext } from './window.js';
 
 /** One conversation of a run: a history of its own, and a size of its own. */
 export interface Conversation {
@@ -19,6 +19,14 @@ export interface Conversation {
    * starting over from zero would carry a full window into itself.
    */
   size: ConversationSize;
+  /**
+   * What provisions this conversation's window and threshold — the run's
+   * own for the main conversation, a delegate's own declaration for a
+   * subagent's, absent for a delegate the run declared none for. Kept
+   * here rather than read off `run.context`: a delegate's conversation is
+   * not the run's own, and its window may differ from it (SPEC.md §3).
+   */
+  context?: RunContext;
 }
 
 /**
@@ -32,15 +40,15 @@ export async function runConversation(
   run: Run,
   signal: AbortSignal,
 ): Promise<string | undefined> {
-  const { messages, size } = conversation;
+  const { messages, size, context } = conversation;
   for (;;) {
-    if (reachedThreshold(size, run.context)) {
+    if (reachedThreshold(size, context)) {
       if (!(await foldOnThreshold(conversation, run, signal))) return undefined;
     }
 
     // Read before every request rather than after a fold: what a full
     // window forbids is asking the model again, whatever filled it.
-    checkRoom(size, run.context);
+    checkRoom(size, context);
 
     const grant = run.budget.take();
     if (grant === undefined) return undefined;

@@ -123,24 +123,28 @@ conversation may see of another holds at every depth: a briefing in, a
 final answer out. A delegate whose own model request is refused loses
 only the delegation: the refusal is the delegation's outcome and MUST
 reach the conversation that delegated, the way a final answer would
-have — what it means for the run stays that conversation's to decide.
+have — what it means for the run stays that conversation's to decide. A
+subagent declaration MAY carry a `context` of its own, provisioning that
+delegate's conversation the same way the run's own provisions its. A
+delegate the run declared no context for has no threshold and MUST NOT
+compact.
 
-**Context.** A run MAY declare the model's context window and the share of
-it at which the agent compacts — folds the conversation into a summary and
-carries on from it. Where a run declares no threshold, and where it
-declares no context at all, you MUST NOT compact. Where it declares one,
-the size to compare against is the last `usage.prompt_tokens` the model
-endpoint reported for that conversation, not an estimate of your own —
-and each conversation's own: a delegate's usage never stands in for the
-run's, however large it grows. Once
-that size reaches the threshold, you MUST have compacted by the time the
+**Context.** A run MAY declare the context window its own conversation is
+given, and the share of it at which the agent compacts — folds the
+conversation into a summary and carries on from it. Where a run declares no
+threshold, and where it declares no context at all, you MUST NOT compact.
+Where it declares one, the size to compare against is the last
+`usage.prompt_tokens` the model endpoint reported for that conversation, not
+an estimate of your own — and each conversation's own: a delegate's usage
+never stands in for the run's, however large it grows. Once that size
+reaches the threshold, you MUST have compacted by the time the
 conversation's next turn issues its first model request — whether you fold
 it down before the running turn's next request, or once that turn settles,
 is yours. Summarizing is an ordinary request to the same endpoint; what it
 carries is yours to choose, its reply MUST reach the conversation it
 summarized, and it draws from the run's model-request budget the way any
-other request does. A fold MAY be served by more than one such request —
-how many is yours too — and every one of their replies MUST reach the
+other request does. A fold MAY be served by more than one such request — how
+many is yours too — and every one of their replies MUST reach the
 conversation, however you combine them.
 
 A fold MUST also be reported to the caller: an entry in the run's `events`

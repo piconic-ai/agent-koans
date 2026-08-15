@@ -266,7 +266,14 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         body: JSON.stringify({
           prompt: firstPrompt,
           tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
-          ...(subagentNames.length > 0 ? { subagents: subagentNames.map((name) => ({ name })) } : {}),
+          ...(subagentNames.length > 0
+            ? {
+                subagents: subagentNames.map((name) => {
+                  const setup = koan.given.subagents?.[name];
+                  return setup === undefined ? { name } : { name, context: setup.context };
+                }),
+              }
+            : {}),
           ...(koan.given.limits ? { limits: koan.given.limits } : {}),
           ...(koan.given.context ? { context: koan.given.context } : {}),
         }),

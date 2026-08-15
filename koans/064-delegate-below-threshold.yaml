@@ -1,0 +1,49 @@
+name: delegate-below-threshold
+description: >
+  A delegate's conversation grows toward its own declared threshold but
+  stays well below it: 30000, then 40000 of the declared 50000, short of
+  the 45000 the delegate would fold at. A declared threshold is not
+  standing permission to fold (051's contract line, now for a delegate):
+  with room left, the delegate must carry its own history as it stands
+  into its final answer — the trace has no compaction step for one to
+  consume. The run itself declares no context at all: whose window a
+  threshold reads is each conversation's own (060).
+
+given:
+  subagents:
+    researcher:
+      context:
+        window: 50000
+        compaction: 90%
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+prompt: "Have the researcher look up incident INC-3."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Look up incident INC-3 and report its operator code." }
+  - subagent: researcher
+    when:
+      - request: model
+        response:
+          body: { tool: lookup_incident, args: { id: "INC-3" } }
+          used_tokens: 30000
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-3-1120" } }
+      - request: model
+        response:
+          body: "INC-3's operator code is K-3-1120."
+          used_tokens: 40000
+  - request: model
+    response: "The researcher reports INC-3's operator code as K-3-1120."
+
+then:
+  status: completed
+  output: { contains: "K-3-1120" }

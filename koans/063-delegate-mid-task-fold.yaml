@@ -1,0 +1,62 @@
+name: delegate-mid-task-fold
+description: >
+  A delegate with a declared context crosses its own threshold in the
+  middle of its task — on a tool-instruction response, with the batch it
+  opened still unclosed. Its conversation ends at its final answer, so
+  there is no settled turn to defer to: by the delegate's next model
+  request the fold must have happened, its summary — carrying the result
+  still pending — folded back in, and the fold reported to the run's
+  caller like any other. The run itself declares no context at all:
+  whose window a threshold reads is each conversation's own (060).
+
+given:
+  subagents:
+    researcher:
+      context:
+        window: 50000
+        compaction: 90%
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+prompt: "Have the researcher audit incidents INC-1 and INC-2."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Audit INC-1 and INC-2 in order and report both operator codes." }
+  - subagent: researcher
+    when:
+      # 46000 of the declared 50000 is past the 90% the delegate folds
+      # at, and the call this response asks for is still open.
+      - request: model
+        response:
+          body: { tool: lookup_incident, args: { id: "INC-1" } }
+          used_tokens: 46000
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-1-4471" } }
+      # The fold, before the delegate's next request. The summary is the
+      # only thing left carrying the first code once the batch folds in.
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          body: "So far: INC-1 is audited; its operator code is K-1-4471. INC-2 remains."
+          used_tokens: 9000
+          compaction: completed
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-2" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-2-8830" } }
+      - request: model
+        response: "INC-1 is K-1-4471 and INC-2 is K-2-8830."
+  - request: model
+    response: "Both audited: INC-1 is K-1-4471, INC-2 is K-2-8830."
+
+then:
+  status: completed
+  output: { contains: "K-2-8830" }

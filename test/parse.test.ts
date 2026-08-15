@@ -205,6 +205,57 @@ const rows: Row[] = [
     message: '"given.limits.max_model_requests" must be a positive integer',
   },
   {
+    rule: '"given.subagents" is a mapping of name to declaration',
+    yaml: koan(`
+      given:
+        subagents: nope
+      when:
+        - request: model
+          response: ok
+    `),
+    message: '"given.subagents" must be a mapping of subagent name to declaration',
+  },
+  {
+    rule: 'a "given.subagents" entry has no unknown key',
+    yaml: koan(`
+      given:
+        subagents:
+          researcher:
+            description: x
+      when:
+        - request: model
+          response: ok
+    `),
+    message: 'given.subagents["researcher"] has unknown key "description" (allowed: context)',
+  },
+  {
+    rule: 'a "given.subagents" entry needs "context"',
+    yaml: koan(`
+      given:
+        subagents:
+          researcher: {}
+      when:
+        - request: model
+          response: ok
+    `),
+    message: 'given.subagents["researcher"] needs "context" — an entry declaring nothing would provision nothing',
+  },
+  {
+    rule: 'a "given.subagents" entry\'s "context" is well-formed',
+    yaml: koan(`
+      given:
+        subagents:
+          researcher:
+            context:
+              window: 0
+              compaction: "off"
+      when:
+        - request: model
+          response: ok
+    `),
+    message: '"given.subagents["researcher"].context.window" must be a positive integer (the window in tokens)',
+  },
+  {
     rule: '"prompt" cannot combine with "turns"',
     yaml: bareKoan(`
       prompt: p
@@ -981,6 +1032,22 @@ const rows: Row[] = [
     message: `when: prompt and the briefing of subagent "r" are not distinct — no briefing may equal or contain another briefing or the prompt, since requests are attributed to conversations by their opening`,
   },
   {
+    rule: 'every declared subagent is delegated to somewhere in the koan',
+    yaml: koan(`
+      given:
+        subagents:
+          researcher:
+            context:
+              window: 100
+              compaction: "off"
+      when:
+        - request: model
+          response: ok
+    `),
+    message:
+      'given.subagents["researcher"]: no trace delegates to a subagent of this name — a declaration must provision a delegation the koan scripts',
+  },
+  {
     rule: '"given.context" needs both a window and a policy',
     yaml: koan(`
       given:
@@ -1033,6 +1100,55 @@ const rows: Row[] = [
       'when[2]: used_tokens falls from 50 to 10 — a conversation shrinks only where a compaction folds it down',
   },
   {
+    rule: "a delegate's used_tokens is checked against its own declared window, not the run's",
+    yaml: bareKoan(`
+      prompt: "Have the researcher look into it."
+      given:
+        subagents:
+          researcher:
+            context:
+              window: 100
+              compaction: "off"
+      when:
+        - request: model
+          response: { subagent: researcher, prompt: "Look into it." }
+        - subagent: researcher
+          when:
+            - request: model
+              response: { body: done, used_tokens: 101 }
+        - request: model
+          response: ok
+    `),
+    message: 'when[1].when[0]: used_tokens (101) is larger than given.subagents["researcher"].context.window (100)',
+  },
+  {
+    rule: "a delegate's own threshold, once crossed, forbids a further model request the same way the run's does",
+    yaml: bareKoan(`
+      prompt: "Have the researcher look into it."
+      given:
+        subagents:
+          researcher:
+            context:
+              window: 100
+              compaction: "90%"
+      when:
+        - request: model
+          response: { subagent: researcher, prompt: "Look into it." }
+        - subagent: researcher
+          when:
+            - request: model
+              response: { body: { tool: x, args: {} }, used_tokens: 95 }
+            - request: { tool: x }
+              response: { status: 200 }
+            - request: model
+              response: ok
+        - request: model
+          response: ok
+    `),
+    message:
+      'when[1].when[2]: the conversation reached 95 of 100 tokens, at or above the threshold of 90, earlier in this turn — a turn cannot ask for another model request past its threshold, since when the agent folds it down before the next turn is the agent\'s own business',
+  },
+  {
     rule: 'a compaction belongs at the start of a later turn',
     yaml: koan(`
       given:
@@ -1048,7 +1164,67 @@ const rows: Row[] = [
           response: ok
     `),
     message:
-      'when[1]: a compaction belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn\'s first model request goes out, and where inside the turn before it is the agent\'s own business',
+      'when[1]: a compaction belongs at the start of a later turn of a "turns:" koan, or inside a subagent block, where a delegate\'s own declared threshold puts one — a run folds the conversation down by the time the next turn\'s first model request goes out, and where inside the turn before it is the agent\'s own business',
+  },
+  {
+    rule: 'a compaction at the very start of a plain "when:" koan\'s main trace is still rejected — the relaxation is subagent-only, not position-only',
+    yaml: koan(`
+      given:
+        context:
+          window: 100
+          compaction: "90%"
+      when:
+        - request: { type: model, purpose: compaction }
+          response: { body: "so far", used_tokens: 10, compaction: completed }
+        - request: model
+          response: ok
+    `),
+    message:
+      'when[0]: a compaction belongs at the start of a later turn of a "turns:" koan, or inside a subagent block, where a delegate\'s own declared threshold puts one — a run folds the conversation down by the time the next turn\'s first model request goes out, and where inside the turn before it is the agent\'s own business',
+  },
+  {
+    rule: 'a compaction inside an undeclared delegate\'s block has nothing asking for it',
+    yaml: bareKoan(`
+      prompt: "Have the researcher look into it."
+      when:
+        - request: model
+          response: { subagent: researcher, prompt: "Look into it." }
+        - subagent: researcher
+          when:
+            - request: { type: model, purpose: compaction }
+              response: { body: "so far", used_tokens: 10, compaction: completed }
+            - request: model
+              response: done
+        - request: model
+          response: ok
+    `),
+    message:
+      'when[1].when[0]: nothing has asked for a fold here — the conversation is at 0 tokens and the run declares no threshold for delegate "researcher", and the caller did not ask before this turn',
+  },
+  {
+    rule: "a compaction inside a declared delegate's block below its threshold has nothing asking for it",
+    yaml: bareKoan(`
+      prompt: "Have the researcher look into it."
+      given:
+        subagents:
+          researcher:
+            context:
+              window: 100
+              compaction: "90%"
+      when:
+        - request: model
+          response: { subagent: researcher, prompt: "Look into it." }
+        - subagent: researcher
+          when:
+            - request: { type: model, purpose: compaction }
+              response: { body: "so far", used_tokens: 10, compaction: completed }
+            - request: model
+              response: done
+        - request: model
+          response: ok
+    `),
+    message:
+      'when[1].when[0]: nothing has asked for a fold here — the conversation is at 0 tokens, below the threshold of 90, and the caller did not ask before this turn',
   },
   {
     rule: 'a turn past the threshold asks for no further model request',

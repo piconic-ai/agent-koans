@@ -52,6 +52,7 @@ import type {
   ModelResponse,
   ParsedArgs,
   Step,
+  SubagentSetup,
   ToolDef,
   Trace,
   Turn,
@@ -166,39 +167,80 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
   const context = parseContext(g.context);
   if (isProblem(context)) return context;
 
-  return { tools: tools as Record<string, ToolDef>, files, limits, context };
+  const subagents = parseSubagents(g.subagents);
+  if (isProblem(subagents)) return subagents;
+
+  return { tools: tools as Record<string, ToolDef>, files, limits, context, subagents };
 }
 
 // Both keys are required once the block is written: a window with no
 // policy leaves the implementation to decide the one thing this block
 // exists to decide, and a policy with no window is a share of nothing.
-function parseContext(raw: unknown): Parsed<ContextSetup | undefined> {
+// `label` lets a subagent's own declaration (below) report the same rules
+// under its own path instead of every message hard-coding "given.context" —
+// the smaller edit next to wrapping every one of parseContext's returns.
+function parseContext(raw: unknown, label = 'given.context'): Parsed<ContextSetup | undefined> {
   if (raw === undefined) return undefined;
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return problem('"given.context" must be a mapping (keys: window, compaction)');
+    return problem(`"${label}" must be a mapping (keys: window, compaction)`);
   }
   const c = raw as Record<string, unknown>;
   for (const key of Object.keys(c)) {
     if (key !== 'window' && key !== 'compaction') {
-      return problem(`"given.context" has unknown key "${key}" (allowed: window, compaction)`);
+      return problem(`"${label}" has unknown key "${key}" (allowed: window, compaction)`);
     }
   }
   if (!Number.isInteger(c.window) || (c.window as number) < 1) {
-    return problem('"given.context.window" must be a positive integer (the window in tokens)');
+    return problem(`"${label}.window" must be a positive integer (the window in tokens)`);
   }
-  const compaction = parseCompactionPolicy(c.compaction);
+  const compaction = parseCompactionPolicy(c.compaction, label);
   if (isProblem(compaction)) return compaction;
   return { window: c.window as number, compaction };
 }
 
-function parseCompactionPolicy(raw: unknown): Parsed<Compaction> {
+function parseCompactionPolicy(raw: unknown, label = 'given.context'): Parsed<Compaction> {
   if (raw === 'off') return { kind: 'off' };
   const match = typeof raw === 'string' ? /^(\d{1,3})%$/.exec(raw) : null;
   const percent = match ? Number(match[1]) : NaN;
   if (!Number.isInteger(percent) || percent < 1 || percent > 100) {
-    return problem('"given.context.compaction" must be "off" or a percentage of the window, like "90%"');
+    return problem(`"${label}.compaction" must be "off" or a percentage of the window, like "90%"`);
   }
   return { kind: 'threshold', percent };
+}
+
+// A mapping keyed by name, not a list like the wire's `given.subagents`
+// (openapi.yaml): an entry augments an already-named delegate, so writing
+// it by name makes a duplicate or a typo a YAML-level clash instead of a
+// silent pairing-by-position against the trace.
+function parseSubagents(raw: unknown): Parsed<Record<string, SubagentSetup> | undefined> {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return problem('"given.subagents" must be a mapping of subagent name to declaration');
+  }
+  const built: Record<string, SubagentSetup> = {};
+  for (const [name, rawEntry] of Object.entries(raw as Record<string, unknown>)) {
+    if (name.trim().length === 0) {
+      return problem('"given.subagents" has an empty name — a declaration must name the subagent it provisions');
+    }
+    if (typeof rawEntry !== 'object' || rawEntry === null || Array.isArray(rawEntry)) {
+      return problem(`given.subagents["${name}"] must be a mapping (keys: context)`);
+    }
+    const e = rawEntry as Record<string, unknown>;
+    for (const key of Object.keys(e)) {
+      if (key !== 'context') {
+        return problem(`given.subagents["${name}"] has unknown key "${key}" (allowed: context)`);
+      }
+    }
+    if (e.context === undefined) {
+      return problem(`given.subagents["${name}"] needs "context" — an entry declaring nothing would provision nothing`);
+    }
+    const context = parseContext(e.context, `given.subagents["${name}"].context`);
+    if (isProblem(context)) return context;
+    // Non-undefined: parseContext only returns undefined for undefined
+    // input, and `e.context` was just checked to be defined.
+    built[name] = { context: context as ContextSetup };
+  }
+  return built;
 }
 
 // A `turns:` koan replaces the top-level `prompt` and `when`/`one_of`;
@@ -596,7 +638,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         queuedSeams += 1;
       }
       if (target.purpose !== undefined) {
-        const fold = parseCompactionStep(at_i, res, inTurns && i === 0);
+        const fold = parseCompactionStep(at_i, res, (inTurns && i === 0) || inSubagent);
         if (isProblem(fold)) return fold;
         steps.push(fold);
         continue;
@@ -731,12 +773,15 @@ function parseUsedTokens(at: string, raw: unknown): Parsed<number | undefined> {
  * neither carries the other's fields.
  */
 function parseCompactionStep(at: string, res: unknown, mayFoldHere: boolean): Parsed<Step> {
-  // Anywhere but a turn's first step would pin down one of two conforming
-  // designs: some agents fold before the next request of a turn already
-  // running, some once that turn settles (SPEC.md §3).
+  // Anywhere but a turn's first step, or inside a subagent block, would
+  // pin down one of two conforming designs: some agents fold before the
+  // next request of a turn already running, some once that turn settles
+  // (SPEC.md §3). A delegate's own declared threshold puts a fold inside
+  // its block instead — its conversation ends at its final answer, so
+  // there is no settled turn for it to defer to (SPEC.md §3).
   if (!mayFoldHere) {
     return problem(
-      `${at}: a compaction belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn's first model request goes out, and where inside the turn before it is the agent's own business`,
+      `${at}: a compaction belongs at the start of a later turn of a "turns:" koan, or inside a subagent block, where a delegate's own declared threshold puts one — a run folds the conversation down by the time the next turn's first model request goes out, and where inside the turn before it is the agent's own business`,
     );
   }
   if (!isMapping(res)) {
@@ -1011,6 +1056,7 @@ const constraints: Constraint[] = [
   everyToolRequestMatchesAnOpenCall,
   apiFailureEndsTheTrace,
   eachSubagentIsDelegatedToOnce,
+  everyDeclaredSubagentIsDelegatedTo,
   openingsAreDistinct,
   theTraceFitsTheModelRequestBudget,
   usedTokensFitTheWindow,
@@ -1066,11 +1112,11 @@ function scriptedTraces(koan: KoanFile): ScriptedTrace[] {
 // single `when` trace unchanged. Shared by `scriptedTraces` (which
 // flattens each entry into one step list) and `scriptedConversations`
 // (which needs the turn-by-turn boundaries kept apart).
-function turnsScriptedConversations(turns: Turn[]): Array<{ label: string; conv: ScriptedConversation }> {
+function turnsScriptedConversations(turns: Turn[]): Array<{ label: string; conv: ConversationTurns }> {
   const oneOfIndex = turns.findIndex((t) => t.trace?.kind === 'one_of');
   const stepsOf = (t: Turn): Step[] => (t.trace?.kind === 'one' ? t.trace.trace.steps : []);
 
-  const build = (variant?: string): ScriptedConversation =>
+  const build = (variant?: string): ConversationTurns =>
     turns.map((t, i) => {
       if (oneOfIndex !== -1 && i === oneOfIndex && variant !== undefined) {
         const variantsTurnTrace = t.trace as Extract<TurnTrace, { kind: 'one_of' }>;
@@ -1098,20 +1144,37 @@ function turnsScriptedConversations(turns: Turn[]): Array<{ label: string; conv:
 
 // Across entries, not within one: the fold an ask brings about is an
 // entry of its own, and the request that carries its summary belongs to
-// the prompt that follows.
+// the prompt that follows. Recurses into subagent blocks (same pattern as
+// checkApiFailureEnds) — a child's own fold owes a model request after it
+// the same way the run's own does, and a subagent block's inner steps are
+// otherwise invisible to `scriptedTraces`, which only walks the top level.
 function everyFoldReachesTheConversation(koan: KoanFile): Problem | undefined {
   for (const { steps, at } of scriptedTraces(koan)) {
-    for (const [i, step] of steps.entries()) {
-      // Only a fold that completed: a refused one produced no summary to
-      // carry, and a run that gives up on the refusal ends right there.
-      if (step.kind !== 'compaction' || step.report !== 'completed') continue;
-      // The whole trace's last exchange owes no carrier: nothing after it
-      // may ask the model again — a fold can spend the budget's last
-      // request and end the run's scripted exchanges right there.
-      if (i === steps.length - 1) continue;
-      if (steps[i + 1]?.kind !== 'model') {
-        return problem(`${at}[${i}]: a compaction needs a model request after it — otherwise no request carries its summary`);
-      }
+    const found = checkFoldsReachTheirConversation(steps, at);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function checkFoldsReachTheirConversation(steps: Step[], at: string): Problem | undefined {
+  for (const [i, step] of steps.entries()) {
+    if (step.kind === 'subagent') {
+      const found = checkFoldsReachTheirConversation(step.trace.steps, `${at}[${i}].when`);
+      if (found) return found;
+      continue;
+    }
+    // Only a fold that completed: a refused one produced no summary to
+    // carry, and a run that gives up on the refusal ends right there.
+    if (step.kind !== 'compaction' || step.report !== 'completed') continue;
+    // The (sub)trace's last exchange owes no carrier: nothing after it
+    // may ask the model again — a fold can spend the budget's last
+    // request and end the (sub)trace's scripted exchanges right there. A
+    // subagent block can never actually end on one, since it must end in
+    // a reply or an api-failure (parseTrace's own rule), but the
+    // exemption applies uniformly rather than special-casing that away.
+    if (i === steps.length - 1) continue;
+    if (steps[i + 1]?.kind !== 'model') {
+      return problem(`${at}[${i}]: a compaction needs a model request after it — otherwise no request carries its summary`);
     }
   }
   return undefined;
@@ -1341,6 +1404,38 @@ function checkNamesUnique(steps: Step[], at: string, seen: Set<string>): Problem
   return undefined;
 }
 
+// A declaration with no matching delegation would provision a conversation
+// the koan never opens — every `given.subagents` key must name a subagent
+// some scripted trace actually delegates to, in any variant.
+function everyDeclaredSubagentIsDelegatedTo(koan: KoanFile): Problem | undefined {
+  const declared = koan.given.subagents;
+  if (declared === undefined) return undefined;
+  const delegated = new Set<string>();
+  for (const { steps } of scriptedTraces(koan)) {
+    collectDelegatedNames(steps, delegated);
+  }
+  for (const name of Object.keys(declared)) {
+    if (!delegated.has(name)) {
+      return problem(
+        `given.subagents["${name}"]: no trace delegates to a subagent of this name — a declaration must provision a delegation the koan scripts`,
+      );
+    }
+  }
+  return undefined;
+}
+
+function collectDelegatedNames(steps: Step[], out: Set<string>): void {
+  for (const step of steps) {
+    if (step.kind === 'model' && step.response.kind === 'instructions') {
+      for (const instruction of step.response.instructions) {
+        if (instruction.kind === 'delegate') out.add(instruction.subagent);
+      }
+    } else if (step.kind === 'subagent') {
+      collectDelegatedNames(step.trace.steps, out);
+    }
+  }
+}
+
 // Openings must be mutually non-containing, not merely distinct: the mock
 // attributes each incoming request to a conversation by which opening its
 // first user message contains, and `contains` — chosen to
@@ -1392,8 +1487,19 @@ function theTraceFitsTheModelRequestBudget(koan: KoanFile): Problem | undefined 
   return undefined;
 }
 
-/** One conversation of a scripted trace, split where a new turn begins. */
-type ScriptedConversation = Array<{ steps: Step[]; at: string; compact?: true }>;
+/** One conversation's steps, split where a new turn begins. */
+type ConversationTurns = Array<{ steps: Step[]; at: string; compact?: true }>;
+
+/**
+ * One scripted conversation, plus which subagent it belongs to —
+ * `undefined` for the run's own. Carried alongside `turns` rather than
+ * folded into each turn's own record: the name is one fact about the whole
+ * conversation, not something that could vary turn to turn.
+ */
+interface ScriptedConversation {
+  name: string | undefined;
+  turns: ConversationTurns;
+}
 
 // Turn by turn, and not `scriptedTraces` above: a size belongs to one
 // conversation, so a child's starts empty however full its parent's is,
@@ -1405,7 +1511,7 @@ function scriptedConversations(koan: KoanFile): ScriptedConversation[] {
     for (const [i, step] of steps.entries()) {
       if (step.kind !== 'subagent') continue;
       const nested = `${at}[${i}].when`;
-      found.push([{ steps: step.trace.steps, at: nested }]);
+      found.push({ name: step.name, turns: [{ steps: step.trace.steps, at: nested }] });
       addSubagents(step.trace.steps, nested);
     }
   };
@@ -1413,7 +1519,7 @@ function scriptedConversations(koan: KoanFile): ScriptedConversation[] {
   const body = koan.body;
   if (body.kind === 'turns') {
     for (const { conv } of turnsScriptedConversations(body.turns)) {
-      found.push(conv);
+      found.push({ name: undefined, turns: conv });
       for (const turn of conv) addSubagents(turn.steps, turn.at);
     }
     return found;
@@ -1424,10 +1530,18 @@ function scriptedConversations(koan: KoanFile): ScriptedConversation[] {
       ? [{ steps: body.trace.steps, at: 'when' }]
       : Object.entries(body.variants).map(([name, trace]) => ({ steps: trace.steps, at: `one_of.${name}` }));
   for (const trace of traces) {
-    found.push([trace]);
+    found.push({ name: undefined, turns: [trace] });
     addSubagents(trace.steps, trace.at);
   }
   return found;
+}
+
+// A conversation's context: the run's own for the main conversation, the
+// run's declaration for that name for a delegate's — never a delegate's
+// standing in for another, the way koan 060 already pins the sizes
+// themselves to not do.
+function resolveContext(koan: KoanFile, name: string | undefined): ContextSetup | undefined {
+  return name === undefined ? koan.given.context : koan.given.subagents?.[name]?.context;
 }
 
 /**
@@ -1436,19 +1550,28 @@ function scriptedConversations(koan: KoanFile): ScriptedConversation[] {
  * in `given`, which a single step cannot see.
  */
 function usedTokensFitTheWindow(koan: KoanFile): Problem | undefined {
-  const context = koan.given.context;
-  for (const conv of scriptedConversations(koan)) {
+  for (const { name, turns } of scriptedConversations(koan)) {
+    const context = resolveContext(koan, name);
     let used = 0;
-    for (const turn of conv) {
+    for (const turn of turns) {
       for (const [i, step] of turn.steps.entries()) {
         if (step.kind !== 'model' && step.kind !== 'compaction') continue;
         const written = step.kind === 'compaction' && step.report === 'failed' ? undefined : step.used_tokens;
         if (written === undefined) continue;
         if (context === undefined) {
-          return problem(`${turn.at}[${i}]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of`);
-        }
-        if (written > context.window) {
-          return problem(`${turn.at}[${i}]: used_tokens (${written}) is larger than given.context.window (${context.window})`);
+          // Only the run's own conversation must have one to compare
+          // against: a delegate's without a declared context has no
+          // window at all, so its reported size is whatever the endpoint
+          // says, unbounded — koan 060 scripts exactly this.
+          if (name === undefined) {
+            return problem(`${turn.at}[${i}]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of`);
+          }
+        } else if (written > context.window) {
+          // Named by the declaration that actually applies: a delegate's
+          // overflow against its own declared window would otherwise be
+          // reported against the run's, which may not even exist.
+          const declared = name === undefined ? 'given.context.window' : `given.subagents["${name}"].context.window`;
+          return problem(`${turn.at}[${i}]: used_tokens (${written}) is larger than ${declared} (${context.window})`);
         }
         if (written < used && step.kind !== 'compaction') {
           return problem(
@@ -1472,16 +1595,16 @@ function usedTokensFitTheWindow(koan: KoanFile): Problem | undefined {
  * by its first request the agent has run out of room to defer.
  */
 function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefined {
-  const context = koan.given.context;
-  const compaction = context?.compaction;
-  const threshold =
-    context !== undefined && compaction?.kind === 'threshold'
-      ? Math.ceil((context.window * compaction.percent) / 100)
-      : undefined;
+  for (const { name, turns } of scriptedConversations(koan)) {
+    const context = resolveContext(koan, name);
+    const compaction = context?.compaction;
+    const threshold =
+      context !== undefined && compaction?.kind === 'threshold'
+        ? Math.ceil((context.window * compaction.percent) / 100)
+        : undefined;
 
-  for (const conv of scriptedConversations(koan)) {
     let used = 0;
-    for (const turn of conv) {
+    for (const turn of turns) {
       const asked = turn.compact === true;
       let over = threshold !== undefined && used >= threshold;
       if ((over || asked) && turn.steps[0].kind !== 'compaction') {
@@ -1494,9 +1617,16 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
       for (const [i, step] of turn.steps.entries()) {
         if (step.kind === 'compaction') {
           if (!over && !asked) {
+            // Named by the conversation the missing threshold belongs to:
+            // for a delegate, "the run declares no threshold" would point
+            // at the wrong declaration — the run's own may even exist.
+            const noThreshold =
+              name === undefined
+                ? ' and the run declares no threshold'
+                : ` and the run declares no threshold for delegate "${name}"`;
             return problem(
               `${turn.at}[${i}]: nothing has asked for a fold here — the conversation is at ${used} tokens${
-                threshold === undefined ? ' and the run declares no threshold' : `, below the threshold of ${threshold}`
+                threshold === undefined ? noThreshold : `, below the threshold of ${threshold}`
               }, and the caller did not ask before this turn`,
             );
           }

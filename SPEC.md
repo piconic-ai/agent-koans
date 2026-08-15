@@ -123,24 +123,31 @@ conversation may see of another holds at every depth: a briefing in, a
 final answer out. A delegate whose own model request is refused loses
 only the delegation: the refusal is the delegation's outcome and MUST
 reach the conversation that delegated, the way a final answer would
-have — what it means for the run stays that conversation's to decide.
+have — what it means for the run stays that conversation's to decide. A
+subagent declaration MAY carry a `context` of its own, provisioning that
+delegate's conversation the same way the run's own provisions its. A
+delegate the run declared no context for has no threshold and MUST NOT
+compact. A delegate with a declared threshold that its conversation
+reaches MUST have folded by that conversation's next model request — its
+conversation ends at its final answer, so there is no settled turn to
+defer to.
 
-**Context.** A run MAY declare the model's context window and the share of
-it at which the agent compacts — folds the conversation into a summary and
-carries on from it. Where a run declares no threshold, and where it
-declares no context at all, you MUST NOT compact. Where it declares one,
-the size to compare against is the last `usage.prompt_tokens` the model
-endpoint reported for that conversation, not an estimate of your own —
-and each conversation's own: a delegate's usage never stands in for the
-run's, however large it grows. Once
-that size reaches the threshold, you MUST have compacted by the time the
+**Context.** A run MAY declare the context window its own conversation is
+given, and the share of it at which the agent compacts — folds the
+conversation into a summary and carries on from it. Where a run declares no
+threshold, and where it declares no context at all, you MUST NOT compact.
+Where it declares one, the size to compare against is the last
+`usage.prompt_tokens` the model endpoint reported for that conversation, not
+an estimate of your own — and each conversation's own: a delegate's usage
+never stands in for the run's, however large it grows. Once that size
+reaches the threshold, you MUST have compacted by the time the
 conversation's next turn issues its first model request — whether you fold
 it down before the running turn's next request, or once that turn settles,
 is yours. Summarizing is an ordinary request to the same endpoint; what it
 carries is yours to choose, its reply MUST reach the conversation it
 summarized, and it draws from the run's model-request budget the way any
-other request does. A fold MAY be served by more than one such request —
-how many is yours too — and every one of their replies MUST reach the
+other request does. A fold MAY be served by more than one such request — how
+many is yours too — and every one of their replies MUST reach the
 conversation, however you combine them.
 
 A fold MUST also be reported to the caller: an entry in the run's `events`
@@ -311,6 +318,8 @@ it cannot drift from the contract it indexes.
 | [060-subagent-usage](./koans/060-subagent-usage.yaml) | A delegate's conversation grows to 95000 of the run's declared 100000 window — past the 90% threshold — while the parent's own stays small. The size a threshold is compared against is each conversation's own reported usage, never another conversation's of the same run: the child's growth is not the parent's, so the parent must not fold, and the next turn opens on the history as it stands — the trace has no compaction step for one to consume (051). |
 | [061-fold-spends-the-budget](./koans/061-fold-spends-the-budget.yaml) | The summarizing request is an ordinary request to the model endpoint, so it draws from the run's model-request budget the way any other request does (016). A budget of 2 is spent by one reply and one asked-for fold; the follow-up prompt finds nothing left, and the run must end aborted without asking the model anything — the trace has no request left for it to make. |
 | [062-tool-connection-drop](./koans/062-tool-connection-drop.yaml) | The tool server accepts the invocation and severs the connection without answering — no status, no body, unlike 038's bare status. There is nothing to pass on but the fact of failure, and that fact must reach the model rather than end the run: a transport failure is a tool failure like any other. The agent must not retry the invocation on its own — one call, one invocation — and the model gives up gracefully. |
+| [063-delegate-mid-task-fold](./koans/063-delegate-mid-task-fold.yaml) | A delegate with a declared context crosses its own threshold in the middle of its task — on a tool-instruction response, with the batch it opened still unclosed. Its conversation ends at its final answer, so there is no settled turn to defer to: by the delegate's next model request the fold must have happened, its summary — carrying the result still pending — folded back in, and the fold reported to the run's caller like any other. The run itself declares no context at all: whose window a threshold reads is each conversation's own (060). |
+| [064-delegate-below-threshold](./koans/064-delegate-below-threshold.yaml) | A delegate's conversation grows toward its own declared threshold but stays well below it: 30000, then 40000 of the declared 50000, short of the 45000 the delegate would fold at. A declared threshold is not standing permission to fold (051's contract line, now for a delegate): with room left, the delegate must carry its own history as it stands into its final answer — the trace has no compaction step for one to consume. The run itself declares no context at all: whose window a threshold reads is each conversation's own (060). |
 
 <!-- koan-index:end -->
 

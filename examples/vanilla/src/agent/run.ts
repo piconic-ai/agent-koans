@@ -30,13 +30,14 @@ export interface RunSetup {
 /**
  * What every conversation of one run shares. A delegate is given a
  * conversation of its own and this same run — which is why the budget it
- * spends is the run's, and the tools it may call are the run's.
+ * spends is the run's, and the tools it may call are the run's. Not a
+ * window, though: each conversation's own `context` provisions it
+ * (conversation.ts), the run's own included, since parent and delegate may
+ * run different models with different windows (SPEC.md §3).
  */
 export interface Run {
   tools: Map<string, Tool>;
   budget: Budget;
-  /** Absent when the run declared none: its conversations then grow unbounded and are never folded down. */
-  context?: RunContext;
   report: ReportEvent;
   model: ModelClient;
 }
@@ -47,15 +48,17 @@ export function createRun(parts: AgentParts, setup: RunSetup, report: ReportEven
   const run: Run = {
     tools,
     budget: createBudget(setup.limits),
-    context: setup.context,
     report,
     model: parts.model,
   };
   // Delegation is the loop again: a conversation of its own, because a
   // subagent conversation cannot be continued yet, and a size of its own —
   // but the same run, so what it spends comes out of the run's budget.
-  const delegate: Delegate = (briefing, signal) =>
-    runConversation({ messages: [{ role: 'user', content: briefing }], size: { used: 0 } }, run, signal);
+  // `context` is the delegate's own declaration, not the run's: absent
+  // when the run declared this delegate none, which is what leaves its
+  // conversation with no window and no threshold (SPEC.md §3).
+  const delegate: Delegate = (briefing, context, signal) =>
+    runConversation({ messages: [{ role: 'user', content: briefing }], size: { used: 0 }, context }, run, signal);
 
   for (const def of setup.tools) register(tools, createDeclaredTool(def, parts.toolsBaseUrl));
   // Registered after the run's own, so a run that declares one of these

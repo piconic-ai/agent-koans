@@ -19,6 +19,7 @@ import type {
   ModelResponse,
   ParsedArgs,
   Step,
+  SubagentSetup,
   Trace as ParsedTrace,
   Turn as ParsedTurn,
   TurnTrace as ParsedTurnTrace,
@@ -213,7 +214,10 @@ export interface Koan {
     /** Relative path → content, materialized into `KOAN_WORKSPACE` before the run (SPEC.md §2). */
     files?: Record<string, string>;
     limits?: RunLimits;
+    /** The window the run's own conversation grows into, and when to fold it down. */
     context?: RunContext;
+    /** Subagent name → what the run declares for it beyond its existence. A name absent here has no window and no threshold, and must not compact. */
+    subagents?: Record<string, { context: RunContext }>;
   };
   /** The run's initial prompt (top-level `prompt:`); undefined for a `turns:` koan. */
   prompt?: string;
@@ -578,12 +582,25 @@ function compileContext(context: ContextSetup | undefined): RunContext | undefin
   };
 }
 
+function compileSubagents(subagents: Record<string, SubagentSetup> | undefined): Record<string, { context: RunContext }> | undefined {
+  if (subagents === undefined) return undefined;
+  const compiled: Record<string, { context: RunContext }> = {};
+  for (const [name, entry] of Object.entries(subagents)) {
+    // Non-undefined: koan-spec.ts's SubagentSetup requires `context`, so
+    // compileContext's only undefined-producing input (`undefined` itself)
+    // never reaches it here.
+    compiled[name] = { context: compileContext(entry.context) as RunContext };
+  }
+  return compiled;
+}
+
 function compileKoan(parsed: KoanFile): Koan {
   const given = {
     tools: parsed.given.tools as Record<string, ToolDef>,
     files: parsed.given.files,
     limits: parsed.given.limits,
     context: compileContext(parsed.given.context),
+    subagents: compileSubagents(parsed.given.subagents),
   };
 
   let prompt: string | undefined;

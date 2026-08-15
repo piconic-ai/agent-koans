@@ -209,34 +209,41 @@ components:
                 this run. Exhausting the budget before a final answer must
                 end the run as `aborted`.
         context:
+          $ref: "#/components/schemas/RunContext"
+          description: >-
+            The context window the run's own conversation is given, and
+            what to do as it fills (SPEC.md §3). Absent means the agent's
+            own window applies and nothing is compacted.
+
+    RunContext:
+      type: object
+      description: >-
+        A context window, and what to do as the conversation it provisions
+        fills (SPEC.md §3). Shared by the run's own declaration and a
+        subagent's: each provisions the one conversation it names.
+      required: [window]
+      properties:
+        window:
+          type: integer
+          minimum: 1
+          description: >-
+            The window in tokens. It replaces whatever window the agent
+            would otherwise assume for this conversation's model.
+        compaction:
           type: object
           description: >-
-            The model's context window for this run, and what to do as the
-            conversation fills it (SPEC.md §3). Absent means the agent's
-            own window applies and nothing is compacted.
-          required: [window]
+            When to compact. Absent means never: the conversation is
+            carried as it stands, however full the window gets.
+          required: [at_percent]
           properties:
-            window:
+            at_percent:
               type: integer
               minimum: 1
+              maximum: 100
               description: >-
-                The window in tokens. It replaces whatever window the agent
-                would otherwise assume for this run's model.
-            compaction:
-              type: object
-              description: >-
-                When to compact. Absent means never: the conversation is
-                carried as it stands, however full the window gets.
-              required: [at_percent]
-              properties:
-                at_percent:
-                  type: integer
-                  minimum: 1
-                  maximum: 100
-                  description: >-
-                    Share of `window` at which the agent compacts, measured
-                    against the last `usage.prompt_tokens` the model
-                    endpoint reported for that conversation.
+                Share of `window` at which the agent compacts, measured
+                against the last `usage.prompt_tokens` the model
+                endpoint reported for that conversation.
 
     SubagentDef:
       type: object
@@ -248,6 +255,13 @@ components:
           description: How the model addresses this delegate in a delegation instruction.
         description:
           type: string
+        context:
+          $ref: "#/components/schemas/RunContext"
+          description: >-
+            The context window this delegate's own conversation is given
+            (SPEC.md §3), provisioned the same way the run's own `context`
+            provisions the run's. Absent means this delegate has no window
+            and no threshold, and MUST NOT compact.
 
     ToolDef:
       type: object

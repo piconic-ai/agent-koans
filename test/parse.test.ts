@@ -1199,7 +1199,7 @@ const rows: Row[] = [
           response: ok
     `),
     message:
-      'when[1].when[0]: nothing has asked for a fold here — the conversation is at 0 tokens and the run declares no threshold, and the caller did not ask before this turn',
+      'when[1].when[0]: nothing has asked for a fold here — the conversation is at 0 tokens and the run declares no threshold for delegate "researcher", and the caller did not ask before this turn',
   },
   {
     rule: "a compaction inside a declared delegate's block below its threshold has nothing asking for it",

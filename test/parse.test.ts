@@ -1164,7 +1164,67 @@ const rows: Row[] = [
           response: ok
     `),
     message:
-      'when[1]: a compaction belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn\'s first model request goes out, and where inside the turn before it is the agent\'s own business',
+      'when[1]: a compaction belongs at the start of a later turn of a "turns:" koan, or inside a subagent block, where a delegate\'s own declared threshold puts one — a run folds the conversation down by the time the next turn\'s first model request goes out, and where inside the turn before it is the agent\'s own business',
+  },
+  {
+    rule: 'a compaction at the very start of a plain "when:" koan\'s main trace is still rejected — the relaxation is subagent-only, not position-only',
+    yaml: koan(`
+      given:
+        context:
+          window: 100
+          compaction: "90%"
+      when:
+        - request: { type: model, purpose: compaction }
+          response: { body: "so far", used_tokens: 10, compaction: completed }
+        - request: model
+          response: ok
+    `),
+    message:
+      'when[0]: a compaction belongs at the start of a later turn of a "turns:" koan, or inside a subagent block, where a delegate\'s own declared threshold puts one — a run folds the conversation down by the time the next turn\'s first model request goes out, and where inside the turn before it is the agent\'s own business',
+  },
+  {
+    rule: 'a compaction inside an undeclared delegate\'s block has nothing asking for it',
+    yaml: bareKoan(`
+      prompt: "Have the researcher look into it."
+      when:
+        - request: model
+          response: { subagent: researcher, prompt: "Look into it." }
+        - subagent: researcher
+          when:
+            - request: { type: model, purpose: compaction }
+              response: { body: "so far", used_tokens: 10, compaction: completed }
+            - request: model
+              response: done
+        - request: model
+          response: ok
+    `),
+    message:
+      'when[1].when[0]: nothing has asked for a fold here — the conversation is at 0 tokens and the run declares no threshold, and the caller did not ask before this turn',
+  },
+  {
+    rule: "a compaction inside a declared delegate's block below its threshold has nothing asking for it",
+    yaml: bareKoan(`
+      prompt: "Have the researcher look into it."
+      given:
+        subagents:
+          researcher:
+            context:
+              window: 100
+              compaction: "90%"
+      when:
+        - request: model
+          response: { subagent: researcher, prompt: "Look into it." }
+        - subagent: researcher
+          when:
+            - request: { type: model, purpose: compaction }
+              response: { body: "so far", used_tokens: 10, compaction: completed }
+            - request: model
+              response: done
+        - request: model
+          response: ok
+    `),
+    message:
+      'when[1].when[0]: nothing has asked for a fold here — the conversation is at 0 tokens, below the threshold of 90, and the caller did not ask before this turn',
   },
   {
     rule: 'a turn past the threshold asks for no further model request',

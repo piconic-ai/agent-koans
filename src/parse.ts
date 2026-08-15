@@ -638,7 +638,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         queuedSeams += 1;
       }
       if (target.purpose !== undefined) {
-        const fold = parseCompactionStep(at_i, res, inTurns && i === 0);
+        const fold = parseCompactionStep(at_i, res, (inTurns && i === 0) || inSubagent);
         if (isProblem(fold)) return fold;
         steps.push(fold);
         continue;
@@ -773,12 +773,15 @@ function parseUsedTokens(at: string, raw: unknown): Parsed<number | undefined> {
  * neither carries the other's fields.
  */
 function parseCompactionStep(at: string, res: unknown, mayFoldHere: boolean): Parsed<Step> {
-  // Anywhere but a turn's first step would pin down one of two conforming
-  // designs: some agents fold before the next request of a turn already
-  // running, some once that turn settles (SPEC.md §3).
+  // Anywhere but a turn's first step, or inside a subagent block, would
+  // pin down one of two conforming designs: some agents fold before the
+  // next request of a turn already running, some once that turn settles
+  // (SPEC.md §3). A delegate's own declared threshold puts a fold inside
+  // its block instead — its conversation ends at its final answer, so
+  // there is no settled turn for it to defer to (SPEC.md §3).
   if (!mayFoldHere) {
     return problem(
-      `${at}: a compaction belongs at the start of a later turn of a "turns:" koan — a run folds the conversation down by the time the next turn's first model request goes out, and where inside the turn before it is the agent's own business`,
+      `${at}: a compaction belongs at the start of a later turn of a "turns:" koan, or inside a subagent block, where a delegate's own declared threshold puts one — a run folds the conversation down by the time the next turn's first model request goes out, and where inside the turn before it is the agent's own business`,
     );
   }
   if (!isMapping(res)) {
@@ -1141,20 +1144,37 @@ function turnsScriptedConversations(turns: Turn[]): Array<{ label: string; conv:
 
 // Across entries, not within one: the fold an ask brings about is an
 // entry of its own, and the request that carries its summary belongs to
-// the prompt that follows.
+// the prompt that follows. Recurses into subagent blocks (same pattern as
+// checkApiFailureEnds) — a child's own fold owes a model request after it
+// the same way the run's own does, and a subagent block's inner steps are
+// otherwise invisible to `scriptedTraces`, which only walks the top level.
 function everyFoldReachesTheConversation(koan: KoanFile): Problem | undefined {
   for (const { steps, at } of scriptedTraces(koan)) {
-    for (const [i, step] of steps.entries()) {
-      // Only a fold that completed: a refused one produced no summary to
-      // carry, and a run that gives up on the refusal ends right there.
-      if (step.kind !== 'compaction' || step.report !== 'completed') continue;
-      // The whole trace's last exchange owes no carrier: nothing after it
-      // may ask the model again — a fold can spend the budget's last
-      // request and end the run's scripted exchanges right there.
-      if (i === steps.length - 1) continue;
-      if (steps[i + 1]?.kind !== 'model') {
-        return problem(`${at}[${i}]: a compaction needs a model request after it — otherwise no request carries its summary`);
-      }
+    const found = checkFoldsReachTheirConversation(steps, at);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function checkFoldsReachTheirConversation(steps: Step[], at: string): Problem | undefined {
+  for (const [i, step] of steps.entries()) {
+    if (step.kind === 'subagent') {
+      const found = checkFoldsReachTheirConversation(step.trace.steps, `${at}[${i}].when`);
+      if (found) return found;
+      continue;
+    }
+    // Only a fold that completed: a refused one produced no summary to
+    // carry, and a run that gives up on the refusal ends right there.
+    if (step.kind !== 'compaction' || step.report !== 'completed') continue;
+    // The (sub)trace's last exchange owes no carrier: nothing after it
+    // may ask the model again — a fold can spend the budget's last
+    // request and end the (sub)trace's scripted exchanges right there. A
+    // subagent block can never actually end on one, since it must end in
+    // a reply or an api-failure (parseTrace's own rule), but the
+    // exemption applies uniformly rather than special-casing that away.
+    if (i === steps.length - 1) continue;
+    if (steps[i + 1]?.kind !== 'model') {
+      return problem(`${at}[${i}]: a compaction needs a model request after it — otherwise no request carries its summary`);
     }
   }
   return undefined;

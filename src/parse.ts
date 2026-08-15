@@ -1597,9 +1597,16 @@ function compactionMatchesTheDeclaredThreshold(koan: KoanFile): Problem | undefi
       for (const [i, step] of turn.steps.entries()) {
         if (step.kind === 'compaction') {
           if (!over && !asked) {
+            // Named by the conversation the missing threshold belongs to:
+            // for a delegate, "the run declares no threshold" would point
+            // at the wrong declaration — the run's own may even exist.
+            const noThreshold =
+              name === undefined
+                ? ' and the run declares no threshold'
+                : ` and the run declares no threshold for delegate "${name}"`;
             return problem(
               `${turn.at}[${i}]: nothing has asked for a fold here — the conversation is at ${used} tokens${
-                threshold === undefined ? ' and the run declares no threshold' : `, below the threshold of ${threshold}`
+                threshold === undefined ? noThreshold : `, below the threshold of ${threshold}`
               }, and the caller did not ask before this turn`,
             );
           }

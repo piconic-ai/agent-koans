@@ -44,8 +44,21 @@ export interface Given {
   /** Relative path → content, materialized into `KOAN_WORKSPACE` (§2). */
   files?: Record<string, string>;
   limits?: { max_model_requests: number };
-  /** The window the conversation grows into, and when to fold it down. */
+  /** The window the run's own conversation grows into, and when to fold it down. */
   context?: ContextSetup;
+  /** Subagent name → what the run declares for it beyond its existence. Names come from the trace; an entry here only provisions one. */
+  subagents?: Record<string, SubagentSetup>;
+}
+
+/**
+ * What the run declares for one delegate beyond its existence. `context`
+ * is required — an entry declaring nothing would provision nothing, so
+ * there is no reason to write one — but the shape is a mapping rather than
+ * `context` itself so a future declaration can grow another field beside
+ * it without every existing entry changing shape.
+ */
+export interface SubagentSetup {
+  context: ContextSetup;
 }
 
 /**

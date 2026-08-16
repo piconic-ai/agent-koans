@@ -97,6 +97,10 @@ export function startMockTools(pending: PendingInvocation[]): Promise<MockTools>
       res.socket?.destroy();
       return;
     }
+    // Recorded and matched above like any other invocation; from here the
+    // response is simply withheld forever, so nothing further is written
+    // to `res` and this handler returns without ending the response.
+    if ('never' in expected.respond) return;
     respond(expected.respond.status, expected.respond.body ?? {});
   });
 
@@ -106,7 +110,14 @@ export function startMockTools(pending: PendingInvocation[]): Promise<MockTools>
       resolve({
         url: `http://127.0.0.1:${port}`,
         state,
-        close: () => new Promise((r) => server.close(() => r())),
+        close: () =>
+          new Promise((r) => {
+            // A `never` response parks its request open on purpose; a plain
+            // `server.close()` waits for it to end on its own, which it
+            // never will, so teardown must sever it itself.
+            server.closeAllConnections();
+            server.close(() => r());
+          }),
       });
     });
   });

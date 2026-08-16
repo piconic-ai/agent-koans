@@ -191,10 +191,10 @@ const rows: Row[] = [
         - request: model
           response: ok
     `),
-    message: '"given.limits" has unknown key "extra"',
+    message: '"given.limits" has unknown key "extra" (allowed: max_model_requests, max_duration_ms)',
   },
   {
-    rule: '"given.limits.max_model_requests" is a positive integer',
+    rule: '"given.limits" declares no budget when empty',
     yaml: koan(`
       given:
         limits: {}
@@ -202,7 +202,31 @@ const rows: Row[] = [
         - request: model
           response: ok
     `),
+    message: '"given.limits" declares no budget',
+  },
+  {
+    rule: '"given.limits.max_model_requests" is a positive integer',
+    yaml: koan(`
+      given:
+        limits:
+          max_model_requests: 0
+      when:
+        - request: model
+          response: ok
+    `),
     message: '"given.limits.max_model_requests" must be a positive integer',
+  },
+  {
+    rule: '"given.limits.max_duration_ms" is a positive integer',
+    yaml: koan(`
+      given:
+        limits:
+          max_duration_ms: 0
+      when:
+        - request: model
+          response: ok
+    `),
+    message: '"given.limits.max_duration_ms" must be a positive integer',
   },
   {
     rule: '"given.subagents" is a mapping of name to declaration',
@@ -498,6 +522,22 @@ const rows: Row[] = [
     message: 'when[1]: nothing can follow a model API failure — the conversation it refused must stop',
   },
   {
+    rule: 'nothing follows a tool step answered "never"',
+    yaml: koan(`
+      given:
+        limits:
+          max_duration_ms: 2000
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: never
+        - request: model
+          response: "too late"
+    `),
+    message: 'when[2]: nothing can follow "never" — the invocation it answers is held open forever',
+  },
+  {
     rule: 'nothing follows "abort"',
     yaml: koan(`
       when:
@@ -771,7 +811,34 @@ const rows: Row[] = [
         - request: { tool: x }
           response: "nope"
     `),
-    message: 'when[1].response needs a numeric "status" for a tool request, or "disconnect" for a connection severed without one',
+    message:
+      'when[1].response needs a numeric "status" for a tool request, "disconnect" for a connection severed without one, or "never" for an invocation accepted and never answered',
+  },
+  {
+    rule: '"never" needs a declared "given.limits.max_duration_ms"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: never
+    `),
+    message: 'when[1]: "never" needs "given.limits.max_duration_ms" — nothing else ends the wait',
+  },
+  {
+    rule: 'a tool step answered "never" cannot carry "prompt"',
+    yaml: koan(`
+      given:
+        limits:
+          max_duration_ms: 2000
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: never
+          prompt: hello
+    `),
+    message: 'when[1]: a tool step answered "never" cannot carry "prompt" — its invocation is never released',
   },
   {
     rule: 'a tool request must follow a model response with a tool-call instruction',

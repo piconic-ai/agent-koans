@@ -50,6 +50,21 @@ interface RunSession {
    * fetch and no other run's sharing this process.
    */
   turn?: AbortController;
+  /**
+   * The run's declared wall-clock budget (SPEC.md §3), read once at
+   * submission and reapplied to every turn this run executes — a
+   * follow-up prompt (`sendPrompt`) carries no limits of its own to
+   * re-declare it with.
+   */
+  maxDurationMs?: number;
+  /**
+   * Armed for the turn currently running, cleared once it settles. Not
+   * re-armed for a prompt still sitting in `queued`: turns already run
+   * strictly one at a time per run, so a queued prompt's own budget is
+   * spent from when it starts running, not from when it waited its turn —
+   * a simplification no koan here exercises against a queue.
+   */
+  timeLimit?: ReturnType<typeof setTimeout>;
 }
 
 /** Make `definition` runnable: submit runs to it, and ask after them. */
@@ -74,6 +89,7 @@ export function createAgent(
       // (run.ts's `delegate`), never this one.
       conversation: { messages: opening(prompt, definition.system), size: { used: 0 }, context: setup.context },
       queued: [],
+      maxDurationMs: setup.limits?.max_duration_ms,
     };
     sessions.set(state.run_id, session);
     runTurn(session);
@@ -139,6 +155,12 @@ export function createAgent(
       // but unanswered is exactly that. A prompt arriving after this
       // still re-opens the run — the queue empties, it does not close.
       session.queued.length = 0;
+      // This is also where a timed-out turn's own budget drives the same
+      // cancellation (SPEC.md §3's time budget): disarming here, ahead of
+      // the `.finally()` below that would otherwise do it once the turn
+      // actually unwinds, means a caller's abort never races its own
+      // declared timer for the same run.
+      disarmTimeLimit(session);
       session.turn?.abort();
     }
     return true;
@@ -162,10 +184,27 @@ export function createAgent(
   function runTurn(session: RunSession): void {
     const controller = new AbortController();
     session.turn = controller;
+    armTimeLimit(session);
     void executeTurn(session, controller.signal).finally(() => {
+      disarmTimeLimit(session);
       session.turn = undefined;
       startNextTurn(session);
     });
+  }
+
+  // Arms this turn's own declared budget (SPEC.md §3 time budget): when it
+  // fires, it drives the same cancellation POST /runs/{id}/abort does —
+  // settle aborted, clear the queue, abandon whatever is still unsettled.
+  // A no-op when the run declares none.
+  function armTimeLimit(session: RunSession): void {
+    if (session.maxDurationMs === undefined) return;
+    session.timeLimit = setTimeout(() => abortRun(session.state.run_id), session.maxDurationMs);
+  }
+
+  function disarmTimeLimit(session: RunSession): void {
+    if (session.timeLimit === undefined) return;
+    clearTimeout(session.timeLimit);
+    session.timeLimit = undefined;
   }
 
   async function executeTurn(session: RunSession, signal: AbortSignal): Promise<void> {

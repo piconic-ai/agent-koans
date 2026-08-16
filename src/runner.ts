@@ -33,6 +33,17 @@ export interface AgentConfig {
 
 const TERMINAL_STATES = new Set(['completed', 'failed', 'aborted']);
 
+// A declared `max_duration_ms` (SPEC.md §3) is checked from both ends: an
+// agent must not still be running well past it (the grace absorbs the
+// mocks' and the poll loop's own overhead, which is not the agent's to
+// answer for), and it must not have settled aborted well before it either
+// (a budget is a ceiling, not a quota to spend — 045's contract line for
+// max_model_requests, restated here for wall time). Both are slack, not
+// precision: a budget this suite can pin to the millisecond would be
+// pinning the mocks' own timing, not the agent's.
+const TIME_LIMIT_GRACE_MS = 2000;
+const TIME_LIMIT_EARLY_EPSILON_MS = 250;
+
 /** The run state as returned by `GET /runs/{run_id}` — only the fields this module reads. */
 interface RunState {
   status?: string;
@@ -52,11 +63,17 @@ function sleep(ms: number): Promise<void> {
 // `settled` is what a mid-run prompt adds: a queueing agent settles the
 // submission it interrupted first, so its first terminal state is not the
 // run's last word.
+//
+// `onOverrun` lets a caller polling against its own declared budget
+// (`pollWithinBudget` below) report the overrun naming that budget,
+// instead of this function's generic wording — the two callers disagree
+// on what the deadline even means, so the message is theirs to choose.
 async function pollToTerminal(
   base: string,
   runId: string,
   runTimeoutMs: number,
   settled?: () => boolean,
+  onOverrun?: (run: RunState) => string,
 ): Promise<RunState> {
   const deadline = Date.now() + runTimeoutMs;
   for (;;) {
@@ -69,10 +86,54 @@ async function pollToTerminal(
       // It kept the terminal-state promise; what it broke is the script,
       // and the underrun check names that exactly.
       if (terminal) return run;
-      throw new Error(`terminal-state guarantee violated: run still "${run.status}" after ${runTimeoutMs}ms`);
+      throw new Error(
+        onOverrun ? onOverrun(run) : `terminal-state guarantee violated: run still "${run.status}" after ${runTimeoutMs}ms`,
+      );
     }
     await sleep(100);
   }
+}
+
+// Wraps pollToTerminal with a submission's own declared time budget
+// (SPEC.md §3), when `maxDurationMs` is set: the poll deadline becomes
+// the budget plus grace instead of the generic run timeout, and a still-
+// running overrun names the declared field. `elapsed` is read off
+// `acceptedAt` regardless — the caller compares it against the same
+// budget once the submission settles, to catch the opposite failure: an
+// agent that gives up before the budget expires.
+async function pollWithinBudget(
+  base: string,
+  runId: string,
+  runTimeoutMs: number,
+  acceptedAt: number,
+  maxDurationMs: number | undefined,
+  settled?: () => boolean,
+): Promise<{ run: RunState; elapsed: number }> {
+  const run =
+    maxDurationMs === undefined
+      ? await pollToTerminal(base, runId, runTimeoutMs, settled)
+      : await pollToTerminal(
+          base,
+          runId,
+          maxDurationMs + TIME_LIMIT_GRACE_MS,
+          settled,
+          (r) =>
+            `run still "${r.status}" ${Date.now() - acceptedAt}ms after acceptance, past ` +
+            `given.limits.max_duration_ms (${maxDurationMs}ms) plus grace`,
+        );
+  return { run, elapsed: Date.now() - acceptedAt };
+}
+
+// The other half of the time-budget contract (SPEC.md §3): a budget is a
+// ceiling, not a quota to spend, so settling aborted well inside it is as
+// much a violation as running past it — even though the koan's own
+// `then` may legitimately expect `aborted` (065 does), a settle this
+// early means nothing but the budget itself could have ended the run.
+function earlyAbortFailure(elapsed: number, maxDurationMs: number): string {
+  return (
+    `the run settled aborted ${elapsed}ms after acceptance, before its declared ` +
+    `given.limits.max_duration_ms (${maxDurationMs}ms) — a time budget is a ceiling, not permission to stop early`
+  );
 }
 
 // Awaits `p`, or fails at `deadline`: an agent that never reaches the
@@ -281,6 +342,11 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       if (submitRes.status !== 201 && submitRes.status !== 202) {
         throw new Error(`POST /runs returned ${submitRes.status}, expected 201 or 202`);
       }
+      // The clock a declared max_duration_ms is measured against
+      // (SPEC.md §3) starts here, at acceptance — not wherever below this
+      // submission happens to finish polling.
+      const openingAcceptedAt = Date.now();
+      const maxDurationMs = koan.given.limits?.max_duration_ms;
       const { run_id: runId } = (await submitRes.json()) as { run_id?: string };
       if (typeof runId !== 'string' || runId.length === 0) {
         throw new Error('POST /runs response is missing "run_id"');
@@ -357,12 +423,20 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       const scriptConsumed = () =>
         trace.conversations.every((c) => (llm.state.served[c.name] ?? 0) >= c.turns.length) && pending.length === 0;
 
-      let run = await pollToTerminal(
+      let { run, elapsed } = await pollWithinBudget(
         base,
         runId,
         agent.runTimeoutMs ?? 15_000,
+        openingAcceptedAt,
+        maxDurationMs,
         promptsDuring.length > 0 ? scriptConsumed : undefined,
       );
+      // Not checked for a scripted abort: the harness's own postAbort()
+      // above settles the run aborted on the trace's own schedule, which
+      // has nothing to do with the declared budget.
+      if (maxDurationMs !== undefined && run.status === 'aborted' && abortKind === undefined && elapsed < maxDurationMs - TIME_LIMIT_EARLY_EPSILON_MS) {
+        failures.push(earlyAbortFailure(elapsed, maxDurationMs));
+      }
 
       // Every turn but the last is judged here, against its own `then`;
       // the last turn's judgment happens below, together
@@ -424,7 +498,17 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
           if (promptRes.status !== 202 && promptRes.status !== 200) {
             throw new Error(`POST /runs/${runId}/prompts returned ${promptRes.status}, expected 202 or 200`);
           }
-          run = await pollToTerminal(base, runId, agent.runTimeoutMs ?? 15_000);
+          // Restarts here, at this prompt's own acceptance (SPEC.md §3) —
+          // not the opening prompt's, and not wherever the previous turn
+          // happened to settle.
+          const turnAcceptedAt = Date.now();
+          const polled = await pollWithinBudget(base, runId, agent.runTimeoutMs ?? 15_000, turnAcceptedAt, maxDurationMs);
+          run = polled.run;
+          // `turns:` never scripts `abort` (koan.ts rejects it), so unlike
+          // the opening submission above there is no abortKind to exempt.
+          if (maxDurationMs !== undefined && run.status === 'aborted' && polled.elapsed < maxDurationMs - TIME_LIMIT_EARLY_EPSILON_MS) {
+            failures.push(earlyAbortFailure(polled.elapsed, maxDurationMs));
+          }
         }
       }
 

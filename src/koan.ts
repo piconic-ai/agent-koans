@@ -39,10 +39,10 @@ export interface HttpResponse {
 }
 
 /**
- * What the tool mock does with a permitted invocation: answer it, or
- * sever the connection without answering.
+ * What the tool mock does with a permitted invocation: answer it, sever
+ * the connection without answering, or accept it and never answer at all.
  */
-export type ToolResponse = HttpResponse | { disconnect: true };
+export type ToolResponse = HttpResponse | { disconnect: true } | { never: true };
 
 /**
  * One tool-call instruction inside a model response — one entry of a
@@ -180,6 +180,8 @@ export type Matcher =
 /** Optional per-run budgets, forwarded verbatim to the run submission. */
 export interface RunLimits {
   max_model_requests?: number;
+  /** Wall-clock budget in milliseconds, per submission, from acceptance to that submission's terminal state (SPEC.md §3). */
+  max_duration_ms?: number;
 }
 
 /**
@@ -393,7 +395,9 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
         match.compiled.tool_responds =
           'disconnect' in step.response
             ? { disconnect: true }
-            : { status: step.response.status, body: step.response.body };
+            : 'never' in step.response
+              ? { never: true }
+              : { status: step.response.status, body: step.response.body };
         if (step.prompt !== undefined) match.compiled.promptDuring = step.prompt;
         openCalls = openCalls.filter((c) => c !== match);
         break;

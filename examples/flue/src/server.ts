@@ -8,6 +8,7 @@ import { start } from '@flue/runtime/node';
 import { Assistant, type AssistantData, type RunContext } from './agents/assistant.js';
 import { armBudget, budgetTripped } from './budget.js';
 import { armWindow, noteFoldFailed, noteUsed } from './window.js';
+import { armDuration, declaredDuration } from './duration.js';
 import { compactConversation } from './compaction.js';
 import { loadConfig } from './config.js';
 import { createKoanProvider } from './provider.js';
@@ -16,6 +17,7 @@ import type { RunToolDef } from './tools.js';
 
 interface RunLimits {
   max_model_requests?: number;
+  max_duration_ms?: number;
 }
 
 const config = loadConfig();
@@ -85,6 +87,16 @@ const handles = new Map<string, AgentInstanceHandle>();
 // later dispatch to an existing one, so this is just for clarity here.
 function runTurn(run: Run, agent: AgentInstanceHandle, prompt: string, initialData?: AssistantData): void {
   void (async () => {
+    // The declared budget covers this one submission (SPEC.md §3) and
+    // restarts fresh for every prompt, so the timer is armed here, on
+    // every call, rather than once for the run. Not Flue's own
+    // durability timeout (`timeoutMs` / DURABILITY_DEFAULT_TIMEOUT_MS):
+    // that fires on the coordinator's reconciliation cadence, far too
+    // coarse for a seconds-scale declared budget, and it settles the
+    // submission `failed` (reason `exceeded_timeout`) where this wire
+    // contract asks for `aborted`.
+    const budgetMs = declaredDuration();
+    const timer = budgetMs === undefined ? undefined : setTimeout(() => void agent.abort(), budgetMs);
     try {
       const receipt = await agent.dispatch(initialData ? { message: prompt, initialData } : prompt);
       const reply = await agent.read(receipt);
@@ -93,7 +105,8 @@ function runTurn(run: Run, agent: AgentInstanceHandle, prompt: string, initialDa
     } catch (err) {
       // Terminal-state guarantee: errors end the run, they never strand it.
       // A budget stop is this agent giving up, not an error: aborted.
-      // A durable abort (handle.abort(), below) rejects read() with
+      // A durable abort (handle.abort() from the caller's own request, or
+      // from the declared-duration timer above) rejects read() with
       // AgentRunError outcome 'aborted', which this same branch maps.
       run.status = budgetTripped()
         ? 'aborted'
@@ -101,6 +114,11 @@ function runTurn(run: Run, agent: AgentInstanceHandle, prompt: string, initialDa
           ? err.outcome
           : 'failed';
       run.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      // Cleared on every settlement, not just the timer's own firing: a
+      // turn that settles for any other reason must never leave a timer
+      // that could later abort a following, unrelated turn.
+      if (timer !== undefined) clearTimeout(timer);
     }
   })();
 }
@@ -116,6 +134,7 @@ function startRun(
   runs.set(run.run_id, run);
   armBudget(limits?.max_model_requests);
   armWindow(context?.window);
+  armDuration(limits?.max_duration_ms);
   // No id passed to init(): each run gets an isolated conversation, never
   // reusing another run's state.
   const agent = init(Assistant);

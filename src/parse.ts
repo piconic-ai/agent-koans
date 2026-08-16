@@ -148,20 +148,40 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
     files = rawFiles as Record<string, string>;
   }
 
-  let limits: { max_model_requests: number } | undefined;
+  let limits: { max_model_requests?: number; max_duration_ms?: number } | undefined;
   if (g.limits !== undefined) {
     const rawLimits = g.limits;
     if (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits)) {
       return problem('"given.limits" must be a mapping');
     }
-    for (const key of Object.keys(rawLimits as Record<string, unknown>)) {
-      if (key !== 'max_model_requests') return problem(`"given.limits" has unknown key "${key}"`);
+    const rl = rawLimits as Record<string, unknown>;
+    for (const key of Object.keys(rl)) {
+      if (key !== 'max_model_requests' && key !== 'max_duration_ms') {
+        return problem(`"given.limits" has unknown key "${key}" (allowed: max_model_requests, max_duration_ms)`);
+      }
     }
-    const max = (rawLimits as Record<string, unknown>).max_model_requests;
-    if (!Number.isInteger(max) || (max as number) < 1) {
-      return problem('"given.limits.max_model_requests" must be a positive integer');
+    // Each key optional on its own, but a block with neither would budget
+    // nothing at all — that koan should not have written `limits:` to
+    // begin with.
+    if (Object.keys(rl).length === 0) return problem('"given.limits" declares no budget');
+    let max_model_requests: number | undefined;
+    if (rl.max_model_requests !== undefined) {
+      if (!Number.isInteger(rl.max_model_requests) || (rl.max_model_requests as number) < 1) {
+        return problem('"given.limits.max_model_requests" must be a positive integer');
+      }
+      max_model_requests = rl.max_model_requests as number;
     }
-    limits = { max_model_requests: max as number };
+    let max_duration_ms: number | undefined;
+    if (rl.max_duration_ms !== undefined) {
+      if (!Number.isInteger(rl.max_duration_ms) || (rl.max_duration_ms as number) < 1) {
+        return problem('"given.limits.max_duration_ms" must be a positive integer');
+      }
+      max_duration_ms = rl.max_duration_ms as number;
+    }
+    limits = {
+      ...(max_model_requests !== undefined ? { max_model_requests } : {}),
+      ...(max_duration_ms !== undefined ? { max_duration_ms } : {}),
+    };
   }
 
   const context = parseContext(g.context);
@@ -659,13 +679,31 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       // instruction it closes.
       const reqArgs = target.args;
       const disconnects = res === 'disconnect';
-      if (!disconnects && (typeof res === 'string' || Array.isArray(res) || typeof (res as Record<string, unknown>).status !== 'number')) {
+      const never = res === 'never';
+      if (
+        !disconnects &&
+        !never &&
+        (typeof res === 'string' || Array.isArray(res) || typeof (res as Record<string, unknown>).status !== 'number')
+      ) {
         return problem(
-          `${at_i}.response needs a numeric "status" for a tool request, or "disconnect" for a connection severed without one`,
+          `${at_i}.response needs a numeric "status" for a tool request, "disconnect" for a connection severed without one, or "never" for an invocation accepted and never answered`,
         );
       }
-      const r = disconnects ? undefined : (res as { status: number; body?: unknown });
+      // "never" hangs the invocation until the run's own time budget gives
+      // up on it — without one declared, an agent that keeps waiting would
+      // just run out against the runner's generic timeout instead, which
+      // is a worse failure than refusing to load the koan at all.
+      if (never && ctx.koan.given.limits?.max_duration_ms === undefined) {
+        return problem(`${at_i}: "never" needs "given.limits.max_duration_ms" — nothing else ends the wait`);
+      }
+      const r = disconnects || never ? undefined : (res as { status: number; body?: unknown });
       if (rawPrompt !== undefined) {
+        // A held-then-released invocation is what carries a mid-run
+        // prompt; "never" never releases, so there is nothing for one to
+        // ride.
+        if (never) {
+          return problem(`${at_i}: a tool step answered "never" cannot carry "prompt" — its invocation is never released`);
+        }
         if (inTurns) {
           return problem(
             `${at_i}: a tool step's "prompt" cannot appear inside a "turns" koan — a scripted turn and a prompt sent mid-run are different things`,
@@ -686,7 +724,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         kind: 'tool',
         tool: reqTool,
         args: reqArgs,
-        response: r === undefined ? { disconnect: true } : { status: r.status, body: r.body },
+        response: r === undefined ? (never ? { never: true } : { disconnect: true }) : { status: r.status, body: r.body },
         ...(typeof rawPrompt === 'string' ? { prompt: rawPrompt } : {}),
       });
     }
@@ -1055,6 +1093,7 @@ const constraints: Constraint[] = [
   everyDelegationHasABlock,
   everyToolRequestMatchesAnOpenCall,
   apiFailureEndsTheTrace,
+  neverEndsTheTrace,
   eachSubagentIsDelegatedToOnce,
   everyDeclaredSubagentIsDelegatedTo,
   openingsAreDistinct,
@@ -1373,6 +1412,42 @@ function checkApiFailureEnds(steps: Step[], at: string, abort: AbortKind | undef
     if (step.kind === 'subagent') {
       const found = checkApiFailureEnds(step.trace.steps, `${at}[${i}].when`, undefined);
       if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A tool step answered `never` holds its invocation open forever, so
+ * nothing may follow it in the trace that scripts it — the same "this
+ * ends the conversation" shape apiFailureEndsTheTrace checks for a model
+ * API failure, kept separate since a `never` response sits on a `tool`
+ * step rather than a `model` one. A sibling still closing the same
+ * parallel group is not "following" it, though: the group's own end —
+ * its next model request, which can never be scripted since nothing ever
+ * releases the held invocation — is what the trace must stop before.
+ */
+function neverEndsTheTrace(koan: KoanFile): Problem | undefined {
+  for (const { steps, at } of scriptedTraces(koan)) {
+    const found = checkNeverEnds(steps, at);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function checkNeverEnds(steps: Step[], at: string): Problem | undefined {
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    if (step.kind === 'subagent') {
+      const found = checkNeverEnds(step.trace.steps, `${at}[${i}].when`);
+      if (found) return found;
+      continue;
+    }
+    if (step.kind !== 'tool' || !('never' in step.response)) continue;
+    let j = i + 1;
+    while (j < steps.length && (steps[j].kind === 'tool' || steps[j].kind === 'internal' || steps[j].kind === 'subagent')) j++;
+    if (j < steps.length) {
+      return problem(`${at}[${j}]: nothing can follow "never" — the invocation it answers is held open forever`);
     }
   }
   return undefined;

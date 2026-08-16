@@ -1,0 +1,30 @@
+name: time-limit
+description: >
+  The run declares a wall-clock budget and the only tool the task needs
+  never answers — no status, no severed connection, just silence. The
+  agent must keep waiting while the budget lasts (a budget is a ceiling,
+  not permission to stop early) and end the run as aborted once it
+  expires, without a farewell model request.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+  limits:
+    max_duration_ms: 2000
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: never
+
+then:
+  status: aborted

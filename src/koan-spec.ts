@@ -43,7 +43,13 @@ export interface Given {
   tools: Record<string, ToolDef>;
   /** Relative path → content, materialized into `KOAN_WORKSPACE` (§2). */
   files?: Record<string, string>;
-  limits?: { max_model_requests: number };
+  /**
+   * Budgets the caller lets the agent spend on this run; exhausting any
+   * one of them must end the run `aborted`. `max_duration_ms` is a
+   * wall-clock ceiling measured per submission, from the moment a prompt
+   * is accepted.
+   */
+  limits?: { max_model_requests?: number; max_duration_ms?: number };
   /** The window the run's own conversation grows into, and when to fold it down. */
   context?: ContextSetup;
   /** Subagent name → what the run declares for it beyond its existence. Names come from the trace; an entry here only provisions one. */
@@ -275,11 +281,15 @@ export interface HttpToolResponse {
 
 /**
  * What the mock tool server does with a permitted invocation: answer it,
- * or sever the connection without answering (`response: disconnect` in
- * YAML). A union rather than an optional `status`, so a response that
- * answers always has one to answer with.
+ * sever the connection without answering (`response: disconnect` in
+ * YAML), or accept it and never answer at all (`response: never`). A
+ * union rather than an optional `status`, so a response that answers
+ * always has one to answer with. `never` is withheld forever — the agent
+ * sees neither a status line nor a severed connection, only silence; what
+ * a koan pairs it with is a declared `max_duration_ms`, since nothing
+ * else ends the wait.
  */
-export type ToolResponse = HttpToolResponse | { disconnect: true };
+export type ToolResponse = HttpToolResponse | { disconnect: true } | { never: true };
 
 /** `then`: the run's outcome after the trace settles. */
 export interface Judgment {

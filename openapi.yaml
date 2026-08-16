@@ -208,6 +208,16 @@ components:
                 Maximum number of model requests the agent may issue for
                 this run. Exhausting the budget before a final answer must
                 end the run as `aborted`.
+            max_duration_ms:
+              type: integer
+              minimum: 1
+              description: >-
+                Per-submission wall-clock budget in milliseconds, measured
+                from the prompt's acceptance to the submission's terminal
+                state; time between submissions does not count.
+                Exhausting the budget before a final answer must end the
+                run as `aborted`. The budget is a ceiling: the agent must
+                not end the run early because one is declared.
         context:
           $ref: "#/components/schemas/RunContext"
           description: >-

@@ -94,6 +94,18 @@ run's state must *do*.
 returns, whatever breaks inside you. A run still `running` past the
 runner's timeout fails the koan.
 
+**Time budget.** A run MAY declare `given.limits.max_duration_ms`
+(openapi.yaml): a wall-clock budget for one submission, measured from the
+moment its prompt is accepted (that submission's own `202`/`201`) to that
+submission's terminal state — model requests, tool waits, delegations,
+and folds all count against it, and it restarts fresh for every prompt
+the caller sends; time between submissions does not count. Exhausting it
+before a final answer MUST end the run `aborted`, the same as any other
+exhausted budget. A budget is a ceiling, not permission to stop early:
+you MUST NOT settle a run `aborted` before its declared budget expires
+just because one is declared. Where inside the window you give up on a
+slow dependency is yours; no per-tool timeout is mandated.
+
 **Abort.** A run in progress MUST then settle `aborted`. An abort covers
 everything of the run still unsettled: the turn in flight, a prompt
 accepted but not yet answered, and a delegation mid-task all stop with
@@ -320,6 +332,7 @@ it cannot drift from the contract it indexes.
 | [062-tool-connection-drop](./koans/062-tool-connection-drop.yaml) | The tool server accepts the invocation and severs the connection without answering — no status, no body, unlike 038's bare status. There is nothing to pass on but the fact of failure, and that fact must reach the model rather than end the run: a transport failure is a tool failure like any other. The agent must not retry the invocation on its own — one call, one invocation — and the model gives up gracefully. |
 | [063-delegate-mid-task-fold](./koans/063-delegate-mid-task-fold.yaml) | A delegate with a declared context crosses its own threshold in the middle of its task — on a tool-instruction response, with the batch it opened still unclosed. Its conversation ends at its final answer, so there is no settled turn to defer to: by the delegate's next model request the fold must have happened, its summary — carrying the result still pending — folded back in, and the fold reported to the run's caller like any other. The run itself declares no context at all: whose window a threshold reads is each conversation's own (060). |
 | [064-delegate-below-threshold](./koans/064-delegate-below-threshold.yaml) | A delegate's conversation grows toward its own declared threshold but stays well below it: 30000, then 40000 of the declared 50000, short of the 45000 the delegate would fold at. A declared threshold is not standing permission to fold (051's contract line, now for a delegate): with room left, the delegate must carry its own history as it stands into its final answer — the trace has no compaction step for one to consume. The run itself declares no context at all: whose window a threshold reads is each conversation's own (060). |
+| [065-time-limit](./koans/065-time-limit.yaml) | The run declares a wall-clock budget and the only tool the task needs never answers — no status, no severed connection, just silence. The agent must keep waiting while the budget lasts (a budget is a ceiling, not permission to stop early) and end the run as aborted once it expires, without a farewell model request. |
 
 <!-- koan-index:end -->
 

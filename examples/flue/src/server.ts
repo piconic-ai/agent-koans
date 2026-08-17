@@ -24,6 +24,11 @@ interface RunLimits {
 
 const config = loadConfig();
 
+// The runner always provides KOAN_STATE_DIR, so this only matters for
+// the dev fallback — but runs.json below must not lean on the store
+// happening to create the directory as a side effect.
+fs.mkdirSync(config.state.dir, { recursive: true });
+
 // Durable across a crash (SPEC.md §3): Flue's own store lives in the
 // run's state directory, so a restarted process finds every admitted
 // submission — the coordinator resumes them before start() resolves.

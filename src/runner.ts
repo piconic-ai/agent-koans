@@ -4,6 +4,7 @@
 // aggregation belong here; what to verify is decided by the compiled
 // koan and the mocks.
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -327,7 +328,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // show the resend landed on the same run. Minted fresh per
       // execution, never written in the koan — a fixed name would land a
       // re-run of the suite on the previous execution's settled run.
-      const clientRunId = actions.some((a) => a.kind === 'retry') ? `koan-${crypto.randomUUID()}` : undefined;
+      const clientRunId = actions.some((a) => a.kind === 'retry') ? `koan-${randomUUID()}` : undefined;
       // Kept verbatim for the retry: what the caller re-sends is the
       // identical request, not a semantically-equal one.
       const submitBody = JSON.stringify({

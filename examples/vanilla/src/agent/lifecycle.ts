@@ -79,8 +79,13 @@ export function createAgent(
   };
   const sessions = new Map<string, RunSession>();
 
-  function startRun(prompt: string, setup: RunSetup): RunState {
-    const state: RunState = { run_id: `r_${crypto.randomUUID()}`, status: 'running', events: [] };
+  function startRun(prompt: string, setup: RunSetup, runId?: string): RunState {
+    // A named run that already exists is the caller's identical resend
+    // (SPEC.md §3): answer with the run it already started, and do not
+    // open a second conversation.
+    const existing = runId === undefined ? undefined : sessions.get(runId);
+    if (existing !== undefined) return existing.state;
+    const state: RunState = { run_id: runId ?? `r_${crypto.randomUUID()}`, status: 'running', events: [] };
     const session: RunSession = {
       state,
       run: createRun(parts, setup, (event) => state.events.push(event)),

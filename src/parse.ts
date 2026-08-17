@@ -543,6 +543,11 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     );
   }
 
+  const bareRetryAt = written.findIndex((s) => s === 'retry');
+  if (bareRetryAt !== -1) {
+    return problem(`${at}[${bareRetryAt}]: "retry" names what the caller re-sends — write "retry: prompt"`);
+  }
+
   let abort = false;
   const abortAt = written.findIndex((s) => s === 'abort');
   if (abortAt !== -1) {
@@ -564,12 +569,51 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
 
   const steps: Step[] = [];
   let promptsSent = 0;
+  // Written index for the message, step index for the carrier check below:
+  // a `- retry: prompt` item folds onto the step before it instead of
+  // becoming one, so the two lists no longer line up past it.
   let lastPromptAt = -1;
+  let lastPromptStep = -1;
   let queuedSeams = 0;
   for (let i = 0; i < written.length; i++) {
     const at_i = `${at}[${i}]`;
     const prev = steps.at(-1);
     const item: unknown = written[i];
+
+    if (typeof item === 'object' && item !== null && 'retry' in item && !('request' in item)) {
+      const block = item as Record<string, unknown>;
+      for (const key of Object.keys(block)) {
+        if (key !== 'retry') {
+          return problem(`${at_i} has unknown key "${key}" — a retry step is only "retry"`);
+        }
+      }
+      if (block.retry !== 'prompt') {
+        return problem(
+          `${at_i}.retry names what the caller re-sends — only "prompt" (this turn's own submission) is supported`,
+        );
+      }
+      if (inTurns) {
+        return problem(`${at_i}: "retry" cannot appear inside a "turns" koan — retrying a follow-up submission is not supported yet`);
+      }
+      if (inSubagent) {
+        return problem(`${at_i}: "retry" cannot appear inside a subagent block — only the caller's own submission can be retried`);
+      }
+      if (prev === undefined || prev.kind !== 'tool') {
+        return problem(
+          `${at_i}: "retry" must directly follow a tool step — its held invocation is what proves the run is still running when the resend lands`,
+        );
+      }
+      if ('never' in prev.response) {
+        return problem(`${at_i}: "retry" cannot follow a tool step answered "never" — its invocation is never released`);
+      }
+      if (prev.prompt !== undefined || prev.retry !== undefined) {
+        return problem(
+          `${at_i}: a held invocation carries one caller action — this tool step already carries "${prev.retry !== undefined ? 'retry' : 'prompt'}"`,
+        );
+      }
+      prev.retry = 'prompt';
+      continue;
+    }
 
     if (typeof item === 'object' && item !== null && 'subagent' in item && !('request' in item)) {
       const block = item as Record<string, unknown>;
@@ -719,6 +763,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         }
         promptsSent += 1;
         lastPromptAt = i;
+        lastPromptStep = steps.length;
       }
       steps.push({
         kind: 'tool',
@@ -733,7 +778,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
   // An abort cuts the delivered prompt off before any request could carry
   // it — that is the point of scripting the two together — so the
   // model-request-after rule holds only for a trace that runs on.
-  if (lastPromptAt !== -1 && !abort && !steps.slice(lastPromptAt + 1).some((s) => s.kind === 'model')) {
+  if (lastPromptAt !== -1 && !abort && !steps.slice(lastPromptStep + 1).some((s) => s.kind === 'model')) {
     return problem(
       `${at}[${lastPromptAt}]: a mid-run "prompt" needs a model request after it — otherwise no request carries it`,
     );

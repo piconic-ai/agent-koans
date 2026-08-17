@@ -66,8 +66,10 @@ export interface CallToolInstruction {
   tool_responds?: ToolResponse;
   /** A prompt the caller sends while this invocation is held open. */
   promptDuring?: string;
-  /** This prompt's position among the trace's mid-run prompts, in step order — which hold the runner pairs it with. */
-  promptIndex?: number;
+  /** Set when the caller re-sends the turn's own submission while this invocation is held open (`- retry: prompt`). */
+  retryDuring?: true;
+  /** This caller action's position among the trace's held actions, in step order — which hold the runner pairs it with. */
+  holdIndex?: number;
   /** Set by a response-less tool request: the agent executes this call itself. Resolved to `readsFile` once the trace has compiled. */
   internal?: true;
   /**
@@ -399,6 +401,7 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
               ? { never: true }
               : { status: step.response.status, body: step.response.body };
         if (step.prompt !== undefined) match.compiled.promptDuring = step.prompt;
+        if (step.retry !== undefined) match.compiled.retryDuring = true;
         openCalls = openCalls.filter((c) => c !== match);
         break;
       }
@@ -414,16 +417,25 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
   }
 }
 
-// The trace's mid-run prompts in step order, each numbered into
-// `promptIndex` on the member that holds it — the pairing the runner's
-// holds go by.
-function heldPrompts(conv: Conversation): Array<{ turn: number; prompt: string }> {
-  const held: Array<{ turn: number; prompt: string }> = [];
+/** One caller action a held invocation carries: a mid-run prompt, or a re-send of the turn's own submission. */
+export type HeldAction = { kind: 'prompt'; prompt: string } | { kind: 'retry' };
+
+// The trace's held caller actions in step order, each numbered into
+// `holdIndex` on the member that holds it — the pairing the runner's
+// holds go by. A member carries at most one action (parse.ts).
+function heldActions(conv: Conversation): Array<{ turn: number; action: HeldAction }> {
+  const held: Array<{ turn: number; action: HeldAction }> = [];
   for (const [i, turn] of conv.turns.entries()) {
     for (const member of turn.call_tools ?? []) {
-      if (member.promptDuring !== undefined) {
-        member.promptIndex = held.length;
-        held.push({ turn: i, prompt: member.promptDuring });
+      const action: HeldAction | undefined =
+        member.promptDuring !== undefined
+          ? { kind: 'prompt', prompt: member.promptDuring }
+          : member.retryDuring
+            ? { kind: 'retry' }
+            : undefined;
+      if (action !== undefined) {
+        member.holdIndex = held.length;
+        held.push({ turn: i, action });
       }
     }
   }
@@ -438,7 +450,9 @@ function heldPrompts(conv: Conversation): Array<{ turn: number; prompt: string }
 // when it appears, so walking forwards would hand an earlier, joined
 // prompt a seam that belongs to a later one.
 function promptBoundaries(conv: Conversation): TurnBoundary[] {
-  const held = heldPrompts(conv);
+  // A retry re-sends the submission the run already accepted, so unlike a
+  // prompt it opens no turn of its own — only held prompts mark seams.
+  const held = heldActions(conv).flatMap((h) => (h.action.kind === 'prompt' ? [{ turn: h.turn, prompt: h.action.prompt }] : []));
   if (held.length === 0) return [];
   const seams: number[] = [];
   for (let s = 1; s < conv.turns.length; s++) {
@@ -463,15 +477,16 @@ function promptBoundaries(conv: Conversation): TurnBoundary[] {
   return boundaries;
 }
 
-/** The prompts the caller sends into held invocations, in step order — one hold each. */
-export function promptsDuringOf(trace: Trace): string[] {
-  const prompts: string[] = [];
+/** The caller actions sent into held invocations, in step order — one hold each. */
+export function actionsDuringOf(trace: Trace): HeldAction[] {
+  const actions: HeldAction[] = [];
   for (const turn of trace.conversations[0].turns) {
     for (const member of turn.call_tools ?? []) {
-      if (member.promptDuring !== undefined) prompts.push(member.promptDuring);
+      if (member.promptDuring !== undefined) actions.push({ kind: 'prompt', prompt: member.promptDuring });
+      else if (member.retryDuring) actions.push({ kind: 'retry' });
     }
   }
-  return prompts;
+  return actions;
 }
 
 function compileTrace(trace: ParsedTrace, briefing: string): Trace {

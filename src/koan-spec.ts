@@ -184,8 +184,17 @@ export type Step =
    * across a compaction.
    */
   | { kind: 'model'; response: ModelResponse; used_tokens?: number }
-  /** `prompt` is one the caller sends while this invocation is held open. */
-  | { kind: 'tool'; tool: string; args?: ParsedArgs; response: ToolResponse; prompt?: string }
+  /**
+   * `prompt` is one the caller sends while this invocation is held open;
+   * `retry` says the caller re-sends this turn's own submission instead —
+   * the identical creation request, which must land on the same run
+   * (SPEC.md §3). Written in YAML as its own `- retry: prompt` item and
+   * folded onto the tool step it follows, the same move `abort` makes in
+   * the other direction; a word rather than a flag, so what is re-sent is
+   * named — `prompt` is the only object yet. One caller action per held
+   * invocation: a step carries `prompt` or `retry`, never both.
+   */
+  | { kind: 'tool'; tool: string; args?: ParsedArgs; response: ToolResponse; prompt?: string; retry?: 'prompt' }
   /**
    * A tool request written without a `response`: the agent executed the
    * call itself — `read_file`, against the run's workspace. No response,

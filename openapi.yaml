@@ -182,6 +182,16 @@ components:
             The user's initial prompt, verbatim. Routing to the right
             conversation matches by substring, so an empty prompt would
             match every request.
+        run_id:
+          type: string
+          minLength: 1
+          description: >-
+            The caller's own name for the run. Absent, the agent picks
+            one. Present, the acceptance echoes it — and a later creation
+            request carrying the same `run_id` must not create a second
+            run: it is answered with the same acceptance (same `run_id`)
+            while the existing run carries on. This is what makes
+            creation safe to retry (SPEC.md §3).
         tools:
           type: array
           default: []

@@ -2,9 +2,15 @@
 // answers for them. What belongs here is the state a caller polls, the
 // queue of turns, and the transitions between them; what does not is what
 // a run is made of (run.ts) or how a turn is carried out (conversation.ts).
+// Durability rides here too: every session is a row of its own recorded
+// history (SPEC.md §3 crash recovery), saved to KOAN_STATE_DIR on every
+// change and reloaded at construction — a delegate's conversation stays
+// out of it, since a scripted crash never lands mid-delegation.
+import fs from 'node:fs';
+import path from 'node:path';
 import { foldOnRequest, type RunEvent } from './compaction.js';
 import { runConversation, type Conversation } from './conversation.js';
-import { createModelClient, type ChatMessage } from './model.js';
+import { createModelClient, type ChatMessage, type ToolCall } from './model.js';
 import { createRun, type Run, type RunSetup } from './run.js';
 import type { Tool } from './tools.js';
 
@@ -38,6 +44,8 @@ interface RunSession {
   state: RunState;
   run: Run;
   conversation: Conversation;
+  /** What the run was submitted with — kept to rebuild `run` on recovery, since a crash loses the in-memory Run itself. */
+  setup: RunSetup;
   /**
    * Prompts that arrived mid-turn. Not appended to the conversation until
    * their turn starts: the running turn would otherwise send unanswered
@@ -67,10 +75,24 @@ interface RunSession {
   timeLimit?: ReturnType<typeof setTimeout>;
 }
 
+/** One session's recorded state, as written to `<state.dir>/runs.json` — everything a successor process needs to rebuild it after a crash. */
+interface RunRow {
+  state: RunState;
+  setup: RunSetup;
+  messages: ChatMessage[];
+  size: { used: number };
+  budgetUsed: number;
+  queued: string[];
+}
+
 /** Make `definition` runnable: submit runs to it, and ask after them. */
 export function createAgent(
   definition: AgentDefinition,
-  config: { model: { baseUrl: string; apiKey: string; model: string }; tools: { baseUrl: string } },
+  config: {
+    model: { baseUrl: string; apiKey: string; model: string };
+    tools: { baseUrl: string };
+    state: { dir: string };
+  },
 ) {
   const parts = {
     model: createModelClient(config.model),
@@ -78,6 +100,92 @@ export function createAgent(
     own: definition.tools ?? [],
   };
   const sessions = new Map<string, RunSession>();
+
+  fs.mkdirSync(config.state.dir, { recursive: true });
+  const stateFile = path.join(config.state.dir, 'runs.json');
+
+  // The whole map, rewritten every time: one koan's session count is
+  // small, and temp-then-rename means a crash mid-write never truncates
+  // the record it was meant to protect.
+  function save(): void {
+    const rows: RunRow[] = [...sessions.values()].map((session) => ({
+      state: session.state,
+      setup: session.setup,
+      messages: session.conversation.messages,
+      size: session.conversation.size,
+      budgetUsed: session.run.budget.used,
+      queued: session.queued,
+    }));
+    const tmp = `${stateFile}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(rows));
+    fs.renameSync(tmp, stateFile);
+  }
+
+  function loadRows(): RunRow[] {
+    try {
+      return JSON.parse(fs.readFileSync(stateFile, 'utf8')) as RunRow[];
+    } catch {
+      // A first boot has no file yet; nothing to recover either way.
+      return [];
+    }
+  }
+
+  // What an invocation the crash caught in flight becomes: nothing was
+  // recorded, so its outcome is unknown, and an unknown outcome reaches
+  // the model the way any other tool failure does (SPEC.md §3) — never a
+  // re-invocation this agent makes on its own.
+  function interruptedClosure(call: ToolCall): ChatMessage {
+    return {
+      role: 'tool',
+      tool_call_id: call.id,
+      content:
+        `Error: tool "${call.function.name}" was interrupted: the agent restarted while the invocation was ` +
+        `in flight, and its outcome is unknown`,
+    };
+  }
+
+  // Picks a session back up after a crash (SPEC.md §3): closes any
+  // invocation the death caught in flight as interrupted, then resumes
+  // the loop from the recorded history — the recorded result, once
+  // closed for real or synthesized, is what the next model request
+  // carries forward.
+  function resume(session: RunSession): void {
+    const { messages } = session.conversation;
+    const last = messages.at(-1);
+    if (last?.role === 'assistant' && !(last.tool_calls && last.tool_calls.length > 0)) {
+      // The answer was already recorded; only the settlement was lost.
+      session.state.status = 'completed';
+      session.state.output = last.content ?? '';
+      save();
+      startNextTurn(session);
+      return;
+    }
+    let turnIndex = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
+        turnIndex = i;
+        break;
+      }
+    }
+    if (turnIndex !== -1) {
+      const closedIds = new Set(
+        messages
+          .slice(turnIndex + 1)
+          .filter((m) => m.role === 'tool')
+          .map((m) => m.tool_call_id),
+      );
+      let changed = false;
+      for (const call of messages[turnIndex].tool_calls ?? []) {
+        if (!closedIds.has(call.id)) {
+          messages.push(interruptedClosure(call));
+          changed = true;
+        }
+      }
+      if (changed) save();
+    }
+    runTurn(session);
+  }
 
   function startRun(prompt: string, setup: RunSetup, runId?: string): RunState {
     // A named run that already exists is the caller's identical resend
@@ -88,17 +196,55 @@ export function createAgent(
     const state: RunState = { run_id: runId ?? `r_${crypto.randomUUID()}`, status: 'running', events: [] };
     const session: RunSession = {
       state,
-      run: createRun(parts, setup, (event) => state.events.push(event)),
+      run: createRun(parts, setup, (event) => {
+        state.events.push(event);
+        save();
+      }),
+      setup,
       // The run's own `context` provisions the run's own conversation
       // (SPEC.md §3) — a delegate's conversation carries its own instead
-      // (run.ts's `delegate`), never this one.
-      conversation: { messages: opening(prompt, definition.system), size: { used: 0 }, context: setup.context },
+      // (run.ts's `delegate`), never this one. `onRecord` is what makes
+      // this conversation durable; a delegate's declares none.
+      conversation: {
+        messages: opening(prompt, definition.system),
+        size: { used: 0 },
+        context: setup.context,
+        onRecord: save,
+      },
       queued: [],
       maxDurationMs: setup.limits?.max_duration_ms,
     };
     sessions.set(state.run_id, session);
+    // On record before the turn even starts: a crash between acceptance
+    // and its first request must still find this run to recover.
+    save();
     runTurn(session);
     return state;
+  }
+
+  // Recovered at construction, before this agent answers anything: every
+  // persisted row is reseated in `sessions` (so a poll or an idempotent
+  // resend of a terminal run keeps working), and one still `running` when
+  // the last process died is resumed.
+  for (const row of loadRows()) {
+    const session: RunSession = {
+      state: row.state,
+      run: createRun(
+        parts,
+        row.setup,
+        (event) => {
+          row.state.events.push(event);
+          save();
+        },
+        row.budgetUsed,
+      ),
+      setup: row.setup,
+      conversation: { messages: row.messages, size: row.size, context: row.setup.context, onRecord: save },
+      queued: row.queued,
+      maxDurationMs: row.setup.limits?.max_duration_ms,
+    };
+    sessions.set(session.state.run_id, session);
+    if (session.state.status === 'running') resume(session);
   }
 
   function getRun(runId: string): RunState | undefined {
@@ -120,6 +266,7 @@ export function createAgent(
     const session = sessions.get(runId);
     if (!session) return false;
     session.queued.push(prompt);
+    save();
     if (session.turn === undefined) startNextTurn(session);
     return true;
   }
@@ -166,6 +313,7 @@ export function createAgent(
       // actually unwinds, means a caller's abort never races its own
       // declared timer for the same run.
       disarmTimeLimit(session);
+      save();
       session.turn?.abort();
     }
     return true;
@@ -181,6 +329,7 @@ export function createAgent(
     session.state.status = 'running';
     session.state.output = undefined;
     session.state.error = undefined;
+    save();
     runTurn(session);
   }
 
@@ -193,6 +342,7 @@ export function createAgent(
     void executeTurn(session, controller.signal).finally(() => {
       disarmTimeLimit(session);
       session.turn = undefined;
+      save();
       startNextTurn(session);
     });
   }

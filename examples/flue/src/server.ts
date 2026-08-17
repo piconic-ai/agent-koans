@@ -1,10 +1,12 @@
 // Composition root + HTTP adapter: boots the Flue runtime in-process and
 // exposes the agent behind the conformance contract's endpoints (SPEC.md §3).
 // Hono is used for HTTP routing only.
+import fs from 'node:fs';
+import path from 'node:path';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { AgentRunError, type AgentInstanceHandle, init, observe } from '@flue/runtime';
-import { start } from '@flue/runtime/node';
+import { sqlite, start } from '@flue/runtime/node';
 import { Assistant, type AssistantData, type RunContext } from './agents/assistant.js';
 import { armBudget, budgetTripped } from './budget.js';
 import { armWindow, noteFoldFailed, noteUsed } from './window.js';
@@ -22,10 +24,13 @@ interface RunLimits {
 
 const config = loadConfig();
 
-// No persistence configured: each process only needs to survive one run.
+// Durable across a crash (SPEC.md §3): Flue's own store lives in the
+// run's state directory, so a restarted process finds every admitted
+// submission — the coordinator resumes them before start() resolves.
 await start({
   agents: [Assistant],
   providers: [createKoanProvider(config.model)],
+  db: sqlite(path.join(config.state.dir, 'flue.db')),
 });
 
 interface Run {
@@ -43,6 +48,40 @@ const runs = new Map<string, Run>();
 // the run whose caller has to see it.
 const runsByInstance = new Map<string, Run>();
 
+/**
+ * What this adapter itself must remember across a crash: Flue restores
+ * conversations and submissions on its own, but the run vocabulary —
+ * run_id, the caller-visible status/output/events, and what a recovery
+ * would re-dispatch — is the adapter's, so it is written to the state
+ * directory on every mutation and reloaded at boot.
+ */
+interface RunRow {
+  run: Run;
+  prompt: string;
+  initialData: AssistantData;
+  limits?: RunLimits;
+}
+
+const rows = new Map<string, RunRow>();
+const stateFile = path.join(config.state.dir, 'runs.json');
+
+// Temp-then-rename, so a crash mid-write never truncates the record it
+// was meant to protect.
+function saveRuns(): void {
+  const tmp = `${stateFile}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify([...rows.values()]));
+  fs.renameSync(tmp, stateFile);
+}
+
+function loadRunRows(): RunRow[] {
+  try {
+    return JSON.parse(fs.readFileSync(stateFile, 'utf8')) as RunRow[];
+  } catch {
+    // A first boot has no file yet; nothing to recover either way.
+    return [];
+  }
+}
+
 // Flue reports a fold as `compaction_start` followed by exactly one
 // terminal `compaction`, which is the shape SPEC.md §3 asks a run to
 // expose — so this listener only forwards it, and does not have to know
@@ -55,6 +94,7 @@ observe((observation, ctx) => {
   }
   if (observation.type === 'compaction_start') {
     run.events.push({ type: 'compaction', phase: 'started' });
+    saveRuns();
   } else if (observation.type === 'compaction') {
     const failed = observation.isError === true;
     if (failed) noteFoldFailed();
@@ -63,6 +103,7 @@ observe((observation, ctx) => {
       phase: failed ? 'failed' : 'completed',
       ...(failed ? { error: reasonOf(observation.error) } : {}),
     });
+    saveRuns();
   }
 });
 
@@ -85,7 +126,13 @@ const handles = new Map<string, AgentInstanceHandle>();
 // `agent` and settles `run` from the reply. `initialData` is passed only
 // on the turn that creates the instance — Flue itself ignores it on any
 // later dispatch to an existing one, so this is just for clarity here.
-function runTurn(run: Run, agent: AgentInstanceHandle, prompt: string, initialData?: AssistantData): void {
+function runTurn(
+  run: Run,
+  agent: AgentInstanceHandle,
+  prompt: string,
+  initialData?: AssistantData,
+  idempotencyKey?: string,
+): void {
   void (async () => {
     // The declared budget covers this one submission (SPEC.md §3) and
     // restarts fresh for every prompt, so the timer is armed here, on
@@ -98,7 +145,14 @@ function runTurn(run: Run, agent: AgentInstanceHandle, prompt: string, initialDa
     const budgetMs = declaredDuration();
     const timer = budgetMs === undefined ? undefined : setTimeout(() => void agent.abort(), budgetMs);
     try {
-      const receipt = await agent.dispatch(initialData ? { message: prompt, initialData } : prompt);
+      // The key makes the dispatch safe to repeat: a recovery after a
+      // crash re-sends it and converges on the submission the dead
+      // process already opened, instead of opening a second turn.
+      const receipt = await agent.dispatch({
+        message: prompt,
+        ...(initialData !== undefined ? { initialData } : {}),
+        ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+      });
       const reply = await agent.read(receipt);
       run.status = 'completed';
       run.output = reply.text;
@@ -115,6 +169,7 @@ function runTurn(run: Run, agent: AgentInstanceHandle, prompt: string, initialDa
           : 'failed';
       run.error = err instanceof Error ? err.message : String(err);
     } finally {
+      saveRuns();
       // Cleared on every settlement, not just the timer's own firing: a
       // turn that settles for any other reason must never leave a timer
       // that could later abort a following, unrelated turn.
@@ -141,14 +196,13 @@ function startRun(
   armBudget(limits?.max_model_requests);
   armWindow(context?.window);
   armDuration(limits?.max_duration_ms);
-  // No id passed to init() for an unnamed run: it gets an isolated
-  // conversation, never reusing another run's state. A caller-named run
-  // (SPEC.md §3) addresses its instance by that name instead, and
-  // `uid: null` keeps the send create-only — a name that somehow reached
-  // a live instance this process does not know fails loudly
-  // (AgentInstanceExistsError) rather than silently joining another
-  // run's conversation.
-  const agent = runId === undefined ? init(Assistant) : init(Assistant, { id: runId, uid: null });
+  // The instance is addressed by the run's own name — minted or
+  // caller-named alike — so a restarted process can find it again
+  // (SPEC.md §3 crash recovery). `uid: null` keeps this send create-only:
+  // a name that somehow reached a live instance this process does not
+  // know fails loudly (AgentInstanceExistsError) rather than silently
+  // joining another run's conversation.
+  const agent = init(Assistant, { id: run.run_id, uid: null });
   handles.set(run.run_id, agent);
   runsByInstance.set(agent.id, run);
   const initialData: AssistantData = {
@@ -159,8 +213,35 @@ function startRun(
     workspaceDir: config.workspace.dir,
     context,
   };
-  runTurn(run, agent, prompt, initialData);
+  rows.set(run.run_id, { run, prompt, initialData, ...(limits !== undefined ? { limits } : {}) });
+  // On record before the dispatch: a crash between the two must still
+  // leave a row to recover from.
+  saveRuns();
+  runTurn(run, agent, prompt, initialData, run.run_id);
   return run;
+}
+
+// Re-attach what a previous process left behind. Flue is already driving
+// every admitted submission (reconciliation ran inside start()); this
+// loop only rebuilds the adapter's own join and re-issues the keyed
+// dispatch, which converges on the submission the dead process opened —
+// read() then maps its settlement onto the run the caller is polling.
+// The stored prompt is the opening one: the koans that script a crash
+// are single-turn, and a follow-up-aware recovery is not built until a
+// koan needs it.
+for (const row of loadRunRows()) {
+  const run = row.run;
+  rows.set(run.run_id, row);
+  runs.set(run.run_id, run);
+  const agent = init(Assistant, { id: run.run_id });
+  handles.set(run.run_id, agent);
+  runsByInstance.set(agent.id, run);
+  if (run.status === 'running') {
+    armBudget(row.limits?.max_model_requests);
+    armWindow(row.initialData.context?.window);
+    armDuration(row.limits?.max_duration_ms);
+    runTurn(run, agent, row.prompt, row.initialData, run.run_id);
+  }
 }
 
 /**
@@ -179,6 +260,7 @@ function sendPrompt(runId: string, prompt: string): boolean {
   run.status = 'running';
   run.output = undefined;
   run.error = undefined;
+  saveRuns();
   runTurn(run, agent, prompt);
   return true;
 }

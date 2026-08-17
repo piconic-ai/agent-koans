@@ -41,8 +41,10 @@ export interface HttpResponse {
 /**
  * What the tool mock does with a permitted invocation: answer it, sever
  * the connection without answering, or accept it and never answer at all.
+ * `crash` is the runner's doing, not the mock's: the agent's process is
+ * killed while this invocation is in flight, and nothing is answered.
  */
-export type ToolResponse = HttpResponse | { disconnect: true } | { never: true };
+export type ToolResponse = HttpResponse | { disconnect: true } | { never: true } | { crash: true };
 
 /**
  * One tool-call instruction inside a model response — one entry of a
@@ -164,6 +166,14 @@ export interface Conversation {
   briefing: string;
   /** Boundaries for turn 2 onward of a `turns:` koan, or the single boundary a mid-run prompt produces; absent otherwise — turn 1 is `briefing`, at index 0. Only ever set on the main conversation. */
   followUps?: TurnBoundary[];
+  /**
+   * Set by a trace's bare `crash` step: once every turn before this index
+   * has been served, the runner kills and restarts the agent, and the
+   * mock parks any request for this index until the restart completes
+   * (mock-llm.ts) — otherwise the doomed process could race its own death
+   * to the next exchange. Only ever set on the main conversation.
+   */
+  crashBefore?: number;
 }
 
 /** One compiled trace variant: the main conversation plus any subagent conversations. */
@@ -171,6 +181,14 @@ export interface Trace {
   /** The main conversation first; subagent conversations follow in first-appearance order. */
   conversations: Conversation[];
 }
+
+/**
+ * One caller action a held invocation carries — a mid-run prompt, a
+ * re-send of the turn's own submission — or the one action that is not
+ * the caller's at all: the runner killing the agent while the invocation
+ * is in flight (`response: crash`).
+ */
+export type HeldAction = { kind: 'prompt'; prompt: string } | { kind: 'retry' } | { kind: 'crash' };
 
 /** A `then`-block matcher; a bare scalar means `equals`. */
 export type Matcher =
@@ -399,7 +417,9 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
             ? { disconnect: true }
             : 'never' in step.response
               ? { never: true }
-              : { status: step.response.status, body: step.response.body };
+              : 'crash' in step.response
+                ? { crash: true }
+                : { status: step.response.status, body: step.response.body };
         if (step.prompt !== undefined) match.compiled.promptDuring = step.prompt;
         if (step.retry !== undefined) match.compiled.retryDuring = true;
         openCalls = openCalls.filter((c) => c !== match);
@@ -411,18 +431,21 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
         openCalls = openCalls.filter((c) => c !== match);
         break;
       }
+      case 'crash': {
+        // `openCalls` survives, like a fold's: the death is the process's,
+        // not the conversation's, and a call still open is still owed.
+        conv.crashBefore = conv.turns.length;
+        break;
+      }
       default:
         assertNever(step);
     }
   }
 }
 
-/** One caller action a held invocation carries: a mid-run prompt, or a re-send of the turn's own submission. */
-export type HeldAction = { kind: 'prompt'; prompt: string } | { kind: 'retry' };
-
-// The trace's held caller actions in step order, each numbered into
-// `holdIndex` on the member that holds it — the pairing the runner's
-// holds go by. A member carries at most one action (parse.ts).
+// The trace's held actions in step order, each numbered into `holdIndex`
+// on the member that holds it — the pairing the runner's holds go by. A
+// member carries at most one action (parse.ts).
 function heldActions(conv: Conversation): Array<{ turn: number; action: HeldAction }> {
   const held: Array<{ turn: number; action: HeldAction }> = [];
   for (const [i, turn] of conv.turns.entries()) {
@@ -432,7 +455,9 @@ function heldActions(conv: Conversation): Array<{ turn: number; action: HeldActi
           ? { kind: 'prompt', prompt: member.promptDuring }
           : member.retryDuring
             ? { kind: 'retry' }
-            : undefined;
+            : member.tool_responds !== undefined && 'crash' in member.tool_responds
+              ? { kind: 'crash' }
+              : undefined;
       if (action !== undefined) {
         member.holdIndex = held.length;
         held.push({ turn: i, action });
@@ -477,13 +502,14 @@ function promptBoundaries(conv: Conversation): TurnBoundary[] {
   return boundaries;
 }
 
-/** The caller actions sent into held invocations, in step order — one hold each. */
+/** The held actions of a trace, in step order — one hold each (runner.ts). */
 export function actionsDuringOf(trace: Trace): HeldAction[] {
   const actions: HeldAction[] = [];
   for (const turn of trace.conversations[0].turns) {
     for (const member of turn.call_tools ?? []) {
       if (member.promptDuring !== undefined) actions.push({ kind: 'prompt', prompt: member.promptDuring });
       else if (member.retryDuring) actions.push({ kind: 'retry' });
+      else if (member.tool_responds !== undefined && 'crash' in member.tool_responds) actions.push({ kind: 'crash' });
     }
   }
   return actions;

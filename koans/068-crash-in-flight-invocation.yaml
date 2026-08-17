@@ -1,0 +1,40 @@
+name: crash-in-flight-invocation
+description: >
+  The agent's process is killed while a tool invocation is in flight —
+  accepted by the tool server, not yet answered — and started again.
+  Nothing was recorded, so the invocation's outcome is unknown, and an
+  unknown outcome is the model's to hear about, not the agent's to
+  guess: the recovered run closes the call as interrupted, the model
+  asks again, and the run carries on to the answer. The agent must not
+  re-invoke on its own — one instruction, one invocation, before the
+  crash and after it alike.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  # The invocation arrives and, while it waits for its answer, the
+  # process that made it dies.
+  - request: { tool: get_weather }
+    response: crash
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: model
+    response: "The weather in Tokyo is 31°C."
+
+then:
+  status: completed
+  output: { contains: "31" }

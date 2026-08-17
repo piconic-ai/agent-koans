@@ -1,0 +1,3 @@
+skip:
+  067-crash-after-recorded-result: "The vanilla example keeps every run in process memory and does not persist anything to KOAN_STATE_DIR yet, so nothing survives a crash. This is not a design boundary meant to last: file-backed persistence is planned follow-up work, and these skips are lifted with it."
+  068-crash-in-flight-invocation: "Same cause as 067: no persistence yet, so nothing survives a crash. Lifted by the same planned follow-up."

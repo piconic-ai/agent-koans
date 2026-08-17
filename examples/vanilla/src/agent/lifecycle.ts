@@ -81,6 +81,11 @@ interface RunRow {
   setup: RunSetup;
   messages: ChatMessage[];
   size: { used: number };
+  /**
+   * Not elapsed wall-clock time: a resumed run re-arms `max_duration_ms`
+   * from zero, since only the request count survives a crash here. No
+   * koan declares a time budget on a run that also scripts one.
+   */
   budgetUsed: number;
   queued: string[];
 }
@@ -224,9 +229,15 @@ export function createAgent(
 
   // Recovered at construction, before this agent answers anything: every
   // persisted row is reseated in `sessions` (so a poll or an idempotent
-  // resend of a terminal run keeps working), and one still `running` when
-  // the last process died is resumed.
-  for (const row of loadRows()) {
+  // resend of a terminal run keeps working) — all of them, in a first
+  // pass, before any resume() runs. `resume()` can itself call `save()`
+  // (closing an interrupted call, settling from a recorded answer), and
+  // `save()` serializes the whole map; resuming inline with the reseat
+  // would rewrite runs.json while later rows in this same loop were not
+  // yet in `sessions`, dropping them from that write. A second pass then
+  // resumes what was still `running`, and drains a queued prompt a
+  // terminal row never got to start.
+  const reseated = loadRows().map((row) => {
     const session: RunSession = {
       state: row.state,
       run: createRun(
@@ -244,7 +255,11 @@ export function createAgent(
       maxDurationMs: row.setup.limits?.max_duration_ms,
     };
     sessions.set(session.state.run_id, session);
+    return session;
+  });
+  for (const session of reseated) {
     if (session.state.status === 'running') resume(session);
+    else if (session.queued.length > 0) startNextTurn(session);
   }
 
   function getRun(runId: string): RunState | undefined {

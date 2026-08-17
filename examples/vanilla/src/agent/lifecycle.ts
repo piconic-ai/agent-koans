@@ -127,12 +127,20 @@ export function createAgent(
   }
 
   function loadRows(): RunRow[] {
+    let raw: string;
     try {
-      return JSON.parse(fs.readFileSync(stateFile, 'utf8')) as RunRow[];
-    } catch {
+      raw = fs.readFileSync(stateFile, 'utf8');
+    } catch (err) {
       // A first boot has no file yet; nothing to recover either way.
-      return [];
+      // Anything else (permissions, ...) is a real failure and must not
+      // be read as an empty, trustworthy state.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
     }
+    // Not caught: a file that exists but fails to parse is corruption,
+    // not a first boot — the durability this module exists for must not
+    // silently discard it as if nothing had ever been recorded.
+    return JSON.parse(raw) as RunRow[];
   }
 
   // What an invocation the crash caught in flight becomes: nothing was
@@ -203,7 +211,14 @@ export function createAgent(
       state,
       run: createRun(parts, setup, (event) => {
         state.events.push(event);
-        save();
+        // A completed fold's own onRecord (conversation.ts, called right
+        // after this same event) saves the rewritten history and this
+        // event together — saving here first would risk a crash landing
+        // between the two, leaving a persisted row that claims the fold
+        // finished while the history is still the pre-fold one. A
+        // "started" or "failed" event has no such following save, so
+        // those still need this one.
+        if (event.phase !== 'completed') save();
       }),
       setup,
       // The run's own `context` provisions the run's own conversation
@@ -245,7 +260,9 @@ export function createAgent(
         row.setup,
         (event) => {
           row.state.events.push(event);
-          save();
+          // Same reasoning as startRun's report callback: a completed
+          // fold's own onRecord save covers this event too.
+          if (event.phase !== 'completed') save();
         },
         row.budgetUsed,
       ),

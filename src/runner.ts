@@ -12,7 +12,7 @@ import type { DelegationVocabulary } from './config.js';
 import { actionsDuringOf, type Judgment, type Koan, type Matcher, type Trace } from './koan.js';
 import { startMockLlm } from './mock-llm.js';
 import { startMockTools } from './mock-tools.js';
-import { createHold, type PendingInvocation } from './pending.js';
+import { createHold, deepEqual, type PendingInvocation } from './pending.js';
 
 /** How to launch the agent under test. */
 export interface AgentConfig {
@@ -236,10 +236,13 @@ function judge(then: Judgment, run: RunState): string[] {
 function judgeToolTimeouts(
   koan: Koan,
   trace: Trace,
-  requestAt: number[],
-  calls: Array<{ name: string; at: number }>,
+  llmState: { requestAt: number[]; requestConv: Array<string | undefined> },
+  calls: Array<{ name: string; args: unknown; at: number }>,
 ): string[] {
   const failures: string[] = [];
+  // Consumed as matched, so a tool invoked more than once maps each
+  // scripted invocation to exactly one observed call, in arrival order.
+  const usedCalls = new Set<number>();
   for (const conv of trace.conversations) {
     for (const turn of conv.turns) {
       for (const member of turn.call_tools ?? []) {
@@ -249,9 +252,19 @@ function judgeToolTimeouts(
         // Never invoked, or never given up: both already fail elsewhere
         // (the unconsumed timeline, the run that cannot settle) — this
         // check owns only the window between the two.
-        const invokedAt = calls.find((c) => c.name === member.name)?.at;
-        if (invokedAt === undefined) continue;
-        const closedAt = requestAt.find((at) => at > invokedAt);
+        const expectedArgs = member.invokeArgs ?? member.args ?? {};
+        const callIndex = calls.findIndex(
+          (c, i) => !usedCalls.has(i) && c.name === member.name && deepEqual(c.args, expectedArgs),
+        );
+        if (callIndex === -1) continue;
+        usedCalls.add(callIndex);
+        const invokedAt = calls[callIndex].at;
+        // The give-up is carried by this conversation's own next request:
+        // another conversation's, interleaved while this call hangs, says
+        // nothing about this call.
+        const closedAt = llmState.requestAt.find(
+          (at, i) => at > invokedAt && llmState.requestConv[i] === conv.name,
+        );
         if (closedAt === undefined) continue;
         const waited = closedAt - invokedAt;
         if (waited < timeoutMs - TIME_LIMIT_EARLY_EPSILON_MS) {
@@ -697,7 +710,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
 
       failures.push(...judgeReportedFolds(trace, run));
 
-      failures.push(...judgeToolTimeouts(koan, trace, llm.state.requestAt, tools.state.calls));
+      failures.push(...judgeToolTimeouts(koan, trace, llm.state, tools.state.calls));
 
       // Underruns only: overruns are already recorded by the mocks.
       for (const conv of trace.conversations) {

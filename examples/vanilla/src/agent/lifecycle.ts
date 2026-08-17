@@ -2,10 +2,9 @@
 // answers for them. What belongs here is the state a caller polls, the
 // queue of turns, and the transitions between them; what does not is what
 // a run is made of (run.ts) or how a turn is carried out (conversation.ts).
-// Durability rides here too: every session is a row of its own recorded
-// history (SPEC.md §3 crash recovery), saved to KOAN_STATE_DIR on every
-// change and reloaded at construction — a delegate's conversation stays
-// out of it, since a scripted crash never lands mid-delegation.
+// Durability rides here too (SPEC.md §3): every session's recorded
+// history is saved to KOAN_STATE_DIR on every change and reloaded at
+// construction.
 import fs from 'node:fs';
 import path from 'node:path';
 import { foldOnRequest, type RunEvent } from './compaction.js';
@@ -44,7 +43,7 @@ interface RunSession {
   state: RunState;
   run: Run;
   conversation: Conversation;
-  /** What the run was submitted with — kept to rebuild `run` on recovery, since a crash loses the in-memory Run itself. */
+  /** What the run was submitted with — kept to rebuild `run` after a crash, which loses the in-memory Run itself. */
   setup: RunSetup;
   /**
    * Prompts that arrived mid-turn. Not appended to the conversation until
@@ -81,11 +80,7 @@ interface RunRow {
   setup: RunSetup;
   messages: ChatMessage[];
   size: { used: number };
-  /**
-   * Not elapsed wall-clock time: a resumed run re-arms `max_duration_ms`
-   * from zero, since only the request count survives a crash here. No
-   * koan declares a time budget on a run that also scripts one.
-   */
+  /** Not elapsed wall-clock time: a resumed run re-arms `max_duration_ms` from zero — only the request count survives a crash here. */
   budgetUsed: number;
   queued: string[];
 }
@@ -109,9 +104,8 @@ export function createAgent(
   fs.mkdirSync(config.state.dir, { recursive: true });
   const stateFile = path.join(config.state.dir, 'runs.json');
 
-  // The whole map, rewritten every time: one koan's session count is
-  // small, and temp-then-rename means a crash mid-write never truncates
-  // the record it was meant to protect.
+  // Rewritten whole rather than appended: session counts are small, and
+  // temp-then-rename means a crash mid-write never truncates the file.
   function save(): void {
     const rows: RunRow[] = [...sessions.values()].map((session) => ({
       state: session.state,
@@ -131,22 +125,16 @@ export function createAgent(
     try {
       raw = fs.readFileSync(stateFile, 'utf8');
     } catch (err) {
-      // A first boot has no file yet; nothing to recover either way.
-      // Anything else (permissions, ...) is a real failure and must not
-      // be read as an empty, trustworthy state.
+      // Only a missing file means "nothing to recover" — anything else,
+      // parse failure included, must not be swallowed as if it were.
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw err;
     }
-    // Not caught: a file that exists but fails to parse is corruption,
-    // not a first boot — the durability this module exists for must not
-    // silently discard it as if nothing had ever been recorded.
     return JSON.parse(raw) as RunRow[];
   }
 
-  // What an invocation the crash caught in flight becomes: nothing was
-  // recorded, so its outcome is unknown, and an unknown outcome reaches
-  // the model the way any other tool failure does (SPEC.md §3) — never a
-  // re-invocation this agent makes on its own.
+  // Nothing was recorded, so the outcome is unknown — reported as a tool
+  // failure (SPEC.md §3), never retried by this agent on its own.
   function interruptedClosure(call: ToolCall): ChatMessage {
     return {
       role: 'tool',
@@ -157,11 +145,8 @@ export function createAgent(
     };
   }
 
-  // Picks a session back up after a crash (SPEC.md §3): closes any
-  // invocation the death caught in flight as interrupted, then resumes
-  // the loop from the recorded history — the recorded result, once
-  // closed for real or synthesized, is what the next model request
-  // carries forward.
+  // Closes any invocation the crash caught in flight (SPEC.md §3), then
+  // resumes the loop from the recorded history.
   function resume(session: RunSession): void {
     const { messages } = session.conversation;
     const last = messages.at(-1);
@@ -211,20 +196,16 @@ export function createAgent(
       state,
       run: createRun(parts, setup, (event) => {
         state.events.push(event);
-        // A completed fold's own onRecord (conversation.ts, called right
-        // after this same event) saves the rewritten history and this
-        // event together — saving here first would risk a crash landing
-        // between the two, leaving a persisted row that claims the fold
-        // finished while the history is still the pre-fold one. A
-        // "started" or "failed" event has no such following save, so
-        // those still need this one.
+        // A completed fold's own onRecord save (right after) covers the
+        // rewrite and this event together — saving here first would let
+        // a crash land between the two. "started"/"failed" have no such
+        // following save.
         if (event.phase !== 'completed') save();
       }),
       setup,
       // The run's own `context` provisions the run's own conversation
       // (SPEC.md §3) — a delegate's conversation carries its own instead
-      // (run.ts's `delegate`), never this one. `onRecord` is what makes
-      // this conversation durable; a delegate's declares none.
+      // (run.ts's `delegate`), never this one.
       conversation: {
         messages: opening(prompt, definition.system),
         size: { used: 0 },
@@ -235,23 +216,16 @@ export function createAgent(
       maxDurationMs: setup.limits?.max_duration_ms,
     };
     sessions.set(state.run_id, session);
-    // On record before the turn even starts: a crash between acceptance
-    // and its first request must still find this run to recover.
+    // Before the turn starts: a crash between acceptance and the first
+    // request must still find this run on reload.
     save();
     runTurn(session);
     return state;
   }
 
-  // Recovered at construction, before this agent answers anything: every
-  // persisted row is reseated in `sessions` (so a poll or an idempotent
-  // resend of a terminal run keeps working) — all of them, in a first
-  // pass, before any resume() runs. `resume()` can itself call `save()`
-  // (closing an interrupted call, settling from a recorded answer), and
-  // `save()` serializes the whole map; resuming inline with the reseat
-  // would rewrite runs.json while later rows in this same loop were not
-  // yet in `sessions`, dropping them from that write. A second pass then
-  // resumes what was still `running`, and drains a queued prompt a
-  // terminal row never got to start.
+  // Two passes: `resume()` can call `save()`, which serializes the whole
+  // map — resuming inline here would rewrite runs.json before later rows
+  // in this loop were reseated, dropping them from that write.
   const reseated = loadRows().map((row) => {
     const session: RunSession = {
       state: row.state,
@@ -276,6 +250,8 @@ export function createAgent(
   });
   for (const session of reseated) {
     if (session.state.status === 'running') resume(session);
+    // A terminal row can still carry a queue: same drain sendPrompt does
+    // when no turn is in flight.
     else if (session.queued.length > 0) startNextTurn(session);
   }
 

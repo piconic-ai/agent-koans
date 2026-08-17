@@ -30,9 +30,8 @@ export interface Conversation {
   /**
    * Told after every change to the recorded history — a message
    * appended, or a fold's rewrite. A durable agent hooks its store here
-   * to keep a crash from losing recorded work (SPEC.md §3); a delegate's
-   * conversation declares none, since a scripted crash never lands
-   * mid-delegation.
+   * (SPEC.md §3); a delegate's conversation declares none, since a
+   * scripted crash never lands mid-delegation.
    */
   onRecord?: () => void;
 }

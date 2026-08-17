@@ -33,10 +33,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       dir: env.KOAN_WORKSPACE ?? '',
     },
     state: {
-      // A dev run outside the runner still needs somewhere durable to
-      // put run records, hence a local fallback rather than '' — unlike
-      // workspace/tools above, this path is mkdirSync'd at startup, so an
-      // explicitly empty value must fall back too, not just an unset one.
+      // Unlike workspace/tools above, this path is mkdirSync'd at
+      // startup, so an explicitly empty value must fall back too — hence
+      // the length check instead of `??`.
       dir: env.KOAN_STATE_DIR && env.KOAN_STATE_DIR.length > 0 ? env.KOAN_STATE_DIR : '.agent-koans',
     },
   };

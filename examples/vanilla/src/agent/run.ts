@@ -42,11 +42,7 @@ export interface Run {
   model: ModelClient;
 }
 
-/**
- * Assemble a run from what it was submitted with. `spent` seeds the
- * budget from a prior process's own count — absent for a fresh run,
- * carried over when a crashed run's process resumes it (SPEC.md §3).
- */
+/** Assemble a run from what it was submitted with. `spent` resumes a prior process's own request count (SPEC.md §3). */
 export function createRun(parts: AgentParts, setup: RunSetup, report: ReportEvent, spent = 0): Run {
   const tools = new Map<string, Tool>();
   const run: Run = {

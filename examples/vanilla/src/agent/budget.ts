@@ -30,13 +30,13 @@ export interface Grant {
 /** A run's model-request budget, shared by every conversation of that run. */
 export interface Budget {
   readonly max: number;
-  /** How many requests have been claimed so far — what a durable agent records so a successor spends the remainder, not a fresh budget. */
+  /** How many requests have been claimed so far — what a resumed run seeds its budget from. */
   readonly used: number;
   /** Claim one model request; `undefined` when the budget is spent. */
   take(): Grant | undefined;
 }
 
-/** Open a budget for a run, never wider than this agent's own ceiling. `spent` seeds it from a prior process's own count, for resuming after a crash. */
+/** Open a budget for a run, never wider than this agent's own ceiling. `spent` resumes a prior process's own count. */
 export function createBudget(limits?: RunLimits, spent = 0): Budget {
   const max = Math.min(MAX_STEPS, limits?.max_model_requests ?? MAX_STEPS);
   let used = spent;

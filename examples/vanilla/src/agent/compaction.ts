@@ -70,8 +70,6 @@ async function fold(
     // Not the summarizing request's own usage: carrying that number over
     // would trip the threshold again and fold forever.
     conversation.size.used = 0;
-    // A fold rewrites the record: a durable agent's stale pre-fold copy
-    // must not survive it.
     conversation.onRecord?.();
   } catch {
     // Left as it was, which the room check before the next model request

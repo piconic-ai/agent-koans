@@ -124,7 +124,18 @@ before a final answer MUST end the run `aborted`, the same as any other
 exhausted budget. A budget is a ceiling, not permission to stop early:
 you MUST NOT settle a run `aborted` before its declared budget expires
 just because one is declared. Where inside the window you give up on a
-slow dependency is yours; no per-tool timeout is mandated.
+slow dependency is yours; no per-tool timeout is mandated unless the
+run declares one (below).
+
+**Tool timeout.** A declared tool MAY carry `timeout_ms` (openapi.yaml):
+how long the caller wants an invocation of it waited for. An invocation
+still unanswered at the declared timeout MUST be given up at the
+declared timeout — not sooner, and not later: a declared wait is a
+promise to wait, not only a bound on waiting. Giving up is not an abort
+and not the run's failure: the timeout reaches the model the way any
+tool failure does (§4), the follow-up call, if any, is the model's next
+instruction — never your own retry — and the run carries on. Without a
+declaration nothing changes; the sentence above stands.
 
 **Crash recovery.** A koan may kill your agent's process — SIGKILL, no
 warning — and start the same command again (a trace's `crash`). The
@@ -372,6 +383,7 @@ it cannot drift from the contract it indexes.
 | [066-idempotent-creation](./koans/066-idempotent-creation.yaml) | The caller names the run (`run_id` in the creation request) and, never having seen its acceptance, sends the identical creation again while the run is still working. The resend must land on the same run — the same acceptance with the same run_id — and must not start a second conversation: one tool invocation, one answer. |
 | [067-crash-after-recorded-result](./koans/067-crash-after-recorded-result.yaml) | The agent's process is killed without warning after a tool result was recorded, and started again. The run must pick up where the record ends, not where memory did: the caller's poll still resolves the same run, the next model request carries the recorded result, the tool is not invoked again, and the run completes with the same answer it was always going to give. Recorded work is never redone. |
 | [068-crash-in-flight-invocation](./koans/068-crash-in-flight-invocation.yaml) | The agent's process is killed while a tool invocation is in flight — accepted by the tool server, not yet answered — and started again. Nothing was recorded, so the invocation's outcome is unknown, and an unknown outcome is the model's to hear about, not the agent's to guess: the recovered run closes the call as interrupted, the model asks again, and the run carries on to the answer. The agent must not re-invoke on its own — one instruction, one invocation, before the crash and after it alike. |
+| [069-tool-timeout](./koans/069-tool-timeout.yaml) | The tool declares how long an invocation of it is waited for (`timeout_ms`), and the tool server accepts the call and never answers. The agent must give the invocation up at the declared timeout — not sooner: a declared wait is a promise to wait — with the timeout reaching the model as a tool failure, and the run carrying on to a graceful answer instead of dying. The agent must not re-invoke on its own; there is no follow-up call here, so exactly one invocation is made. |
 
 <!-- koan-index:end -->
 

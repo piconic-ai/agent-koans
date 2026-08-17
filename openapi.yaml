@@ -295,6 +295,16 @@ components:
         input_schema:
           type: object
           description: JSON Schema for the tool's arguments.
+        timeout_ms:
+          type: integer
+          minimum: 1
+          description: >-
+            How long the caller wants an invocation of this tool waited
+            for, in milliseconds. An invocation still unanswered at the
+            declared timeout must be given up then — not sooner, not
+            later — with the failure reaching the model; the run carries
+            on (SPEC.md §3). Absent, when to give up on a slow dependency
+            stays the implementation's own choice.
 
     RunCreated:
       type: object

@@ -8,6 +8,8 @@ import { deepEqual, type PendingInvocation } from './pending.js';
 interface ToolCallRecord {
   name: string;
   args: unknown;
+  /** When the invocation arrived — one end of a declared tool timeout's window (runner.ts). */
+  at: number;
 }
 
 interface MockTools {
@@ -67,7 +69,7 @@ export function startMockTools(pending: PendingInvocation[]): Promise<MockTools>
       return respond(400, { error: 'invalid JSON body' });
     }
 
-    state.calls.push({ name, args });
+    state.calls.push({ name, args, at: Date.now() });
 
     const expected = takeMatch(pending, name, args);
     if (!expected) {

@@ -129,15 +129,26 @@ function startRun(
   subagents: RunSubagentDef[],
   limits?: RunLimits,
   context?: RunContext,
+  runId?: string,
 ): Run {
-  const run: Run = { run_id: `r_${crypto.randomUUID()}`, status: 'running', events: [] };
+  // A named run that already exists is the caller's identical resend
+  // (SPEC.md §3): answer with the run it already started — no second
+  // instance, no re-armed limits.
+  const existing = runId === undefined ? undefined : runs.get(runId);
+  if (existing !== undefined) return existing;
+  const run: Run = { run_id: runId ?? `r_${crypto.randomUUID()}`, status: 'running', events: [] };
   runs.set(run.run_id, run);
   armBudget(limits?.max_model_requests);
   armWindow(context?.window);
   armDuration(limits?.max_duration_ms);
-  // No id passed to init(): each run gets an isolated conversation, never
-  // reusing another run's state.
-  const agent = init(Assistant);
+  // No id passed to init() for an unnamed run: it gets an isolated
+  // conversation, never reusing another run's state. A caller-named run
+  // (SPEC.md §3) addresses its instance by that name instead, and
+  // `uid: null` keeps the send create-only — a name that somehow reached
+  // a live instance this process does not know fails loudly
+  // (AgentInstanceExistsError) rather than silently joining another
+  // run's conversation.
+  const agent = runId === undefined ? init(Assistant) : init(Assistant, { id: runId, uid: null });
   handles.set(run.run_id, agent);
   runsByInstance.set(agent.id, run);
   const initialData: AssistantData = {
@@ -211,6 +222,7 @@ app.post('/runs', async (c) => {
   const body = await c.req
     .json<{
       prompt?: string;
+      run_id?: string;
       tools?: RunToolDef[];
       subagents?: RunSubagentDef[];
       limits?: RunLimits;
@@ -222,7 +234,14 @@ app.post('/runs', async (c) => {
     return c.json({ error: 'prompt is required' }, 400);
   }
   // The run executes asynchronously; the caller polls GET /runs/{id}.
-  const run = startRun(prompt, body?.tools ?? [], body?.subagents ?? [], body?.limits, body?.context);
+  const run = startRun(
+    prompt,
+    body?.tools ?? [],
+    body?.subagents ?? [],
+    body?.limits,
+    body?.context,
+    typeof body?.run_id === 'string' && body.run_id.length > 0 ? body.run_id : undefined,
+  );
   return c.json({ run_id: run.run_id }, 202);
 });
 

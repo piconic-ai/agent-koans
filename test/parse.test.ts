@@ -723,6 +723,140 @@ const rows: Row[] = [
     message: 'when[1].prompt must be a non-empty string — what the caller sends while this response is held',
   },
   {
+    rule: '"retry" is written with its object',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - retry
+        - request: model
+          response: ok
+    `),
+    message: 'when[2]: "retry" names what the caller re-sends — write "retry: prompt"',
+  },
+  {
+    rule: '"retry" re-sends only the prompt submission',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - retry: abort
+        - request: model
+          response: ok
+    `),
+    message: 'when[2].retry names what the caller re-sends — only "prompt" (this turn\'s own submission) is supported',
+  },
+  {
+    rule: 'a retry step has no other key',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - retry: prompt
+          twice: true
+        - request: model
+          response: ok
+    `),
+    message: 'when[2] has unknown key "twice" — a retry step is only "retry"',
+  },
+  {
+    rule: '"retry" cannot appear inside a "turns" koan',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request: model
+            response: { tool: x, args: {} }
+          - request: { tool: x }
+            response: { status: 200 }
+          - retry: prompt
+          - request: model
+            response: ok
+    `),
+    message: 'turns[0].when[2]: "retry" cannot appear inside a "turns" koan — retrying a follow-up submission is not supported yet',
+  },
+  {
+    rule: '"retry" cannot appear inside a subagent block',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { subagent: r, prompt: "go look" }
+        - subagent: r
+          when:
+            - request: model
+              response: { tool: x, args: {} }
+            - request: { tool: x }
+              response: { status: 200 }
+            - retry: prompt
+            - request: model
+              response: ok
+    `),
+    message: 'when[1].when[2]: "retry" cannot appear inside a subagent block — only the caller\'s own submission can be retried',
+  },
+  {
+    rule: '"retry" directly follows a tool step',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - request: model
+          response: ok
+        - retry: prompt
+    `),
+    message: 'when[3]: "retry" must directly follow a tool step — its held invocation is what proves the run is still running when the resend lands',
+  },
+  {
+    rule: '"retry" cannot follow a tool step answered "never"',
+    yaml: koan(`
+      given:
+        limits: { max_duration_ms: 2000 }
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: never
+        - retry: prompt
+    `),
+    message: 'when[2]: "retry" cannot follow a tool step answered "never" — its invocation is never released',
+  },
+  {
+    rule: 'a held invocation carries one caller action',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+          prompt: p
+        - retry: prompt
+        - request: model
+          response: ok
+    `),
+    message: 'when[2]: a held invocation carries one caller action — this tool step already carries "prompt"',
+  },
+  {
+    rule: 'a tool step carries at most one retry',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - retry: prompt
+        - retry: prompt
+        - request: model
+          response: ok
+    `),
+    message: 'when[3]: a held invocation carries one caller action — this tool step already carries "retry"',
+  },
+  {
     rule: 'a subagent block has no unknown key',
     yaml: koan(`
       when:

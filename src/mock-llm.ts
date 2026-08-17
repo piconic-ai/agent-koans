@@ -627,7 +627,7 @@ export function startMockLlm(
       callTools.forEach((member, j) => {
         issuedToolCallIds.add(ids[j]);
         if (member.tool_responds) {
-          const hold = member.promptIndex !== undefined ? holds?.[member.promptIndex] : undefined;
+          const hold = member.holdIndex !== undefined ? holds?.[member.holdIndex] : undefined;
           pending.push({
             name: member.name,
             args: member.invokeArgs ?? member.args ?? {},

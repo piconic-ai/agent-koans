@@ -15,18 +15,22 @@ const app = new Hono();
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
 app.post('/runs', async (c) => {
-  const body = await c.req.json<{ prompt?: string } & Partial<RunSetup>>().catch(() => null);
+  const body = await c.req.json<{ prompt?: string; run_id?: string } & Partial<RunSetup>>().catch(() => null);
   const prompt = body?.prompt;
   if (typeof prompt !== 'string') {
     return c.json({ error: 'prompt is required' }, 400);
   }
   // The run executes asynchronously; the caller polls GET /runs/{id}.
-  const run = agent.startRun(prompt, {
-    tools: body?.tools ?? [],
-    subagents: body?.subagents ?? [],
-    limits: body?.limits,
-    context: body?.context,
-  });
+  const run = agent.startRun(
+    prompt,
+    {
+      tools: body?.tools ?? [],
+      subagents: body?.subagents ?? [],
+      limits: body?.limits,
+      context: body?.context,
+    },
+    typeof body?.run_id === 'string' && body.run_id.length > 0 ? body.run_id : undefined,
+  );
   return c.json({ run_id: run.run_id }, 202);
 });
 

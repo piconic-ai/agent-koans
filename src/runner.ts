@@ -4,11 +4,12 @@
 // aggregation belong here; what to verify is decided by the compiled
 // koan and the mocks.
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { DelegationVocabulary } from './config.js';
-import { promptsDuringOf, type Judgment, type Koan, type Matcher, type Trace } from './koan.js';
+import { actionsDuringOf, type Judgment, type Koan, type Matcher, type Trace } from './koan.js';
 import { startMockLlm } from './mock-llm.js';
 import { startMockTools } from './mock-tools.js';
 import { createHold, type PendingInvocation } from './pending.js';
@@ -267,9 +268,10 @@ export async function runKoan(koan: Koan, agent: AgentConfig): Promise<void> {
 async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<string[]> {
   const pending: PendingInvocation[] = [];
   // Created here rather than inside a mock: both ends of each window are
-  // held by this driver and the tool mock, one hold per mid-run prompt.
-  const promptsDuring = promptsDuringOf(trace);
-  const holds = promptsDuring.map(() => createHold());
+  // held by this driver and the tool mock, one hold per held caller
+  // action (a mid-run prompt, or a re-send of the creation).
+  const actions = actionsDuringOf(trace);
+  const holds = actions.map(() => createHold());
   const llm = await startMockLlm(koan, trace, pending, agent.delegation, holds);
   const tools = await startMockTools(pending);
   const port = await getFreePort();
@@ -321,23 +323,33 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       const opening = koan.turns?.[0];
       const firstPrompt = opening?.kind === 'prompt' ? opening.prompt : (koan.prompt as string);
 
+      // A trace whose caller retries its creation names the run itself
+      // (SPEC.md §3): only a caller that knows the name it asked for can
+      // show the resend landed on the same run. Minted fresh per
+      // execution, never written in the koan — a fixed name would land a
+      // re-run of the suite on the previous execution's settled run.
+      const clientRunId = actions.some((a) => a.kind === 'retry') ? `koan-${randomUUID()}` : undefined;
+      // Kept verbatim for the retry: what the caller re-sends is the
+      // identical request, not a semantically-equal one.
+      const submitBody = JSON.stringify({
+        prompt: firstPrompt,
+        ...(clientRunId !== undefined ? { run_id: clientRunId } : {}),
+        tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
+        ...(subagentNames.length > 0
+          ? {
+              subagents: subagentNames.map((name) => {
+                const setup = koan.given.subagents?.[name];
+                return setup === undefined ? { name } : { name, context: setup.context };
+              }),
+            }
+          : {}),
+        ...(koan.given.limits ? { limits: koan.given.limits } : {}),
+        ...(koan.given.context ? { context: koan.given.context } : {}),
+      });
       const submitRes = await fetch(`${base}/runs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          prompt: firstPrompt,
-          tools: Object.entries(koan.given.tools).map(([name, def]) => ({ name, ...def })),
-          ...(subagentNames.length > 0
-            ? {
-                subagents: subagentNames.map((name) => {
-                  const setup = koan.given.subagents?.[name];
-                  return setup === undefined ? { name } : { name, context: setup.context };
-                }),
-              }
-            : {}),
-          ...(koan.given.limits ? { limits: koan.given.limits } : {}),
-          ...(koan.given.context ? { context: koan.given.context } : {}),
-        }),
+        body: submitBody,
       });
       if (submitRes.status !== 201 && submitRes.status !== 202) {
         throw new Error(`POST /runs returned ${submitRes.status}, expected 201 or 202`);
@@ -350,6 +362,11 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       const { run_id: runId } = (await submitRes.json()) as { run_id?: string };
       if (typeof runId !== 'string' || runId.length === 0) {
         throw new Error('POST /runs response is missing "run_id"');
+      }
+      if (clientRunId !== undefined && runId !== clientRunId) {
+        throw new Error(
+          `POST /runs was asked to create run "${clientRunId}" but answered run_id "${runId}" — a caller-named run keeps its name (SPEC.md §3)`,
+        );
       }
 
       // A `turns:` koan never scripts `abort` (koan.ts rejects it), so
@@ -382,34 +399,62 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         }
       };
 
-      if (abortKind === 'live' && promptsDuring.length === 0) {
+      if (abortKind === 'live' && actions.length === 0) {
         await waitForPreAbortSteps();
         await postAbort();
       }
 
-      for (const [k, promptDuring] of promptsDuring.entries()) {
+      for (const [k, action] of actions.entries()) {
+        const label =
+          action.kind === 'prompt'
+            ? `mid-run prompt #${actions.slice(0, k + 1).filter((a) => a.kind === 'prompt').length}`
+            : 'the creation retry';
         await within(
           holds[k].engaged,
           Date.now() + (agent.runTimeoutMs ?? 15_000),
           () =>
-            `the tool invocation the trace holds open for mid-run prompt #${k + 1} was never made within ` +
-            `${agent.runTimeoutMs ?? 15_000}ms, so that prompt was never sent`,
+            `the tool invocation the trace holds open for ${label} was never made within ` +
+            `${agent.runTimeoutMs ?? 15_000}ms, so that ${action.kind === 'prompt' ? 'prompt' : 'resend'} was never sent`,
         );
         try {
-          const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ prompt: promptDuring }),
-          });
-          if (promptRes.status !== 202 && promptRes.status !== 200) {
-            throw new Error(
-              `POST /runs/${runId}/prompts returned ${promptRes.status} for a run still running, expected 202 or 200`,
-            );
+          if (action.kind === 'prompt') {
+            const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ prompt: action.prompt }),
+            });
+            if (promptRes.status !== 202 && promptRes.status !== 200) {
+              throw new Error(
+                `POST /runs/${runId}/prompts returned ${promptRes.status} for a run still running, expected 202 or 200`,
+              );
+            }
+          } else {
+            // The identical creation, again, while the run provably has
+            // not settled (SPEC.md §3): the same acceptance must come
+            // back, naming the same run — not a second run, not an error.
+            const retryRes = await fetch(`${base}/runs`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: submitBody,
+            });
+            if (retryRes.status !== 201 && retryRes.status !== 202) {
+              throw new Error(
+                `the retried POST /runs returned ${retryRes.status} — an identical creation resent must land on ` +
+                  `the same acceptance (201/202), not a different outcome`,
+              );
+            }
+            const retried = (await retryRes.json()) as { run_id?: string };
+            if (retried.run_id !== runId) {
+              throw new Error(
+                `the retried POST /runs answered run_id ${JSON.stringify(retried.run_id)} — the caller named ` +
+                  `"${runId}", so the identical resend must land on that run, not create another`,
+              );
+            }
           }
           // A live abort scripted after a delivered prompt lands while the
           // delivery's invocation is still held, so the prompt is provably
           // accepted and provably unanswered when the abort arrives.
-          if (abortKind === 'live' && k === promptsDuring.length - 1) {
+          if (abortKind === 'live' && k === actions.length - 1) {
             await waitForPreAbortSteps();
             await postAbort();
           }
@@ -429,7 +474,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         agent.runTimeoutMs ?? 15_000,
         openingAcceptedAt,
         maxDurationMs,
-        promptsDuring.length > 0 ? scriptConsumed : undefined,
+        actions.some((a) => a.kind === 'prompt') ? scriptConsumed : undefined,
       );
       // Not checked for a scripted abort: the harness's own postAbort()
       // above settles the run aborted on the trace's own schedule, which

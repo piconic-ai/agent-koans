@@ -34,6 +34,13 @@ interface MockLlm {
     served: Record<string, number>;
     violations: string[];
   };
+  /**
+   * Opens the crash gate a bare `crash` step armed (Conversation's
+   * `crashBefore`): parked requests are served, later ones flow. The
+   * runner calls this once the restarted agent is healthy; a no-op for a
+   * trace that scripts no crash.
+   */
+  liftCrashGate(): void;
   close(): Promise<void>;
 }
 
@@ -483,37 +490,22 @@ export function startMockLlm(
     return matches.length === 1 ? matches[0] : undefined;
   };
 
-  const server = http.createServer(async (req, res) => {
-    const respond = (status: number, body: unknown) => {
+  // A bare `crash` step parks the exchange after it: whichever process
+  // sends the request for the turn at `crashBefore`, it is answered only
+  // once the runner has killed and restarted the agent (liftCrashGate) —
+  // otherwise the doomed process could race its own death to the next
+  // exchange and settle before dying. A parked request whose process died
+  // leaves with its socket; the recovered one's is served on the lift.
+  const crashBefore = main.conv.crashBefore;
+  let crashLifted = crashBefore === undefined;
+  const parked: Array<{ script: ConversationScript; body: ChatRequest; res: http.ServerResponse; requestNo: number }> = [];
+
+  const serve = (script: ConversationScript, body: ChatRequest, res: http.ServerResponse, requestNo: number): void => {
+    const respond = (status: number, payload: unknown) => {
       res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(body));
+      res.end(JSON.stringify(payload));
     };
-
-    if (req.method !== 'POST' || !req.url?.endsWith('/chat/completions')) {
-      return respond(404, { error: { message: `mock LLM: unknown route ${req.method} ${req.url}` } });
-    }
-
-    let body: ChatRequest;
-    try {
-      body = JSON.parse(await readBody(req)) as ChatRequest;
-    } catch {
-      state.violations.push('model request body is not valid JSON');
-      return respond(400, { error: { message: 'invalid JSON' } });
-    }
-
-    state.requests.push(body);
-    const requestNo = state.requests.length;
     const messages = body.messages ?? [];
-
-    const script = route(messages);
-    if (!script) {
-      state.violations.push(
-        `request #${requestNo} matches no scripted conversation — its first user message carries neither the task nor any briefing, ` +
-          `it carries no summary of a conversation already folded down, and it carries nothing unique to a conversation ` +
-          `currently owed a fold request`,
-      );
-      return respond(400, { error: { message: 'mock LLM: request matches no scripted conversation' } });
-    }
     const conv = script.conv;
     const index = script.served;
     const entry = conv.turns[index];
@@ -708,7 +700,54 @@ export function startMockLlm(
       choices: [{ index: 0, message, finish_reason: finishReason }],
       usage,
     });
+  };
+
+  const server = http.createServer(async (req, res) => {
+    const respond = (status: number, payload: unknown) => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    };
+
+    if (req.method !== 'POST' || !req.url?.endsWith('/chat/completions')) {
+      return respond(404, { error: { message: `mock LLM: unknown route ${req.method} ${req.url}` } });
+    }
+
+    let body: ChatRequest;
+    try {
+      body = JSON.parse(await readBody(req)) as ChatRequest;
+    } catch {
+      state.violations.push('model request body is not valid JSON');
+      return respond(400, { error: { message: 'invalid JSON' } });
+    }
+
+    state.requests.push(body);
+    const requestNo = state.requests.length;
+
+    const script = route(body.messages ?? []);
+    if (!script) {
+      state.violations.push(
+        `request #${requestNo} matches no scripted conversation — its first user message carries neither the task nor any briefing, ` +
+          `it carries no summary of a conversation already folded down, and it carries nothing unique to a conversation ` +
+          `currently owed a fold request`,
+      );
+      return respond(400, { error: { message: 'mock LLM: request matches no scripted conversation' } });
+    }
+    if (!crashLifted && script === scripts[0] && script.served >= (crashBefore as number)) {
+      const entry = { script, body, res, requestNo };
+      parked.push(entry);
+      res.on('close', () => {
+        const i = parked.indexOf(entry);
+        if (i !== -1) parked.splice(i, 1);
+      });
+      return;
+    }
+    serve(script, body, res, requestNo);
   });
+
+  const liftCrashGate = (): void => {
+    crashLifted = true;
+    for (const p of parked.splice(0)) serve(p.script, p.body, p.res, p.requestNo);
+  };
 
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
@@ -716,7 +755,14 @@ export function startMockLlm(
       resolve({
         url: `http://127.0.0.1:${port}`,
         state,
-        close: () => new Promise((r) => server.close(() => r())),
+        liftCrashGate,
+        close: () =>
+          new Promise((r) => {
+            // A parked request the lift never came for would hold the
+            // server open the way a `never` invocation does.
+            server.closeAllConnections();
+            server.close(() => r());
+          }),
       });
     });
   });

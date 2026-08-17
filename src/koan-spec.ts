@@ -240,7 +240,15 @@ export type Step =
    * could say.
    */
   | { kind: 'compaction'; summaries: [string, ...string[]]; used_tokens: number; report: 'completed' }
-  | { kind: 'compaction'; fails: HttpToolResponse; report: 'failed' };
+  | { kind: 'compaction'; fails: HttpToolResponse; report: 'failed' }
+  /**
+   * The agent's process is killed without warning (SIGKILL) once every
+   * exchange before this step has been observed, and restarted; the trace
+   * after it is what the recovered process still owes. A step of its own,
+   * unlike `abort`: an abort may only end a trace, but a crash sits in
+   * the middle of one — what follows it is the point.
+   */
+  | { kind: 'crash' };
 
 /**
  * How a fold ended, as its run reported it to its caller. A fold that
@@ -297,8 +305,16 @@ export interface HttpToolResponse {
  * sees neither a status line nor a severed connection, only silence; what
  * a koan pairs it with is a declared `max_duration_ms`, since nothing
  * else ends the wait.
+ *
+ * `crash` is not the tool server's doing at all: while this invocation is
+ * in flight, the runner kills the agent's process and restarts it
+ * (SPEC.md §3). Like `disconnect` it closes the call with a failure and
+ * no scripted content — the interruption's outcome is unknown, and an
+ * unknown outcome reaches the model like any other tool failure; whether
+ * the work is asked for again is the model's next instruction, never the
+ * agent's own retry.
  */
-export type ToolResponse = HttpToolResponse | { disconnect: true } | { never: true };
+export type ToolResponse = HttpToolResponse | { disconnect: true } | { never: true } | { crash: true };
 
 /** `then`: the run's outcome after the trace settles. */
 export interface Judgment {

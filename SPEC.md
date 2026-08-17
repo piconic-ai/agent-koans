@@ -58,6 +58,7 @@ The runner launches your agent with these environment variables:
 | `OPENAI_API_KEY`  | Dummy credential, for clients that require one to start     |
 | `KOAN_TOOLS_URL`  | Base URL of the mock tool server                            |
 | `KOAN_WORKSPACE`  | Path to the run's workspace directory                       |
+| `KOAN_STATE_DIR`  | Path to the run's durable state directory                   |
 
 All model calls MUST go to `OPENAI_BASE_URL`, and every invocation of a
 tool the run declared MUST go to `KOAN_TOOLS_URL`. A capability of your
@@ -73,6 +74,13 @@ entirely has no bearing on any koan.
 it. It is a plain local directory, never reachable through the tool
 server; a koan uses it to hand your agent context it must find on disk
 rather than over the wire.
+
+`KOAN_STATE_DIR` always exists too, and is empty when a koan starts. It
+is the opposite of the workspace: not context the caller hands you, but
+a place that is yours — a durable implementation keeps there whatever
+must outlive its process. Across a scripted crash (§3) the restarted
+process receives the same path; between koans it is fresh. An
+implementation that persists nothing may ignore it.
 
 ## 3. Your HTTP interface
 
@@ -117,6 +125,22 @@ exhausted budget. A budget is a ceiling, not permission to stop early:
 you MUST NOT settle a run `aborted` before its declared budget expires
 just because one is declared. Where inside the window you give up on a
 slow dependency is yours; no per-tool timeout is mandated.
+
+**Crash recovery.** A koan may kill your agent's process — SIGKILL, no
+warning — and start the same command again (a trace's `crash`). The
+contract is the terminal-state guarantee stretched across the death: a
+run whose prompt was accepted MUST still reach a terminal state, under
+the same `run_id`, once a process is back. What was recorded before the
+death MUST NOT be redone: a tool result already answered is not invoked
+again, a model response already served is not requested again — the
+conversation carries the recorded work forward as if the death had not
+happened. Work in flight and never recorded has an unknown outcome, and
+an unknown outcome reaches the model the way a tool failure does; the
+follow-up call, if any, is the model's next instruction, never your own
+retry. `KOAN_STATE_DIR` (§2) is where you keep whatever this takes.
+Only koans that script a `crash` exercise this; an implementation that
+keeps its runs in memory records those koans in its skiplist, with
+reasons (§6).
 
 **Abort.** A run in progress MUST then settle `aborted`. An abort covers
 everything of the run still unsettled: the turn in flight, a prompt
@@ -346,6 +370,8 @@ it cannot drift from the contract it indexes.
 | [064-delegate-below-threshold](./koans/064-delegate-below-threshold.yaml) | A delegate's conversation grows toward its own declared threshold but stays well below it: 30000, then 40000 of the declared 50000, short of the 45000 the delegate would fold at. A declared threshold is not standing permission to fold (051's contract line, now for a delegate): with room left, the delegate must carry its own history as it stands into its final answer — the trace has no compaction step for one to consume. The run itself declares no context at all: whose window a threshold reads is each conversation's own (060). |
 | [065-time-limit](./koans/065-time-limit.yaml) | The run declares a wall-clock budget and the only tool the task needs never answers — no status, no severed connection, just silence. The agent must keep waiting while the budget lasts (a budget is a ceiling, not permission to stop early) and end the run as aborted once it expires, without a farewell model request. |
 | [066-idempotent-creation](./koans/066-idempotent-creation.yaml) | The caller names the run (`run_id` in the creation request) and, never having seen its acceptance, sends the identical creation again while the run is still working. The resend must land on the same run — the same acceptance with the same run_id — and must not start a second conversation: one tool invocation, one answer. |
+| [067-crash-after-recorded-result](./koans/067-crash-after-recorded-result.yaml) | The agent's process is killed without warning after a tool result was recorded, and started again. The run must pick up where the record ends, not where memory did: the caller's poll still resolves the same run, the next model request carries the recorded result, the tool is not invoked again, and the run completes with the same answer it was always going to give. Recorded work is never redone. |
+| [068-crash-in-flight-invocation](./koans/068-crash-in-flight-invocation.yaml) | The agent's process is killed while a tool invocation is in flight — accepted by the tool server, not yet answered — and started again. Nothing was recorded, so the invocation's outcome is unknown, and an unknown outcome is the model's to hear about, not the agent's to guess: the recovered run closes the call as interrupted, the model asks again, and the run carries on to the answer. The agent must not re-invoke on its own — one instruction, one invocation, before the crash and after it alike. |
 
 <!-- koan-index:end -->
 
@@ -361,4 +387,6 @@ The suite is versioned as a whole (semver):
 Published koans are immutable: to change a koan's contract line, add one
 that supersedes it and deprecate the old one, removed at the next major.
 Pin a suite version, upgrade deliberately, and record known failures in a
-skiplist with reasons rather than mixing koan versions.
+skiplist with reasons rather than mixing koan versions. A conformance
+claim that skips koans MUST name them and their reasons — the skiplist
+is part of the claim, not a footnote to it.

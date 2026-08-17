@@ -548,6 +548,8 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     return problem(`${at}[${bareRetryAt}]: "retry" names what the caller re-sends — write "retry: prompt"`);
   }
 
+  let crashed = false;
+
   let abort = false;
   const abortAt = written.findIndex((s) => s === 'abort');
   if (abortAt !== -1) {
@@ -580,6 +582,27 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     const prev = steps.at(-1);
     const item: unknown = written[i];
 
+    if (item === 'crash') {
+      if (inTurns) {
+        return problem(`${at_i}: "crash" cannot appear inside a "turns" koan — killing the agent between scripted turns is not supported yet`);
+      }
+      if (inSubagent) {
+        return problem(`${at_i}: "crash" cannot appear inside a subagent block — the process that dies is the whole agent's`);
+      }
+      if (abort) {
+        return problem(`${at_i}: "crash" cannot share a trace with "abort" — one ending per run is all this format scripts`);
+      }
+      if (steps.length === 0) {
+        return problem(`${at_i}: "crash" needs at least one exchange before it — a run must exist before its process can die`);
+      }
+      if (crashed) {
+        return problem(`${at_i}: a trace carries at most one "crash" — one death and one recovery per koan`);
+      }
+      crashed = true;
+      steps.push({ kind: 'crash' });
+      continue;
+    }
+
     if (typeof item === 'object' && item !== null && 'retry' in item && !('request' in item)) {
       const block = item as Record<string, unknown>;
       for (const key of Object.keys(block)) {
@@ -605,6 +628,9 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       }
       if ('never' in prev.response) {
         return problem(`${at_i}: "retry" cannot follow a tool step answered "never" — its invocation is never released`);
+      }
+      if ('crash' in prev.response) {
+        return problem(`${at_i}: "retry" cannot follow a tool step answered "crash" — the process the resend would reach is being killed`);
       }
       if (prev.prompt !== undefined || prev.retry !== undefined) {
         return problem(
@@ -724,13 +750,16 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       const reqArgs = target.args;
       const disconnects = res === 'disconnect';
       const never = res === 'never';
+      const crashes = res === 'crash';
       if (
         !disconnects &&
         !never &&
+        !crashes &&
         (typeof res === 'string' || Array.isArray(res) || typeof (res as Record<string, unknown>).status !== 'number')
       ) {
         return problem(
-          `${at_i}.response needs a numeric "status" for a tool request, "disconnect" for a connection severed without one, or "never" for an invocation accepted and never answered`,
+          `${at_i}.response needs a numeric "status" for a tool request, "disconnect" for a connection severed without one, ` +
+            `"never" for an invocation accepted and never answered, or "crash" for the agent's process killed while it is in flight`,
         );
       }
       // "never" hangs the invocation until the run's own time budget gives
@@ -740,13 +769,32 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       if (never && ctx.koan.given.limits?.max_duration_ms === undefined) {
         return problem(`${at_i}: "never" needs "given.limits.max_duration_ms" — nothing else ends the wait`);
       }
-      const r = disconnects || never ? undefined : (res as { status: number; body?: unknown });
+      if (crashes) {
+        if (inTurns) {
+          return problem(`${at_i}: a tool step answered "crash" cannot appear inside a "turns" koan — killing the agent between scripted turns is not supported yet`);
+        }
+        if (inSubagent) {
+          return problem(`${at_i}: a tool step answered "crash" cannot appear inside a subagent block — the process that dies is the whole agent's`);
+        }
+        if (abort) {
+          return problem(`${at_i}: "crash" cannot share a trace with "abort" — one ending per run is all this format scripts`);
+        }
+        if (crashed) {
+          return problem(`${at_i}: a trace carries at most one "crash" — one death and one recovery per koan`);
+        }
+        crashed = true;
+      }
+      const r = disconnects || never || crashes ? undefined : (res as { status: number; body?: unknown });
       if (rawPrompt !== undefined) {
         // A held-then-released invocation is what carries a mid-run
         // prompt; "never" never releases, so there is nothing for one to
-        // ride.
+        // ride, and "crash" kills the very process the delivery would
+        // reach.
         if (never) {
           return problem(`${at_i}: a tool step answered "never" cannot carry "prompt" — its invocation is never released`);
+        }
+        if (crashes) {
+          return problem(`${at_i}: a tool step answered "crash" cannot carry "prompt" — the process the delivery would reach is being killed`);
         }
         if (inTurns) {
           return problem(
@@ -769,7 +817,14 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         kind: 'tool',
         tool: reqTool,
         args: reqArgs,
-        response: r === undefined ? (never ? { never: true } : { disconnect: true }) : { status: r.status, body: r.body },
+        response:
+          r !== undefined
+            ? { status: r.status, body: r.body }
+            : never
+              ? { never: true }
+              : crashes
+                ? { crash: true }
+                : { disconnect: true },
         ...(typeof rawPrompt === 'string' ? { prompt: rawPrompt } : {}),
       });
     }
@@ -1364,8 +1419,10 @@ function checkToolMatching(koan: KoanFile, steps: Step[], at: string): Problem |
     }
     // Folding the conversation down neither opens nor closes a call: a
     // call still open across it stays open, and its tool request may
-    // still come.
-    if (step.kind === 'compaction') continue;
+    // still come. A crash neither opens nor closes one either — what a
+    // recovered process owes a call left open is the runtime's story, not
+    // this matching's.
+    if (step.kind === 'compaction' || step.kind === 'crash') continue;
 
     const what = step.kind === 'tool' ? 'a tool request' : 'an internal request';
     if (pending === undefined) {

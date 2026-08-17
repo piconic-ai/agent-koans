@@ -857,6 +857,100 @@ const rows: Row[] = [
     message: 'when[3]: a held invocation carries one caller action — this tool step already carries "retry"',
   },
   {
+    rule: '"crash" needs at least one exchange before it',
+    yaml: koan(`
+      when:
+        - crash
+        - request: model
+          response: ok
+    `),
+    message: 'when[0]: "crash" needs at least one exchange before it — a run must exist before its process can die',
+  },
+  {
+    rule: '"crash" cannot appear inside a "turns" koan',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request: model
+            response: ok
+          - crash
+    `),
+    message: 'turns[0].when[1]: "crash" cannot appear inside a "turns" koan — killing the agent between scripted turns is not supported yet',
+  },
+  {
+    rule: '"crash" cannot appear inside a subagent block',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { subagent: r, prompt: "go look" }
+        - subagent: r
+          when:
+            - request: model
+              response: ok
+            - crash
+    `),
+    message: 'when[1].when[1]: "crash" cannot appear inside a subagent block — the process that dies is the whole agent\'s',
+  },
+  {
+    rule: '"crash" cannot share a trace with "abort"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: ok
+        - crash
+        - abort
+    `),
+    message: 'when[1]: "crash" cannot share a trace with "abort" — one ending per run is all this format scripts',
+  },
+  {
+    rule: 'a trace carries at most one "crash"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: crash
+        - crash
+    `),
+    message: 'when[2]: a trace carries at most one "crash" — one death and one recovery per koan',
+  },
+  {
+    rule: 'a tool step answered "crash" cannot appear inside a "turns" koan',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request: model
+            response: { tool: x, args: {} }
+          - request: { tool: x }
+            response: crash
+    `),
+    message: 'turns[0].when[1]: a tool step answered "crash" cannot appear inside a "turns" koan — killing the agent between scripted turns is not supported yet',
+  },
+  {
+    rule: 'a tool step answered "crash" cannot carry "prompt"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: crash
+          prompt: p
+    `),
+    message: 'when[1]: a tool step answered "crash" cannot carry "prompt" — the process the delivery would reach is being killed',
+  },
+  {
+    rule: '"retry" cannot follow a tool step answered "crash"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: crash
+        - retry: prompt
+    `),
+    message: 'when[2]: "retry" cannot follow a tool step answered "crash" — the process the resend would reach is being killed',
+  },
+  {
     rule: 'a subagent block has no unknown key',
     yaml: koan(`
       when:
@@ -946,7 +1040,7 @@ const rows: Row[] = [
           response: "nope"
     `),
     message:
-      'when[1].response needs a numeric "status" for a tool request, "disconnect" for a connection severed without one, or "never" for an invocation accepted and never answered',
+      'when[1].response needs a numeric "status" for a tool request, "disconnect" for a connection severed without one, "never" for an invocation accepted and never answered, or "crash" for the agent\'s process killed while it is in flight',
   },
   {
     rule: '"never" needs a declared "given.limits.max_duration_ms"',

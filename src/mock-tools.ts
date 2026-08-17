@@ -101,6 +101,10 @@ export function startMockTools(pending: PendingInvocation[]): Promise<MockTools>
     // response is simply withheld forever, so nothing further is written
     // to `res` and this handler returns without ending the response.
     if ('never' in expected.respond) return;
+    // The hold above parked this invocation while the runner killed the
+    // process that made it — the socket is already dead, so there is
+    // nothing left to answer.
+    if ('crash' in expected.respond) return;
     respond(expected.respond.status, expected.respond.body ?? {});
   });
 

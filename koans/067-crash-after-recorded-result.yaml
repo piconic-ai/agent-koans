@@ -1,0 +1,34 @@
+name: crash-after-recorded-result
+description: >
+  The agent's process is killed without warning after a tool result was
+  recorded, and started again. The run must pick up where the record
+  ends, not where memory did: the caller's poll still resolves the same
+  run, the next model request carries the recorded result, the tool is
+  not invoked again, and the run completes with the same answer it was
+  always going to give. Recorded work is never redone.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  # The result above is on record; the process holding it in memory dies.
+  - crash
+  - request: model
+    response: "The weather in Tokyo is 31°C."
+
+then:
+  status: completed
+  output: { contains: "31" }

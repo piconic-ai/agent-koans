@@ -45,6 +45,14 @@ const TERMINAL_STATES = new Set(['completed', 'failed', 'aborted']);
 const TIME_LIMIT_GRACE_MS = 2000;
 const TIME_LIMIT_EARLY_EPSILON_MS = 250;
 
+// Recovery after a scripted crash runs on the implementation's own
+// reconciliation cadence — lease expiries, scan intervals — which the
+// suite must not pin (the same reasoning as the time-limit grace: a
+// bound tight enough to measure the agent would be measuring its
+// scheduler instead). A crashed trace therefore polls against this
+// recovery window rather than the generic run timeout.
+const CRASH_RECOVERY_TIMEOUT_MS = 60_000;
+
 /** The run state as returned by `GET /runs/{run_id}` — only the fields this module reads. */
 interface RunState {
   status?: string;
@@ -287,7 +295,48 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
   // spawning the agent) moves inside: a failing write (ENOSPC, EPERM)
   // must still leave the finally block to remove `workspace`.
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-'));
+  // Beside the workspace, not inside it: KOAN_WORKSPACE is context the
+  // caller hands the run, KOAN_STATE_DIR is where a durable
+  // implementation keeps what must outlive its process (SPEC.md §2). The
+  // runner passes the same path to every spawn of this koan — a scripted
+  // crash's restart included — and removes it with the koan.
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-koans-state-'));
   let child: ChildProcess | undefined;
+
+  const startAgent = () => {
+    child = spawn('sh', ['-c', agent.command], {
+      cwd: agent.cwd,
+      env: {
+        ...process.env,
+        PORT: String(port),
+        OPENAI_BASE_URL: `${llm.url}/v1`,
+        OPENAI_API_KEY: 'koan-dummy-key',
+        KOAN_TOOLS_URL: tools.url,
+        KOAN_WORKSPACE: workspace,
+        KOAN_STATE_DIR: stateDir,
+      },
+      stdio: ['ignore', 'inherit', 'inherit'],
+      // Own process group, killed as a group below: killing only the
+      // direct child leaves the agent's own children (pnpm → sh → node)
+      // running and holding the inherited stdio open.
+      detached: true,
+    });
+  };
+  // `child` is undefined when materialization or spawn itself failed
+  // before ever producing a process — nothing to kill or wait for then.
+  const killTree = (signal: NodeJS.Signals) => {
+    if (!child || child.pid === undefined) return;
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      /* group already gone */
+    }
+  };
+  const waitExit = () =>
+    new Promise<void>((r) => {
+      if (!child || child.exitCode !== null) return r();
+      child.on('exit', () => r());
+    });
 
   const failures: string[] = [];
   try {
@@ -298,24 +347,9 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         fs.writeFileSync(dest, content);
       }
 
-      child = spawn('sh', ['-c', agent.command], {
-        cwd: agent.cwd,
-        env: {
-          ...process.env,
-          PORT: String(port),
-          OPENAI_BASE_URL: `${llm.url}/v1`,
-          OPENAI_API_KEY: 'koan-dummy-key',
-          KOAN_TOOLS_URL: tools.url,
-          KOAN_WORKSPACE: workspace,
-        },
-        stdio: ['ignore', 'inherit', 'inherit'],
-        // Own process group, killed as a group below: killing only the
-        // direct child leaves the agent's own children (pnpm → sh → node)
-        // running and holding the inherited stdio open.
-        detached: true,
-      });
+      startAgent();
 
-      await waitForHealth(base, agent.startupTimeoutMs ?? 10_000, child);
+      await waitForHealth(base, agent.startupTimeoutMs ?? 10_000, child as ChildProcess);
 
       // A `turns:` koan submits its first turn's prompt the
       // same way any koan submits its top-level `prompt`; later turns go
@@ -399,6 +433,23 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         }
       };
 
+      // A scripted crash: SIGKILL — no warning, no grace — then the same
+      // command again, against the same PORT and the same KOAN_STATE_DIR.
+      // The mock's gate opens (liftCrashGate) only once the restarted
+      // process reports healthy, so the next exchange provably belongs to
+      // the recovered run.
+      const crashAndRecover = async () => {
+        killTree('SIGKILL');
+        await waitExit();
+        startAgent();
+        try {
+          await waitForHealth(base, agent.startupTimeoutMs ?? 10_000, child as ChildProcess);
+        } catch (err) {
+          throw new Error(`the agent did not come back after the crash: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        llm.liftCrashGate();
+      };
+
       if (abortKind === 'live' && actions.length === 0) {
         await waitForPreAbortSteps();
         await postAbort();
@@ -408,13 +459,15 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         const label =
           action.kind === 'prompt'
             ? `mid-run prompt #${actions.slice(0, k + 1).filter((a) => a.kind === 'prompt').length}`
-            : 'the creation retry';
+            : action.kind === 'retry'
+              ? 'the creation retry'
+              : 'the crash';
         await within(
           holds[k].engaged,
           Date.now() + (agent.runTimeoutMs ?? 15_000),
           () =>
             `the tool invocation the trace holds open for ${label} was never made within ` +
-            `${agent.runTimeoutMs ?? 15_000}ms, so that ${action.kind === 'prompt' ? 'prompt' : 'resend'} was never sent`,
+            `${agent.runTimeoutMs ?? 15_000}ms`,
         );
         try {
           if (action.kind === 'prompt') {
@@ -428,6 +481,10 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
                 `POST /runs/${runId}/prompts returned ${promptRes.status} for a run still running, expected 202 or 200`,
               );
             }
+          } else if (action.kind === 'crash') {
+            // The invocation is in flight and unanswered: exactly the
+            // moment SPEC.md §3's recovery contract is about.
+            await crashAndRecover();
           } else {
             // The identical creation, again, while the run provably has
             // not settled (SPEC.md §3): the same acceptance must come
@@ -465,13 +522,33 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         }
       }
 
+      // A bare `crash` step fires once every exchange before it has been
+      // observed on the wire — the same seam the scripted abort uses. The
+      // mock's gate holds the next exchange meanwhile, so nothing the
+      // doomed process races out can settle the run before it dies.
+      const crashBefore = trace.conversations[0].crashBefore;
+      const crashed = crashBefore !== undefined || actions.some((a) => a.kind === 'crash');
+      if (crashBefore !== undefined) {
+        const crashDeadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
+        while ((llm.state.served[''] ?? 0) < crashBefore || pending.length !== 0) {
+          if (Date.now() > crashDeadline) {
+            throw new Error(
+              `the trace's pre-crash steps were not fully observed within ${agent.runTimeoutMs ?? 15_000}ms: ` +
+                `${llm.state.served[''] ?? 0}/${crashBefore} model requests served, ${pending.length} tool call(s) still unresolved`,
+            );
+          }
+          await sleep(100);
+        }
+        await crashAndRecover();
+      }
+
       const scriptConsumed = () =>
         trace.conversations.every((c) => (llm.state.served[c.name] ?? 0) >= c.turns.length) && pending.length === 0;
 
       let { run, elapsed } = await pollWithinBudget(
         base,
         runId,
-        agent.runTimeoutMs ?? 15_000,
+        crashed ? CRASH_RECOVERY_TIMEOUT_MS : (agent.runTimeoutMs ?? 15_000),
         openingAcceptedAt,
         maxDurationMs,
         actions.some((a) => a.kind === 'prompt') ? scriptConsumed : undefined,
@@ -604,24 +681,12 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       failures.push(err instanceof Error ? err.message : String(err));
     }
   } finally {
-    // `child` is undefined when materialization or spawn itself failed
-    // before ever producing a process — nothing to kill or wait for then.
-    const killTree = (signal: NodeJS.Signals) => {
-      if (!child || child.pid === undefined) return;
-      try {
-        process.kill(-child.pid, signal);
-      } catch {
-        /* group already gone */
-      }
-    };
     killTree('SIGTERM');
     const killTimer = setTimeout(() => killTree('SIGKILL'), 2_000);
-    await new Promise<void>((r) => {
-      if (!child || child.exitCode !== null) return r();
-      child.on('exit', () => r());
-    });
+    await waitExit();
     clearTimeout(killTimer);
     fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
     await Promise.all([llm.close(), tools.close()]);
   }
 

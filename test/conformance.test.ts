@@ -3,8 +3,9 @@
 // AGENT_CMD / AGENT_CWD. Each target's own `agent-koans.yaml` (the same
 // config file and loader the CLI uses) may skip a koan with a reason —
 // the one deliberate exception, for a bundled example that cannot satisfy
-// a koan for a cause outside this repo (an upstream framework
-// limitation), never a place to paper over a real regression. `add` is
+// a koan for a documented cause — an upstream framework limitation, or a
+// capability the example deliberately does not carry yet — never a place
+// to paper over a real regression. `add` is
 // out of scope here: this suite's koan set is fixed, so a config that
 // tries to add koans is a config error, not something this file honors.
 import fs from 'node:fs';

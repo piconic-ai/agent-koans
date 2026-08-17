@@ -33,7 +33,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     state: {
       // A dev run outside the runner still needs somewhere durable to
       // put the store, hence a local fallback rather than ''.
-      dir: env.KOAN_STATE_DIR ?? '.koan-state',
+      dir: env.KOAN_STATE_DIR ?? '.agent-koans',
     },
   };
 }

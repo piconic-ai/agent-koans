@@ -1,5 +1,12 @@
 # agent-koans
 
+## 0.12.0
+
+### Minor Changes
+
+- 843e6fe: Stretch the terminal-state guarantee across a process crash. The runner may now kill the agent (SIGKILL) mid-run and restart the same command; the run must still reach a terminal state under the same `run_id`, recorded work must never be redone, and an in-flight invocation's unknown outcome must reach the model instead of being retried by the agent. Traces script the death as a bare `- crash` step between exchanges or `response: crash` on an in-flight tool invocation; koans 067 and 068 pin the two sides. `KOAN_STATE_DIR` joins the environment contract as the run's durable state directory, and a non-durable implementation records the crash koans in its skiplist with reasons — the skiplist is part of a conformance claim, not a footnote to it.
+- bb02c74: Add idempotent creation: the request may carry `run_id`, the caller's own name for the run. A later creation request naming the same run must not create a second one — it is answered with the same acceptance while the existing run carries on, so a caller that never saw its acceptance can safely re-send the identical request. Koan 066 re-sends the creation mid-run and checks it lands on the same run with a single conversation; traces gain the step `- retry: prompt` to script the resend.
+
 ## 0.11.0
 
 ### Minor Changes

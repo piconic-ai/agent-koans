@@ -1051,7 +1051,21 @@ const rows: Row[] = [
         - request: { tool: x }
           response: never
     `),
-    message: 'when[1]: "never" needs "given.limits.max_duration_ms" — nothing else ends the wait',
+    message: 'when[1]: "never" needs "given.limits.max_duration_ms" or a "timeout_ms" on the tool — nothing else ends the wait',
+  },
+  {
+    rule: 'a tool "timeout_ms" is a positive integer of milliseconds',
+    yaml: koan(`
+      given:
+        tools:
+          x:
+            timeout_ms: -5
+            input_schema: { type: object }
+      when:
+        - request: model
+          response: ok
+    `),
+    message: 'given.tools["x"].timeout_ms must be a positive integer of milliseconds',
   },
   {
     rule: 'a tool step answered "never" cannot carry "prompt"',

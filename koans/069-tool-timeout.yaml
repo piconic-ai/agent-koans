@@ -1,0 +1,37 @@
+name: tool-timeout
+description: >
+  The tool declares how long an invocation of it is waited for
+  (`timeout_ms`), and the tool server accepts the call and never
+  answers. The agent must give the invocation up at the declared
+  timeout — not sooner: a declared wait is a promise to wait — with the
+  timeout reaching the model as a tool failure, and the run carrying on
+  to a graceful answer instead of dying. The agent must not re-invoke
+  on its own; there is no follow-up call here, so exactly one
+  invocation is made.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      timeout_ms: 1500
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: never
+  # Waited for exactly the declared 1500ms, then given up: this request
+  # closes the call with the timeout, and the model answers gracefully.
+  - request: model
+    response: "The weather service is not answering right now, so I cannot report Tokyo's weather."
+
+then:
+  status: completed
+  output: { contains: "not answering" }

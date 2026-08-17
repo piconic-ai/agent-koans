@@ -225,6 +225,52 @@ function judge(then: Judgment, run: RunState): string[] {
   return failures;
 }
 
+// Both ends of a declared tool timeout (SPEC.md §3), measured between an
+// unanswered invocation's arrival at the tool mock and the next model
+// request — the one that carries the give-up. Given up before the
+// declared timeout fails (a declared wait is a promise to wait, not
+// permission to give up sooner — 045's and 065's contract line, restated
+// for a dependency's clock); still being waited on well past it fails
+// too. Epsilon and grace are 065's: slack for the mocks' own timing, not
+// precision.
+function judgeToolTimeouts(
+  koan: Koan,
+  trace: Trace,
+  requestAt: number[],
+  calls: Array<{ name: string; at: number }>,
+): string[] {
+  const failures: string[] = [];
+  for (const conv of trace.conversations) {
+    for (const turn of conv.turns) {
+      for (const member of turn.call_tools ?? []) {
+        if (member.tool_responds === undefined || !('never' in member.tool_responds)) continue;
+        const timeoutMs = koan.given.tools[member.name]?.timeout_ms;
+        if (timeoutMs === undefined) continue;
+        // Never invoked, or never given up: both already fail elsewhere
+        // (the unconsumed timeline, the run that cannot settle) — this
+        // check owns only the window between the two.
+        const invokedAt = calls.find((c) => c.name === member.name)?.at;
+        if (invokedAt === undefined) continue;
+        const closedAt = requestAt.find((at) => at > invokedAt);
+        if (closedAt === undefined) continue;
+        const waited = closedAt - invokedAt;
+        if (waited < timeoutMs - TIME_LIMIT_EARLY_EPSILON_MS) {
+          failures.push(
+            `the "${member.name}" invocation was given up ${waited}ms after it arrived, before its declared ` +
+              `timeout_ms (${timeoutMs}ms) — a declared wait is a promise to wait, not permission to give up sooner`,
+          );
+        } else if (waited > timeoutMs + TIME_LIMIT_GRACE_MS) {
+          failures.push(
+            `the "${member.name}" invocation was still being waited on ${waited}ms after it arrived, past its ` +
+              `declared timeout_ms (${timeoutMs}ms) plus grace`,
+          );
+        }
+      }
+    }
+  }
+  return failures;
+}
+
 // Endings only: a run that has answered the ask has folded, and one that
 // has reported a fold beginning has not said how it went.
 function foldsEnded(run: RunState): number {
@@ -650,6 +696,8 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       failures.push(...llm.state.violations, ...tools.state.violations);
 
       failures.push(...judgeReportedFolds(trace, run));
+
+      failures.push(...judgeToolTimeouts(koan, trace, llm.state.requestAt, tools.state.calls));
 
       // Underruns only: overruns are already recorded by the mocks.
       for (const conv of trace.conversations) {

@@ -8,6 +8,8 @@
 export interface ToolDef {
   name: string;
   description?: string;
+  /** How long the caller wants an invocation waited for (SPEC.md §3). */
+  timeout_ms?: number;
   input_schema: {
     type?: string;
     properties?: Record<string, { type?: string }>;
@@ -58,7 +60,10 @@ export function createDeclaredTool(def: ToolDef, toolsBaseUrl: string): Tool {
           // never mentioned is still the model's, and dropping it here would
           // rewrite the call before the tool ever saw it.
           body: JSON.stringify(args),
-          signal,
+          // The declared wait, exactly (SPEC.md §3): giving up is the
+          // timeout signal's, never a shorter one of this agent's own.
+          signal:
+            def.timeout_ms === undefined ? signal : AbortSignal.any([signal, AbortSignal.timeout(def.timeout_ms)]),
         });
       } catch (err) {
         // Not rethrown: a transport failure is a tool failure like any

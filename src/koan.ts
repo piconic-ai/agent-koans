@@ -30,6 +30,8 @@ import { isProblem, parseKoanFile } from './parse.js';
 export interface ToolDef {
   description?: string;
   input_schema: Record<string, unknown>;
+  /** How long the caller wants an invocation waited for, in milliseconds (SPEC.md §3); forwarded verbatim to the run submission. */
+  timeout_ms?: number;
 }
 
 /** A scripted HTTP response of a mocked party (tool server or model API). */

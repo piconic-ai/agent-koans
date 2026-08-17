@@ -9,6 +9,8 @@ import * as v from 'valibot';
 export interface RunToolDef {
   name: string;
   description?: string;
+  /** How long the caller wants an invocation waited for (SPEC.md §3). */
+  timeout_ms?: number;
   input_schema: {
     type?: string;
     properties?: Record<string, { type?: string }>;
@@ -48,6 +50,10 @@ export function useRunTools(tools: RunToolDef[], toolsBaseUrl: string): void {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(args),
+          // The declared wait, exactly (SPEC.md §3): the rejection this
+          // raises is a tool failure Flue reports to the model, like the
+          // non-ok throw below.
+          ...(def.timeout_ms === undefined ? {} : { signal: AbortSignal.timeout(def.timeout_ms) }),
         });
         const body = await res.text();
         if (!res.ok) {

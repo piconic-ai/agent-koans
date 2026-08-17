@@ -30,6 +30,8 @@ interface MockLlm {
   url: string;
   state: {
     requests: ChatRequest[];
+    /** When each request arrived, index-aligned with `requests` — the other end of a declared tool timeout's window (runner.ts). */
+    requestAt: number[];
     /** Model requests served per conversation name (`''` is the main one). */
     served: Record<string, number>;
     violations: string[];
@@ -440,7 +442,7 @@ export function startMockLlm(
   delegation: DelegationVocabulary = DEFAULT_DELEGATION,
   holds?: InvocationHold[],
 ): Promise<MockLlm> {
-  const state: MockLlm['state'] = { requests: [], served: {}, violations: [] };
+  const state: MockLlm['state'] = { requests: [], requestAt: [], served: {}, violations: [] };
   const issuedToolCallIds = new Set<string>();
   const givenToolNames = Object.keys(koan.given.tools);
   const scripts = trace.conversations.map((conv): ConversationScript => ({ conv, served: 0, forbidden: [] }));
@@ -721,6 +723,7 @@ export function startMockLlm(
     }
 
     state.requests.push(body);
+    state.requestAt.push(Date.now());
     const requestNo = state.requests.length;
 
     const script = route(body.messages ?? []);

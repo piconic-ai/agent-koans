@@ -26,6 +26,15 @@
 export interface ToolDef {
   description?: string;
   input_schema: Record<string, unknown>;
+  /**
+   * How long the caller wants an invocation of this tool waited for, in
+   * milliseconds (SPEC.md §3). Unanswered at the declared timeout, the
+   * invocation must be given up then — not sooner, not later — with the
+   * failure reaching the model; the run carries on. Also what licenses a
+   * trace to continue past a `never` response: the timeout is then what
+   * ends the wait.
+   */
+  timeout_ms?: number;
 }
 
 /** A koan file, as written on disk. */

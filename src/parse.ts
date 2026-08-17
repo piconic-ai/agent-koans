@@ -132,6 +132,13 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
   if (typeof tools !== 'object' || Array.isArray(tools)) {
     return problem('"given.tools" must be a mapping of tool name to definition');
   }
+  for (const [name, def] of Object.entries(tools as Record<string, unknown>)) {
+    if (typeof def !== 'object' || def === null) continue;
+    const t = (def as Record<string, unknown>).timeout_ms;
+    if (t !== undefined && (typeof t !== 'number' || !Number.isInteger(t) || t <= 0)) {
+      return problem(`given.tools["${name}"].timeout_ms must be a positive integer of milliseconds`);
+    }
+  }
 
   let files: Record<string, string> | undefined;
   if (g.files !== undefined) {
@@ -762,12 +769,19 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
             `"never" for an invocation accepted and never answered, or "crash" for the agent's process killed while it is in flight`,
         );
       }
-      // "never" hangs the invocation until the run's own time budget gives
-      // up on it — without one declared, an agent that keeps waiting would
-      // just run out against the runner's generic timeout instead, which
-      // is a worse failure than refusing to load the koan at all.
-      if (never && ctx.koan.given.limits?.max_duration_ms === undefined) {
-        return problem(`${at_i}: "never" needs "given.limits.max_duration_ms" — nothing else ends the wait`);
+      // "never" hangs the invocation until something declared gives up on
+      // it — the run's own time budget, or the tool's own timeout — and
+      // without either, an agent that keeps waiting would just run out
+      // against the runner's generic timeout instead, which is a worse
+      // failure than refusing to load the koan at all.
+      if (
+        never &&
+        ctx.koan.given.limits?.max_duration_ms === undefined &&
+        ctx.koan.given.tools[reqTool]?.timeout_ms === undefined
+      ) {
+        return problem(
+          `${at_i}: "never" needs "given.limits.max_duration_ms" or a "timeout_ms" on the tool — nothing else ends the wait`,
+        );
       }
       if (crashes) {
         if (inTurns) {
@@ -1531,21 +1545,25 @@ function checkApiFailureEnds(steps: Step[], at: string, abort: AbortKind | undef
  */
 function neverEndsTheTrace(koan: KoanFile): Problem | undefined {
   for (const { steps, at } of scriptedTraces(koan)) {
-    const found = checkNeverEnds(steps, at);
+    const found = checkNeverEnds(koan, steps, at);
     if (found) return found;
   }
   return undefined;
 }
 
-function checkNeverEnds(steps: Step[], at: string): Problem | undefined {
+function checkNeverEnds(koan: KoanFile, steps: Step[], at: string): Problem | undefined {
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     if (step.kind === 'subagent') {
-      const found = checkNeverEnds(step.trace.steps, `${at}[${i}].when`);
+      const found = checkNeverEnds(koan, step.trace.steps, `${at}[${i}].when`);
       if (found) return found;
       continue;
     }
     if (step.kind !== 'tool' || !('never' in step.response)) continue;
+    // A tool with its own declared timeout ends the wait itself (SPEC.md
+    // §3), so the trace legitimately continues: the next model request is
+    // the give-up reaching the model.
+    if (koan.given.tools[step.tool]?.timeout_ms !== undefined) continue;
     let j = i + 1;
     while (j < steps.length && (steps[j].kind === 'tool' || steps[j].kind === 'internal' || steps[j].kind === 'subagent')) j++;
     if (j < steps.length) {

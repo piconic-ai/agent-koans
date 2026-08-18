@@ -53,9 +53,7 @@ app.post('/runs/:id/prompts', async (c) => {
 
 app.post('/runs/:id/compact', async (c) => {
   const body = await c.req.json<{ instructions?: string }>().catch(() => null);
-  console.error(`[DEBUG-071] ${Date.now()} POST /compact received, runId=${c.req.param('id')}`);
   const known = await agent.compactRun(c.req.param('id'), body?.instructions);
-  console.error(`[DEBUG-071] ${Date.now()} POST /compact responding, runId=${c.req.param('id')}, known=${known}`);
   if (!known) return c.json({ error: 'run not found' }, 404);
   return c.json({}, 200);
 });

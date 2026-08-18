@@ -290,7 +290,6 @@ export function createAgent(
   async function compactRun(runId: string, instructions?: string): Promise<boolean> {
     const session = sessions.get(runId);
     if (!session) return false;
-    console.error(`[DEBUG-071] ${Date.now()} compactRun entered, runId=${runId}, folding=${session.folding !== undefined}`);
     // Not the turn's signal: the ask is the caller's, and it is answered
     // whether or not a turn is in flight to carry it.
     //
@@ -298,14 +297,11 @@ export function createAgent(
     // a second one (SPEC.md §3): `folding` is set for as long as one is
     // in flight, so an ask that lands inside that window just awaits it.
     if (session.folding === undefined) {
-      console.error(`[DEBUG-071] ${Date.now()} compactRun STARTING a new fold, runId=${runId}`);
       session.folding = foldOnRequest(session.conversation, session.run, new AbortController().signal, instructions).finally(
         () => {
           session.folding = undefined;
         },
       );
-    } else {
-      console.error(`[DEBUG-071] ${Date.now()} compactRun JOINING existing fold, runId=${runId}`);
     }
     await session.folding;
     return true;

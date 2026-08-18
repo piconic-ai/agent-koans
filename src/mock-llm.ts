@@ -610,10 +610,8 @@ export function startMockLlm(
     if (entry.holdIndex !== undefined) {
       const hold = holds?.[entry.holdIndex];
       if (hold) {
-        console.error(`[DEBUG-071] ${Date.now()} mock-llm engaging hold ${entry.holdIndex}, requestNo=${requestNo}`);
         hold.engage();
         await hold.released;
-        console.error(`[DEBUG-071] ${Date.now()} mock-llm hold ${entry.holdIndex} released, requestNo=${requestNo}`);
       }
     }
 

@@ -713,6 +713,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             // show is one fold, which judgeReportedFolds and the script's
             // own request count already pin.
             const hold = foldHolds[nextFoldHold++];
+            console.error(`[DEBUG-071] ${Date.now()} runner firing askA, runId=${runId}`);
             const askA = fetch(`${base}/runs/${runId}/compact`, askInit);
             // Observed below via Promise.all; caught here too so an
             // engagement timeout doesn't leave this rejection unhandled.
@@ -726,9 +727,11 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
                   `the summarizing request the trace holds open for the repeated ask was never made within ` +
                   `${agent.runTimeoutMs ?? 15_000}ms`,
               );
+              console.error(`[DEBUG-071] ${Date.now()} runner hold.engaged resolved, firing askB, runId=${runId}`);
               askB = fetch(`${base}/runs/${runId}/compact`, askInit);
               askB.catch(() => {});
             } finally {
+              console.error(`[DEBUG-071] ${Date.now()} runner calling hold.release(), runId=${runId}`);
               // Released even on failure: the mock is parked on this, and
               // its server cannot close until it returns.
               hold.release();

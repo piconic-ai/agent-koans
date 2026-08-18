@@ -561,6 +561,19 @@ const rows: Row[] = [
     message: `when[2]: nothing can follow "abort" — it must be the trace's last step, or "retry: abort"`,
   },
   {
+    rule: 'a real step with a stray "retry" key after "abort" still falls to "nothing follows"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: ok
+        - abort
+        - request: model
+          response: again
+          retry: prompt
+    `),
+    message: `when[2]: nothing can follow "abort" — it must be the trace's last step, or "retry: abort"`,
+  },
+  {
     rule: 'a retry step after "abort" has no other key',
     yaml: koan(`
       when:

@@ -569,7 +569,8 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       typeof after[0] === 'object' &&
       after[0] !== null &&
       !Array.isArray(after[0]) &&
-      'retry' in after[0];
+      'retry' in after[0] &&
+      !('request' in after[0]);
     if (after.length > 1 || (after.length === 1 && !retryingAbort)) {
       return problem(
         `${at}[${abortAt + 1}]: nothing can follow "abort" — it must be the trace's last step, or "retry: abort"`,

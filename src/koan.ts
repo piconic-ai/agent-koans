@@ -141,6 +141,8 @@ export interface ModelTurn {
    * `'late'` when it is a text reply (the run had already settled).
    */
   abort?: 'live' | 'late';
+  /** Set alongside a live `abort`: the caller's abort delivered a second time once the run has settled from the first (`- retry: abort`). */
+  abortRetried?: boolean;
 }
 
 /**
@@ -523,6 +525,7 @@ function compileTrace(trace: ParsedTrace, briefing: string): Trace {
   conversations.push(main);
   compileSteps(trace.steps, main, conversations);
   if (trace.abort !== undefined) main.turns.at(-1)!.abort = trace.abort;
+  if (trace.abortRetried) main.turns.at(-1)!.abortRetried = true;
   const boundaries = promptBoundaries(main);
   if (boundaries.length > 0) main.followUps = boundaries;
   return { conversations };

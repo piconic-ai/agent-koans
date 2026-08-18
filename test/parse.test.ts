@@ -547,7 +547,81 @@ const rows: Row[] = [
         - request: model
           response: again
     `),
-    message: `when[2]: nothing can follow "abort" — it must be the trace's last step`,
+    message: `when[2]: nothing can follow "abort" — it must be the trace's last step, or "retry: abort"`,
+  },
+  {
+    rule: 'two bare "abort"s in a row still falls to "nothing follows"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: ok
+        - abort
+        - abort
+    `),
+    message: `when[2]: nothing can follow "abort" — it must be the trace's last step, or "retry: abort"`,
+  },
+  {
+    rule: 'a real step with a stray "retry" key after "abort" still falls to "nothing follows"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: ok
+        - abort
+        - request: model
+          response: again
+          retry: prompt
+    `),
+    message: `when[2]: nothing can follow "abort" — it must be the trace's last step, or "retry: abort"`,
+  },
+  {
+    rule: 'a retry step after "abort" has no other key',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - abort
+        - retry: abort
+          twice: true
+    `),
+    message: 'when[3] has unknown key "twice" — a retry step is only "retry"',
+  },
+  {
+    rule: '"retry: abort" is the only retry that may follow "abort"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - abort
+        - retry: prompt
+    `),
+    message: 'when[3]: "retry: abort" is the only retry that may follow "abort" — write "retry: abort"',
+  },
+  {
+    rule: '"retry: abort" must directly follow "abort"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - retry: abort
+    `),
+    message: 'when[2]: "retry: abort" must directly follow "abort" — it retries the caller\'s abort delivery, not a held invocation',
+  },
+  {
+    rule: '"retry: abort" only follows a live abort',
+    yaml: koan(`
+      when:
+        - request: model
+          response: ok
+        - abort
+        - retry: abort
+    `),
+    message: 'when: "retry: abort" only follows a live abort — a late one already tests nothing more by repeating',
   },
   {
     rule: '"abort" cannot appear inside a "turns" koan',
@@ -744,7 +818,7 @@ const rows: Row[] = [
           response: { tool: x, args: {} }
         - request: { tool: x }
           response: { status: 200 }
-        - retry: abort
+        - retry: nonsense
         - request: model
           response: ok
     `),

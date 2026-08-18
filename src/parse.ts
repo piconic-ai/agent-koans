@@ -558,10 +558,22 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
   let crashed = false;
 
   let abort = false;
+  let abortRetried = false;
   const abortAt = written.findIndex((s) => s === 'abort');
   if (abortAt !== -1) {
-    if (abortAt !== written.length - 1) {
-      return problem(`${at}[${abortAt + 1}]: nothing can follow "abort" — it must be the trace's last step`);
+    const after = written.slice(abortAt + 1);
+    // The one thing that may follow "abort": the caller's own abort,
+    // delivered again — anything else ends the trace here, same as today.
+    const retryingAbort =
+      after.length === 1 &&
+      typeof after[0] === 'object' &&
+      after[0] !== null &&
+      !Array.isArray(after[0]) &&
+      'retry' in after[0];
+    if (after.length > 1 || (after.length === 1 && !retryingAbort)) {
+      return problem(
+        `${at}[${abortAt + 1}]: nothing can follow "abort" — it must be the trace's last step, or "retry: abort"`,
+      );
     }
     if (inTurns) {
       return problem(`${at}[${abortAt}]: "abort" cannot appear inside a "turns" koan — turn-level cancellation is not supported yet`);
@@ -571,6 +583,20 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     }
     if (abortAt === 0) {
       return problem(`${at}[0]: "abort" needs at least one exchange before it in the trace`);
+    }
+    if (retryingAbort) {
+      const at_r = `${at}[${abortAt + 1}]`;
+      const block = after[0] as Record<string, unknown>;
+      for (const key of Object.keys(block)) {
+        if (key !== 'retry') {
+          return problem(`${at_r} has unknown key "${key}" — a retry step is only "retry"`);
+        }
+      }
+      if (block.retry !== 'abort') {
+        return problem(`${at_r}: "retry: abort" is the only retry that may follow "abort" — write "retry: abort"`);
+      }
+      written.pop();
+      abortRetried = true;
     }
     written.pop();
     abort = true;
@@ -618,6 +644,9 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         }
       }
       if (block.retry !== 'prompt') {
+        if (block.retry === 'abort') {
+          return problem(`${at_i}: "retry: abort" must directly follow "abort" — it retries the caller's abort delivery, not a held invocation`);
+        }
         return problem(
           `${at_i}.retry names what the caller re-sends — only "prompt" (this turn's own submission) is supported`,
         );
@@ -855,6 +884,12 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
 
   const trace: Trace = { steps: steps as [Step, ...Step[]] };
   if (abort) trace.abort = abortKindOf(trace);
+  if (abortRetried) {
+    if (trace.abort !== 'live') {
+      return problem(`${at}: "retry: abort" only follows a live abort — a late one already tests nothing more by repeating`);
+    }
+    trace.abortRetried = true;
+  }
   return trace;
 }
 

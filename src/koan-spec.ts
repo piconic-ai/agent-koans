@@ -164,6 +164,15 @@ export type TurnTrace = { kind: 'one'; trace: Trace } | { kind: 'one_of'; varian
 export interface Trace {
   steps: [Step, ...Step[]];
   abort?: AbortKind;
+  /**
+   * The caller's own abort, delivered a second time once the run has
+   * settled from the first (`- retry: abort`, written right after
+   * `- abort`) — must be accepted again and must not rewrite the
+   * committed result (SPEC.md §3: repeated aborts are idempotent). Live
+   * only: a late abort's own repetition tests nothing a late abort does
+   * not already.
+   */
+  abortRetried?: boolean;
 }
 
 /** Derived: `live` cancels a run in progress, `late` one already settled. */

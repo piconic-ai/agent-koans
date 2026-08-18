@@ -1,0 +1,29 @@
+name: retry-abort
+description: >
+  The caller's abort arrives twice — the same delivery, retried, once
+  the run has already settled from the first. The second must be
+  accepted too, and it must not rewrite the committed result: repeated
+  aborts are idempotent (SPEC.md §3).
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - abort
+  - retry: abort
+
+then:
+  status: aborted

@@ -619,6 +619,30 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         failures.push(earlyAbortFailure(elapsed, maxDurationMs));
       }
 
+      // The caller's own abort, delivered again once the run has settled
+      // from the first (SPEC.md §3: repeated aborts are idempotent) —
+      // must still be accepted, and must not rewrite what it settled on.
+      if (trace.conversations[0].turns.at(-1)?.abortRetried) {
+        const before = { status: run.status, output: run.output, error: run.error };
+        const retryRes = await fetch(`${base}/runs/${runId}/abort`, { method: 'POST' });
+        if (retryRes.status !== 202 && retryRes.status !== 200) {
+          throw new Error(
+            `the retried POST /runs/${runId}/abort returned ${retryRes.status}, expected 202 or 200 — ` +
+              `repeated aborts are idempotent (SPEC.md §3)`,
+          );
+        }
+        const res = await fetch(`${base}/runs/${runId}`);
+        if (!res.ok) throw new Error(`GET /runs/${runId} returned ${res.status}`);
+        run = (await res.json()) as RunState;
+        const after = { status: run.status, output: run.output, error: run.error };
+        if (JSON.stringify(after) !== JSON.stringify(before)) {
+          failures.push(
+            `a repeated abort rewrote the committed result: was ${JSON.stringify(before)}, now ${JSON.stringify(after)} — ` +
+              `repeated aborts are idempotent (SPEC.md §3)`,
+          );
+        }
+      }
+
       // Every turn but the last is judged here, against its own `then`;
       // the last turn's judgment happens below, together
       // with the plain `when`/`one_of` koan's, once the run has fully

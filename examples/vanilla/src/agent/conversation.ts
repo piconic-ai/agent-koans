@@ -27,6 +27,13 @@ export interface Conversation {
    * not the run's own, and its window may differ from it (SPEC.md §3).
    */
   context?: RunContext;
+  /**
+   * Told after every change to the recorded history — a message
+   * appended, or a fold's rewrite. A durable agent hooks its store here
+   * (SPEC.md §3); a delegate's conversation declares none, since a
+   * scripted crash never lands mid-delegation.
+   */
+  onRecord?: () => void;
 }
 
 /**
@@ -40,7 +47,7 @@ export async function runConversation(
   run: Run,
   signal: AbortSignal,
 ): Promise<string | undefined> {
-  const { messages, size, context } = conversation;
+  const { messages, size, context, onRecord } = conversation;
   for (;;) {
     if (reachedThreshold(size, context)) {
       if (!(await foldOnThreshold(conversation, run, signal))) return undefined;
@@ -62,9 +69,11 @@ export async function runConversation(
       // could never be reported back, so the conversation ends here.
       if (grant.last) return undefined;
       messages.push(message);
+      onRecord?.();
       for (const call of message.tool_calls) {
         const content = await executeToolCall(call, run, signal);
         messages.push({ role: 'tool', tool_call_id: call.id, content });
+        onRecord?.();
       }
       continue;
     }
@@ -73,6 +82,7 @@ export async function runConversation(
     // keeps `messages` across turns (SPEC.md §3), so the reply that ends
     // this turn must stay in the history for the next one to carry forward.
     messages.push(message);
+    onRecord?.();
     return message.content ?? '';
   }
 }

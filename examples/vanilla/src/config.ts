@@ -13,6 +13,9 @@ export interface Config {
   workspace: {
     dir: string;
   };
+  state: {
+    dir: string;
+  };
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -28,6 +31,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     },
     workspace: {
       dir: env.KOAN_WORKSPACE ?? '',
+    },
+    state: {
+      // Unlike workspace/tools above, this path is mkdirSync'd at
+      // startup, so an explicitly empty value must fall back too — hence
+      // the length check instead of `??`.
+      dir: env.KOAN_STATE_DIR && env.KOAN_STATE_DIR.length > 0 ? env.KOAN_STATE_DIR : '.agent-koans',
     },
   };
 }

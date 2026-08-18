@@ -42,12 +42,12 @@ export interface Run {
   model: ModelClient;
 }
 
-/** Assemble a run from what it was submitted with. */
-export function createRun(parts: AgentParts, setup: RunSetup, report: ReportEvent): Run {
+/** Assemble a run from what it was submitted with. `spent` resumes a prior process's own request count (SPEC.md §3). */
+export function createRun(parts: AgentParts, setup: RunSetup, report: ReportEvent, spent = 0): Run {
   const tools = new Map<string, Tool>();
   const run: Run = {
     tools,
-    budget: createBudget(setup.limits),
+    budget: createBudget(setup.limits, spent),
     report,
     model: parts.model,
   };

@@ -53,6 +53,18 @@ const TIME_LIMIT_EARLY_EPSILON_MS = 250;
 // recovery window rather than the generic run timeout.
 const CRASH_RECOVERY_TIMEOUT_MS = 60_000;
 
+// Delivery slack for a repeated fold ask (`retry: compact`), not a timing
+// assertion: the mock's held response travels back to the agent over an
+// already-open connection once released, while the repeated ask is a fresh
+// request this process has to send and the agent has to receive — an
+// inherently slower path with no observable receipt this suite can await
+// instead (the ask is answered only once the fold ends, so awaiting it here
+// would deadlock against the hold). This just keeps that delivery from
+// landing after the held fold has already been let go; what still decides
+// conformance is one fold, pinned by the script's own request count and
+// judgeReportedFolds below — never this wait.
+const RETRY_COMPACT_DELIVERY_SLACK_MS = 100;
+
 /** The run state as returned by `GET /runs/{run_id}` — only the fields this module reads. */
 interface RunState {
   status?: string;
@@ -709,9 +721,9 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             // The same ask, twice: fire the first, wait until its fold's
             // own summarizing request is provably in flight (held by the
             // mock), deliver the identical ask again, then let the fold
-            // go. No timing assertion beyond that — what convergence must
-            // show is one fold, which judgeReportedFolds and the script's
-            // own request count already pin.
+            // go. What convergence must show is one fold, which
+            // judgeReportedFolds and the script's own request count already
+            // pin — never the delivery slack below.
             const hold = foldHolds[nextFoldHold++];
             const askA = fetch(`${base}/runs/${runId}/compact`, askInit);
             // Observed below via Promise.all; caught here too so an
@@ -728,6 +740,16 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
               );
               askB = fetch(`${base}/runs/${runId}/compact`, askInit);
               askB.catch(() => {});
+              // Delivery slack, not a timing assertion (RETRY_COMPACT_DELIVERY_SLACK_MS):
+              // once released, the held response reaches the agent over its
+              // own already-open connection to the mock, while askB is a
+              // fresh request this process still has to deliver — a slower
+              // path with no receipt this suite can await instead (the ask
+              // is answered only once the fold ends, so awaiting askB here
+              // would deadlock against the hold). This only keeps askB's
+              // delivery from landing after the released fold has already
+              // finished; it decides nothing about conformance.
+              await sleep(RETRY_COMPACT_DELIVERY_SLACK_MS);
             } finally {
               // Released even on failure: the mock is parked on this, and
               // its server cannot close until it returns.

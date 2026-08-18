@@ -1,0 +1,38 @@
+name: retry-compact
+description: >
+  The caller's ask for a fold arrives twice — the same ask, re-sent
+  while the fold it brought about is still summarizing. The repeat must
+  not start a second fold: it joins the one already running, and both
+  answers wait for that one fold to settle (SPEC.md §3).
+
+given:
+  context:
+    window: 100000
+    compaction: 90%
+
+turns:
+  - prompt: "Note for the record: the duty operator for incident INC-8871 is code R-2-9034."
+    when:
+      - request: model
+        response:
+          body: "Noted: incident INC-8871, duty operator R-2-9034."
+          used_tokens: 40000
+
+  - compact: true
+    retry: compact
+    when:
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          body: "Earlier: incident INC-8871 has duty operator code R-2-9034."
+          used_tokens: 8000
+          compaction: completed
+
+  - prompt: "What was that incident's duty operator code?"
+    when:
+      - request: model
+        response: "The duty operator code is R-2-9034."
+    then:
+      status: completed
+      output: { contains: "R-2-9034" }

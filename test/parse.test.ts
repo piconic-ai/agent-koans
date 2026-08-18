@@ -1769,6 +1769,29 @@ const rows: Row[] = [
     message: 'turns[0].compact is empty — an ask that says nothing about the fold is written "compact: true"',
   },
   {
+    rule: 'an asking entry\'s "retry" is "compact"',
+    yaml: turnsKoan(`
+      - compact: true
+        retry: nonsense
+        when:
+          - request: model
+            response: ok
+    `),
+    message:
+      'turns[0].retry names what the caller re-sends — only "compact" (this same ask, delivered again) is supported on an entry asking for a fold',
+  },
+  {
+    rule: '"retry" cannot appear on a prompt entry',
+    yaml: turnsKoan(`
+      - prompt: a
+        retry: compact
+        when:
+          - request: model
+            response: ok
+    `),
+    message: 'turns[0] has unknown key "retry" — a prompt entry carries only "prompt", "when", "one_of", and "then"',
+  },
+  {
     rule: 'a koan cannot open with an ask',
     yaml: turnsKoan(`
       - compact: true

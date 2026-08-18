@@ -129,6 +129,10 @@ export interface ModelTurn {
   foldMember?: number;
   /** What the caller's ask said about how to fold; every request the fold costs must carry it. */
   asked?: string;
+  /** Set on a fold's first-served request when the ask that brought the fold about is re-sent while it is in flight (`retry: compact`): the mock withholds this response until the runner releases it. */
+  compactRetried?: boolean;
+  /** This held fold's position among the trace's held actions — which hold the runner pairs it with, numbered the same way as `CallToolInstruction.holdIndex`. */
+  holdIndex?: number;
   /** This turn's tool-call instruction(s); more than one means a parallel group. */
   call_tools?: CallToolInstruction[];
   /** This turn's delegation instruction(s), each scripted by a following subagent block. */
@@ -188,11 +192,12 @@ export interface Trace {
 
 /**
  * One caller action a held invocation carries — a mid-run prompt, a
- * re-send of the turn's own submission — or the one action that is not
- * the caller's at all: the runner killing the agent while the invocation
- * is in flight (`response: crash`).
+ * re-send of the turn's own submission, a fold ask re-sent while its own
+ * fold is in flight — or the one action that is not the caller's at all:
+ * the runner killing the agent while the invocation is in flight
+ * (`response: crash`).
  */
-export type HeldAction = { kind: 'prompt'; prompt: string } | { kind: 'retry' } | { kind: 'crash' };
+export type HeldAction = { kind: 'prompt'; prompt: string } | { kind: 'retry' } | { kind: 'crash' } | { kind: 'compact' };
 
 /** A `then`-block matcher; a bare scalar means `equals`. */
 export type Matcher =
@@ -228,7 +233,7 @@ export interface Judgment {
 /** One entry of a `turns:` koan: what the caller does, and how the run is judged after it. */
 export type TurnSpec =
   | { kind: 'prompt'; prompt: string; then: Judgment }
-  | { kind: 'compact'; instructions?: string };
+  | { kind: 'compact'; instructions?: string; retried?: boolean };
 
 /** A compiled koan: shared `given`/`then` plus one or more trace variants. */
 export interface Koan {
@@ -453,6 +458,12 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
 function heldActions(conv: Conversation): Array<{ turn: number; action: HeldAction }> {
   const held: Array<{ turn: number; action: HeldAction }> = [];
   for (const [i, turn] of conv.turns.entries()) {
+    // A compaction turn carries no call_tools, so this is mutually
+    // exclusive with the member loop below — never both on one turn.
+    if (turn.compactRetried) {
+      turn.holdIndex = held.length;
+      held.push({ turn: i, action: { kind: 'compact' } });
+    }
     for (const member of turn.call_tools ?? []) {
       const action: HeldAction | undefined =
         member.promptDuring !== undefined
@@ -510,6 +521,7 @@ function promptBoundaries(conv: Conversation): TurnBoundary[] {
 export function actionsDuringOf(trace: Trace): HeldAction[] {
   const actions: HeldAction[] = [];
   for (const turn of trace.conversations[0].turns) {
+    if (turn.compactRetried) actions.push({ kind: 'compact' });
     for (const member of turn.call_tools ?? []) {
       if (member.promptDuring !== undefined) actions.push({ kind: 'prompt', prompt: member.promptDuring });
       else if (member.retryDuring) actions.push({ kind: 'retry' });
@@ -560,7 +572,11 @@ function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): {
 } {
   const turnSpecs: TurnSpec[] = turns.map((t) =>
     t.kind === 'compact'
-      ? { kind: 'compact', ...(t.instructions !== undefined ? { instructions: t.instructions } : {}) }
+      ? {
+          kind: 'compact',
+          ...(t.instructions !== undefined ? { instructions: t.instructions } : {}),
+          ...(t.retried ? { retried: true as const } : {}),
+        }
       : { kind: 'prompt', prompt: t.prompt, then: compileJudgment(t.then) },
   );
 
@@ -597,7 +613,20 @@ function compileTurnsVariant(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]], t
       // request that summarizes, and here that is every one of them).
       for (let k = before; k < main.turns.length; k++) main.turns[k].asked = t.instructions;
     }
+    if (t.kind === 'compact' && t.retried) {
+      // The fold's first-served request (its leader, or a failed fold's
+      // only one): a fold cannot settle while it is unanswered, so
+      // holding it is what proves the repeated ask lands mid-fold —
+      // however many requests the fold costs.
+      main.turns[before].compactRetried = true;
+    }
   }
+
+  // Numbers the fold holds into holdIndex. The only held actions a
+  // `turns:` koan can carry — parse.ts forbids a mid-run prompt, a
+  // creation retry, and a crash inside one — so no tool-held action can
+  // interleave with these.
+  heldActions(main);
 
   return { conversations };
 }

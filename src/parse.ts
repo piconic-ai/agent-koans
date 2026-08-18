@@ -347,12 +347,12 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
     const asking = rt.compact !== undefined;
     for (const key of Object.keys(rt)) {
       const allowed = asking
-        ? key === 'compact' || key === 'when' || key === 'one_of'
+        ? key === 'compact' || key === 'retry' || key === 'when' || key === 'one_of'
         : key === 'prompt' || key === 'when' || key === 'one_of' || key === 'then';
       if (!allowed) {
         return problem(
           asking
-            ? `turns[${i}] has unknown key "${key}" — an entry asking for a fold carries only "compact", "when", and "one_of"`
+            ? `turns[${i}] has unknown key "${key}" — an entry asking for a fold carries only "compact", "retry", "when", and "one_of"`
             : `turns[${i}] has unknown key "${key}" — a prompt entry carries only "prompt", "when", "one_of", and "then"`,
         );
       }
@@ -378,6 +378,11 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
       }
       if (typeof rt.compact === 'string' && rt.compact.trim().length === 0) {
         return problem(`turns[${i}].compact is empty — an ask that says nothing about the fold is written "compact: true"`);
+      }
+      if (rt.retry !== undefined && rt.retry !== 'compact') {
+        return problem(
+          `turns[${i}].retry names what the caller re-sends — only "compact" (this same ask, delivered again) is supported on an entry asking for a fold`,
+        );
       }
       if (i === 0) {
         return problem(`turns[0].compact: the caller asks a run that has already answered — an ask cannot open a koan`);
@@ -415,6 +420,7 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
       turns.push({
         kind: 'compact',
         ...(typeof rt.compact === 'string' ? { instructions: rt.compact } : {}),
+        ...(rt.retry !== undefined ? { retried: true } : {}),
         trace: turnTrace,
       });
       continue;

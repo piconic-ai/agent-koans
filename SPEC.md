@@ -223,6 +223,13 @@ The ask is not governed by `context.compaction`: that setting says when
 you fold on your own, and `off` does not take the choice away from the
 caller who asked.
 
+An ask that arrives while a fold is already in progress MUST NOT start a
+second one — it joins the fold already running, and you answer it the
+same way: once that fold has ended and been reported. One fold, one
+report, however many asks converged on it. A joining ask's own
+instructions, if any, do not reach that fold: its wording was already
+fixed when the fold it joins began.
+
 An ask MAY carry instructions — what the caller wants the summary to keep
 (openapi.yaml). Those words MUST reach the request that summarizes, as
 they were written; an ask carrying none leaves the wording to you.
@@ -385,6 +392,7 @@ it cannot drift from the contract it indexes.
 | [068-crash-in-flight-invocation](./koans/068-crash-in-flight-invocation.yaml) | The agent's process is killed while a tool invocation is in flight — accepted by the tool server, not yet answered — and started again. Nothing was recorded, so the invocation's outcome is unknown, and an unknown outcome is the model's to hear about, not the agent's to guess: the recovered run closes the call as interrupted, the model asks again, and the run carries on to the answer. The agent must not re-invoke on its own — one instruction, one invocation, before the crash and after it alike. |
 | [069-tool-timeout](./koans/069-tool-timeout.yaml) | The tool declares how long an invocation of it is waited for (`timeout_ms`), and the tool server accepts the call and never answers. The agent must give the invocation up at the declared timeout — not sooner: a declared wait is a promise to wait — with the timeout reaching the model as a tool failure, and the run carrying on to a graceful answer instead of dying. The agent must not re-invoke on its own; there is no follow-up call here, so exactly one invocation is made. |
 | [070-retry-abort](./koans/070-retry-abort.yaml) | The caller's abort arrives twice — the same delivery, retried, once the run has already settled from the first. The second must be accepted too, and it must not rewrite the committed result: repeated aborts are idempotent (SPEC.md §3). |
+| [071-retry-compact](./koans/071-retry-compact.yaml) | The caller's ask for a fold arrives twice — the same ask, re-sent while the fold it brought about is still summarizing. The repeat must not start a second fold: it joins the one already running, and both answers wait for that one fold to settle (SPEC.md §3). |
 
 <!-- koan-index:end -->
 

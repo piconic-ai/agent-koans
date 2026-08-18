@@ -142,6 +142,15 @@ export interface CompactTurn {
   instructions?: string;
   /** The fold the ask brings about, and nothing else: without a prompt there is no other work. */
   trace: TurnTrace;
+  /**
+   * The caller's own ask, delivered a second time while the fold it
+   * brought about is still in flight (`retry: compact`, written beside
+   * `compact`) — it must not start a second fold: it joins the one
+   * already running, and its answer still waits for that fold to settle
+   * (SPEC.md §3). A word rather than a flag, so what is re-sent is
+   * named, same as a tool step's `retry: prompt`.
+   */
+  retried?: boolean;
 }
 
 /**

@@ -270,6 +270,11 @@ function sendPrompt(runId: string, prompt: string): boolean {
   return true;
 }
 
+// A fold already running is what a second ask joins rather than starting
+// a second one (SPEC.md §3): set for as long as one is in flight, so an
+// ask that lands inside that window just awaits it.
+const folding = new Map<string, Promise<void>>();
+
 /**
  * Fold this run's conversation down, because its caller asked (SPEC.md
  * §3). Returns `false` when `runId` is unknown, so the caller can answer
@@ -278,12 +283,19 @@ function sendPrompt(runId: string, prompt: string): boolean {
 async function compactRun(runId: string, instructions?: string): Promise<boolean> {
   const agent = handles.get(runId);
   if (!agent) return false;
-  try {
-    await compactConversation(runId, agent.id, instructions);
-  } catch {
-    // Not rethrown: a failed fold owes a report, not an error at the
-    // asking, and the observer above already recorded it.
+  let inFlight = folding.get(runId);
+  if (inFlight === undefined) {
+    inFlight = compactConversation(runId, agent.id, instructions)
+      .catch(() => {
+        // Not rethrown: a failed fold owes a report, not an error at the
+        // asking, and the observer above already recorded it.
+      })
+      .finally(() => {
+        folding.delete(runId);
+      });
+    folding.set(runId, inFlight);
   }
+  await inFlight;
   return true;
 }
 

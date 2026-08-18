@@ -504,7 +504,7 @@ export function startMockLlm(
   let crashLifted = crashBefore === undefined;
   const parked: Array<{ script: ConversationScript; body: ChatRequest; res: http.ServerResponse; requestNo: number }> = [];
 
-  const serve = (script: ConversationScript, body: ChatRequest, res: http.ServerResponse, requestNo: number): void => {
+  const serve = async (script: ConversationScript, body: ChatRequest, res: http.ServerResponse, requestNo: number): Promise<void> => {
     const respond = (status: number, payload: unknown) => {
       res.writeHead(status, { 'content-type': 'application/json' });
       res.end(JSON.stringify(payload));
@@ -600,6 +600,18 @@ export function startMockLlm(
           `request #${requestNo} (${label(conv)}) carries ${JSON.stringify(value)}, ${reason} — ` +
             `information crosses conversations only through a briefing or a final reply`,
         );
+      }
+    }
+
+    // A retried ask's fold: the first summarizing response is withheld
+    // until the runner has delivered the same ask again (runner.ts), so
+    // the repeat provably arrives while the fold is unanswered — the
+    // same move mock-tools.ts makes for a held invocation.
+    if (entry.holdIndex !== undefined) {
+      const hold = holds?.[entry.holdIndex];
+      if (hold) {
+        hold.engage();
+        await hold.released;
       }
     }
 
@@ -747,12 +759,12 @@ export function startMockLlm(
       });
       return;
     }
-    serve(script, body, res, requestNo);
+    void serve(script, body, res, requestNo);
   });
 
   const liftCrashGate = (): void => {
     crashLifted = true;
-    for (const p of parked.splice(0)) serve(p.script, p.body, p.res, p.requestNo);
+    for (const p of parked.splice(0)) void serve(p.script, p.body, p.res, p.requestNo);
   };
 
   return new Promise((resolve) => {

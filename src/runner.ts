@@ -515,6 +515,9 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       }
 
       for (const [k, action] of actions.entries()) {
+        // A retried fold ask is the turns loop's to deliver — the ask
+        // that engages its hold has not even been sent yet here.
+        if (action.kind === 'compact') continue;
         const label =
           action.kind === 'prompt'
             ? `mid-run prompt #${actions.slice(0, k + 1).filter((a) => a.kind === 'prompt').length}`
@@ -654,6 +657,11 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // turn's expectations against the state the one that actually
       // stopped left behind.
       let stoppedEarly = false;
+      // One hold per retried fold ask, in turn order. In a `turns:` koan
+      // these are the only held actions parse.ts admits, so the filter
+      // narrows nothing today — it keeps the pairing explicit.
+      const foldHolds = actions.flatMap((a, k) => (a.kind === 'compact' ? [holds[k]] : []));
+      let nextFoldHold = 0;
       if (koan.turns) {
         for (let t = 1; t < koan.turns.length; t++) {
           const previous = koan.turns[t - 1];
@@ -668,7 +676,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
           const entry = koan.turns[t];
           if (entry.kind === 'compact') {
             const before = foldsEnded(run);
-            const compactRes = await fetch(`${base}/runs/${runId}/compact`, {
+            const askInit = {
               method: 'POST',
               ...(entry.instructions !== undefined
                 ? {
@@ -676,23 +684,83 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
                     body: JSON.stringify({ instructions: entry.instructions }),
                   }
                 : {}),
-            });
-            if (compactRes.status !== 202 && compactRes.status !== 200) {
-              throw new Error(`POST /runs/${runId}/compact returned ${compactRes.status}, expected 202 or 200`);
+            };
+            if (!entry.retried) {
+              const compactRes = await fetch(`${base}/runs/${runId}/compact`, askInit);
+              if (compactRes.status !== 202 && compactRes.status !== 200) {
+                throw new Error(`POST /runs/${runId}/compact returned ${compactRes.status}, expected 202 or 200`);
+              }
+              // Read here rather than at the end: the answer to the ask
+              // says the fold has happened (SPEC.md §3), so a caller
+              // holding it knows what came of pressing the button before
+              // it types the next thing.
+              const asked = await fetch(`${base}/runs/${runId}`);
+              if (!asked.ok) throw new Error(`GET /runs/${runId} returned ${asked.status}`);
+              run = (await asked.json()) as RunState;
+              if (foldsEnded(run) === before) {
+                failures.push(
+                  `POST /runs/${runId}/compact answered before the fold ended: a run answers the ask once it has folded, ` +
+                    `so a "compaction" event saying completed or failed is in GET /runs/{run_id} by then`,
+                );
+              }
+              continue;
             }
-            // Read here rather than at the end: the answer to the ask says
-            // the fold has happened (SPEC.md §3), so a caller holding it
-            // knows what came of pressing the button before it types the
-            // next thing.
-            const asked = await fetch(`${base}/runs/${runId}`);
-            if (!asked.ok) throw new Error(`GET /runs/${runId} returned ${asked.status}`);
-            run = (await asked.json()) as RunState;
-            if (foldsEnded(run) === before) {
-              failures.push(
-                `POST /runs/${runId}/compact answered before the fold ended: a run answers the ask once it has folded, ` +
-                  `so a "compaction" event saying completed or failed is in GET /runs/{run_id} by then`,
+
+            // The same ask, twice: fire the first, wait until its fold's
+            // own summarizing request is provably in flight (held by the
+            // mock), deliver the identical ask again, then let the fold
+            // go. No timing assertion beyond that — what convergence must
+            // show is one fold, which judgeReportedFolds and the script's
+            // own request count already pin.
+            const hold = foldHolds[nextFoldHold++];
+            const askA = fetch(`${base}/runs/${runId}/compact`, askInit);
+            // Observed below via Promise.all; caught here too so an
+            // engagement timeout doesn't leave this rejection unhandled.
+            askA.catch(() => {});
+            let askB!: Promise<Response>;
+            try {
+              await within(
+                hold.engaged,
+                Date.now() + (agent.runTimeoutMs ?? 15_000),
+                () =>
+                  `the summarizing request the trace holds open for the repeated ask was never made within ` +
+                  `${agent.runTimeoutMs ?? 15_000}ms`,
               );
+              askB = fetch(`${base}/runs/${runId}/compact`, askInit);
+              askB.catch(() => {});
+            } finally {
+              // Released even on failure: the mock is parked on this, and
+              // its server cannot close until it returns.
+              hold.release();
             }
+            const judgeAsk = async (ask: Promise<Response>, label: string, joinNote: string): Promise<void> => {
+              const res = await ask;
+              if (res.status !== 202 && res.status !== 200) {
+                throw new Error(`${label} POST /runs/${runId}/compact returned ${res.status}, expected 202 or 200${joinNote}`);
+              }
+              const asked = await fetch(`${base}/runs/${runId}`);
+              if (!asked.ok) throw new Error(`GET /runs/${runId} returned ${asked.status}`);
+              if (foldsEnded((await asked.json()) as RunState) === before) {
+                failures.push(
+                  `${label} POST /runs/${runId}/compact answered before the fold ended: a run answers the ask once it has ` +
+                    `folded, so a "compaction" event saying completed or failed is in GET /runs/{run_id} by then`,
+                );
+              }
+            };
+            await Promise.all([
+              judgeAsk(askA, 'the first', ''),
+              judgeAsk(
+                askB,
+                'the repeated',
+                ' — an identical ask re-sent mid-fold joins the running fold, it is not an error (SPEC.md §3)',
+              ),
+            ]);
+            // Refreshed after both: judgeReportedFolds below judges this
+            // same `run`, and either ask's own read above could be stale
+            // by the time the other settles.
+            const settled = await fetch(`${base}/runs/${runId}`);
+            if (!settled.ok) throw new Error(`GET /runs/${runId} returned ${settled.status}`);
+            run = (await settled.json()) as RunState;
             continue;
           }
           const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {

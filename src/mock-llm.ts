@@ -759,12 +759,25 @@ export function startMockLlm(
       });
       return;
     }
-    void serve(script, body, res, requestNo);
+    void serve(script, body, res, requestNo).catch((err: unknown) => {
+      // Fire-and-forget by necessity: a held request must not block this
+      // handler from returning, since the hold may stay open indefinitely.
+      // Recorded as a violation rather than left to crash the mock process
+      // with an unhandled rejection unrelated to any request this handler
+      // itself awaited.
+      state.violations.push(`request #${requestNo} crashed the mock: ${err instanceof Error ? err.message : String(err)}`);
+    });
   });
 
   const liftCrashGate = (): void => {
     crashLifted = true;
-    for (const p of parked.splice(0)) void serve(p.script, p.body, p.res, p.requestNo);
+    for (const p of parked.splice(0)) {
+      void serve(p.script, p.body, p.res, p.requestNo).catch((err: unknown) => {
+        state.violations.push(
+          `request #${p.requestNo} crashed the mock after crash recovery: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    }
   };
 
   return new Promise((resolve) => {

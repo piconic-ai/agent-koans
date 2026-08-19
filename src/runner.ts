@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { DelegationVocabulary } from './config.js';
-import { actionsDuringOf, type Judgment, type Koan, type Matcher, type Trace } from './koan.js';
+import { actionsDuringOf, crashCarrierOf, type Judgment, type Koan, type Matcher, type Trace } from './koan.js';
 import { startMockLlm } from './mock-llm.js';
 import { startMockTools } from './mock-tools.js';
 import { createHold, deepEqual, type PendingInvocation } from './pending.js';
@@ -599,16 +599,19 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // A bare `crash` step fires once every exchange before it has been
       // observed on the wire — the same seam the scripted abort uses. The
       // mock's gate holds the next exchange meanwhile, so nothing the
-      // doomed process races out can settle the run before it dies.
-      const crashBefore = trace.conversations[0].crashBefore;
+      // doomed process races out can settle the run before it dies. Counted
+      // against whichever conversation's own trace carries the step — the
+      // main one, or a subagent's mid-delegation — not always the main.
+      const crashCarrier = crashCarrierOf(trace);
+      const crashBefore = crashCarrier?.crashBefore;
       const crashed = crashBefore !== undefined || actions.some((a) => a.kind === 'crash');
       if (crashBefore !== undefined) {
         const crashDeadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
-        while ((llm.state.served[''] ?? 0) < crashBefore || pending.length !== 0) {
+        while ((llm.state.served[crashCarrier!.name] ?? 0) < crashBefore || pending.length !== 0) {
           if (Date.now() > crashDeadline) {
             throw new Error(
               `the trace's pre-crash steps were not fully observed within ${agent.runTimeoutMs ?? 15_000}ms: ` +
-                `${llm.state.served[''] ?? 0}/${crashBefore} model requests served, ${pending.length} tool call(s) still unresolved`,
+                `${llm.state.served[crashCarrier!.name] ?? 0}/${crashBefore} model requests served, ${pending.length} tool call(s) still unresolved`,
             );
           }
           await sleep(100);

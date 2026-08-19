@@ -30,8 +30,9 @@ export interface Conversation {
   /**
    * Told after every change to the recorded history — a message
    * appended, or a fold's rewrite. A durable agent hooks its store here
-   * (SPEC.md §3); a delegate's conversation declares none, since a
-   * scripted crash never lands mid-delegation.
+   * (SPEC.md §3), a delegate's conversation included: a crash can land
+   * mid-delegation just as easily as mid-turn, so a child's record must
+   * survive it the same way the run's own does.
    */
   onRecord?: () => void;
 }
@@ -99,5 +100,5 @@ async function executeToolCall(call: ToolCall, run: Run, signal: AbortSignal): P
   if (tool === undefined) {
     return `Error: unknown tool "${call.function.name}"`;
   }
-  return tool.invoke(call.function.arguments, signal);
+  return tool.invoke(call.function.arguments, signal, call.id);
 }

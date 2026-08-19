@@ -931,18 +931,24 @@ const rows: Row[] = [
       'turns[0].when[1]: "crash" cannot appear inside a turn\'s own trace — a mid-submission death is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
   },
   {
-    rule: '"crash" cannot appear inside a subagent block',
-    yaml: koan(`
-      when:
-        - request: model
-          response: { subagent: r, prompt: "go look" }
-        - subagent: r
-          when:
-            - request: model
-              response: ok
-            - crash
+    rule: 'a turn forbids "crash" at every depth — a nested subagent block included',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request: model
+            response: { subagent: helper, prompt: go }
+          - subagent: helper
+            when:
+              - request: model
+                response: { tool: t, args: {} }
+              - crash
+              - request: model
+                response: done
+          - request: model
+            response: ok
     `),
-    message: 'when[1].when[1]: "crash" cannot appear inside a subagent block — the process that dies is the whole agent\'s',
+    message:
+      'turns[0].when[1].when[1]: "crash" cannot appear inside a turn\'s own trace — a mid-submission death is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
   },
   {
     rule: '"crash" cannot share a trace with "abort"',
@@ -956,7 +962,7 @@ const rows: Row[] = [
     message: 'when[1]: "crash" cannot share a trace with "abort" — one ending per run is all this format scripts',
   },
   {
-    rule: 'a trace carries at most one "crash"',
+    rule: 'a koan carries at most one "crash"',
     yaml: koan(`
       when:
         - request: model
@@ -965,7 +971,24 @@ const rows: Row[] = [
           response: crash
         - crash
     `),
-    message: 'when[2]: a trace carries at most one "crash" — one death and one recovery per koan',
+    message: 'when[2]: a second "crash" — one death per koan, wherever it lands',
+  },
+  {
+    rule: 'a koan carries at most one "crash", across the main trace and a subagent block',
+    yaml: koan(`
+      when:
+        - request: model
+          response: ok
+        - crash
+        - request: model
+          response: { subagent: r, prompt: "go look" }
+        - subagent: r
+          when:
+            - request: model
+              response: ok
+            - crash
+    `),
+    message: 'when[3].when[1]: a second "crash" — one death per koan, wherever it lands',
   },
   {
     rule: 'a tool step answered "crash" cannot appear inside a "turns" koan',
@@ -979,6 +1002,22 @@ const rows: Row[] = [
     `),
     message:
       'turns[0].when[1]: a tool step answered "crash" cannot appear inside a "turns" koan — a mid-invocation death is not supported here yet, and the "- crash" entry of "turns" scripts a different death: between two turns, with nothing in flight',
+  },
+  {
+    rule: 'a tool step answered "crash" cannot appear inside a subagent block',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { subagent: r, prompt: "go look" }
+        - subagent: r
+          when:
+            - request: model
+              response: { tool: x, args: {} }
+            - request: { tool: x }
+              response: crash
+    `),
+    message:
+      'when[1].when[1]: a tool step answered "crash" cannot appear inside a subagent block — the process that dies is the whole agent\'s',
   },
   {
     rule: '"crash" cannot open a "turns" koan',

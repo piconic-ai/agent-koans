@@ -191,7 +191,9 @@ export interface Conversation {
    * has been served, the runner kills and restarts the agent, and the
    * mock parks any request for this index until the restart completes
    * (mock-llm.ts) — otherwise the doomed process could race its own death
-   * to the next exchange. Only ever set on the main conversation.
+   * to the next exchange. Set on whichever conversation's own trace
+   * carries the step — the main one, or a subagent's — never more than
+   * one across a trace (parse.ts's one-crash-per-koan rule).
    */
   crashBefore?: number;
 }
@@ -543,6 +545,15 @@ function promptBoundaries(conv: Conversation): TurnBoundary[] {
     }
   }
   return boundaries;
+}
+
+/**
+ * The conversation whose own trace carries a bare `crash` step, if any —
+ * at most one per trace (parse.ts's one-crash-per-koan rule), so a find
+ * is all this needs rather than a list.
+ */
+export function crashCarrierOf(trace: Trace): Conversation | undefined {
+  return trace.conversations.find((c) => c.crashBefore !== undefined);
 }
 
 /** The held actions of a trace, in step order — one hold each (runner.ts). */

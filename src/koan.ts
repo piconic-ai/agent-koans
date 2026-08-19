@@ -93,10 +93,24 @@ export interface DelegationInstruction {
   subagent: string;
   /** The briefing that opens the delegate's conversation. */
   prompt: string;
-  /** The delegate's final reply, lifted from the subagent block that scripts it. Empty when the child never answered — it failed, or the run's abort cut it off. */
-  final: string;
+  /**
+   * The delegate's final reply, lifted from the subagent block that
+   * scripts it. Empty when the child never answered — it failed, or the
+   * run's abort cut it off. Absent when `undeclared` is set: there is no
+   * subagent block to lift a reply from.
+   */
+  final?: string;
   /** The model API failure that ended the child instead of a reply; the parent's next request must carry it as the delegation's outcome. */
   fails?: HttpResponse;
+  /**
+   * Set when this delegation names someone outside the run's declared
+   * roster (`given.subagents`, when the koan writes one) — parse.ts
+   * guarantees it then has no subagent block. The mock still emits it as
+   * a real tool call (the model's hallucination is real wire traffic);
+   * the agent's own refusal phrasing is unchecked, the same as a refused
+   * tool call's — see mock-llm.ts's `checkCoherence`.
+   */
+  undeclared?: boolean;
 }
 
 /** One compiled model turn of a trace. */
@@ -299,9 +313,10 @@ function compileCallTool(instr: CallInstruction): CallToolInstruction {
 
 function compileDelegationInstruction(instr: DelegateInstruction): DelegationInstruction {
   // `final` is filled in once the matching subagent block compiles, right
-  // after this turn is pushed — the block is mandatory (parse.ts), so a
-  // placeholder can never survive to runtime.
-  return { subagent: instr.subagent, prompt: instr.prompt, final: '' };
+  // after this turn is pushed. A name outside a declared roster gets no
+  // such block (parse.ts) and is swept into `undeclared` once this
+  // conversation's whole step list has been walked (compileSteps, below).
+  return { subagent: instr.subagent, prompt: instr.prompt };
 }
 
 function compileModelTurn(response: ModelResponse, usedTokens: number): ModelTurn {
@@ -449,6 +464,13 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
       default:
         assertNever(step);
     }
+  }
+
+  // A delegation left in the map with no `final` never met a matching
+  // subagent block in this same step list — legal only for a name outside
+  // a declared roster (parse.ts), so that is what it must have been.
+  for (const d of delegationBySubagent.values()) {
+    if (d.final === undefined) d.undeclared = true;
   }
 }
 

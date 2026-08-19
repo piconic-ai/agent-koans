@@ -189,7 +189,16 @@ delegate the run declared no context for has no threshold and MUST NOT
 compact. A delegate with a declared threshold that its conversation
 reaches MUST have folded by that conversation's next model request — its
 conversation ends at its final answer, so there is no settled turn to
-defer to.
+defer to. A delegation naming a delegate the run never declared opens no
+conversation: the refusal is the delegation's outcome and MUST reach the
+conversation that delegated, the way a call to a tool that was never
+declared does — what it means for the run stays that conversation's to
+decide, and the run does not end for it. An implementation that wants
+open-ended, on-demand delegation offers it the way real frameworks do: as
+a general-purpose delegate under a declared name of its own, which a
+caller names in `subagents` like any other — never by serving a name that
+does not exist, which is a hallucination the model deserves to hear
+about.
 
 **Context.** A run MAY declare the context window its own conversation is
 given, and the share of it at which the agent compacts — folds the
@@ -397,6 +406,7 @@ it cannot drift from the contract it indexes.
 | [070-retry-abort](./koans/070-retry-abort.yaml) | The caller's abort arrives twice — the same delivery, retried, once the run has already settled from the first. The second must be accepted too, and it must not rewrite the committed result: repeated aborts are idempotent (SPEC.md §3). |
 | [071-retry-compact](./koans/071-retry-compact.yaml) | The caller's ask for a fold arrives twice — the same ask, re-sent while the fold it brought about is still summarizing. The repeat must not start a second fold: it joins the one already running, and both answers wait for that one fold to settle (SPEC.md §3). |
 | [072-result-size-fidelity](./koans/072-result-size-fidelity.yaml) | A tool's result comes back large — tens of kilobytes, well past anything else in the suite. The agent must forward it to the model whole: nothing here says a size earns different treatment, and no declared tool's result is truncated, summarized, or otherwise altered on its way to the model (SPEC.md §4). |
+| [073-undeclared-delegation](./koans/073-undeclared-delegation.yaml) | The model delegates to a subagent name the run never declared — a hallucination, not a typo the mock plays along with. The agent must open no child conversation: the refusal is the delegation's outcome, it reaches the parent's model the way an unknown tool call's does (004), and the model corrects itself with a delegation to the one name the run did declare. An implementation that wants open-ended, on-demand delegation offers it under a declared name of its own — a general-purpose delegate a caller names in `given.subagents` like any other — never by serving a name that does not exist, which is a hallucination the model deserves to hear about. |
 
 <!-- koan-index:end -->
 

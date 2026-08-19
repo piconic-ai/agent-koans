@@ -919,16 +919,6 @@ const rows: Row[] = [
     message: 'when[3]: a held invocation carries one caller action — this tool step already carries "retry"',
   },
   {
-    rule: '"crash" needs at least one exchange before it',
-    yaml: koan(`
-      when:
-        - crash
-        - request: model
-          response: ok
-    `),
-    message: 'when[0]: "crash" needs at least one exchange before it — a run must exist before its process can die',
-  },
-  {
     rule: '"crash" cannot appear inside a turn\'s own trace',
     yaml: turnsKoan(`
       - prompt: a

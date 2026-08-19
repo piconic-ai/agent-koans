@@ -1,0 +1,43 @@
+name: crash-during-recovery
+description: >
+  The death lands twice: first while a tool invocation is in flight —
+  068's position, leaving an unclosed call the recovery must repair —
+  and again while the recovered process is making that very repair, its
+  own first model request in flight. What the first recovery wrote is
+  recorded work like any other: the closure it gave the interrupted
+  invocation is final, so the third process must not invoke that call
+  again behind it — the tool is invoked exactly once across all three
+  lives, and the model hears the unknown outcome exactly once. A
+  recovery reads what it owes off the record rather than counting it,
+  so no crash shape leaves the run half-repaired or repaired twice
+  (SPEC.md §3).
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  # The invocation arrives and, while it waits for its answer, the
+  # process that made it dies — the first death, 068's position.
+  - request: { tool: get_weather }
+    response: crash
+  # The recovered process's own first request — closing that same call
+  # with the outcome it never got — is what the second death catches in
+  # flight, before it ever settles.
+  - crash
+  - request: model
+    response: "Tokyo is a brisk 14°C today."
+
+then:
+  status: completed
+  output: { contains: "14°C" }

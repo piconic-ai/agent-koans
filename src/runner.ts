@@ -602,16 +602,25 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // doomed process races out can settle the run before it dies. Counted
       // against whichever conversation's own trace carries the step — the
       // main one, or a subagent's mid-delegation — not always the main.
+      //
+      // `crashBefore` may carry two entries (koan.ts): a tool step's own
+      // crash, already fired above by the `actions` loop, and this bare
+      // step's. The wait below is for the second — the served count it
+      // waits on already reflects the first death's own recovered work
+      // (mock-llm.ts's `served` survives the process it counted requests
+      // against), so the threshold to reach is the sequence's last entry,
+      // not its first.
       const crashCarrier = crashCarrierOf(trace);
       const crashBefore = crashCarrier?.crashBefore;
+      const crashThreshold = crashBefore?.at(-1);
       const crashed = crashBefore !== undefined || actions.some((a) => a.kind === 'crash');
-      if (crashBefore !== undefined) {
+      if (crashThreshold !== undefined) {
         const crashDeadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
-        while ((llm.state.served[crashCarrier!.name] ?? 0) < crashBefore || pending.length !== 0) {
+        while ((llm.state.served[crashCarrier!.name] ?? 0) < crashThreshold || pending.length !== 0) {
           if (Date.now() > crashDeadline) {
             throw new Error(
               `the trace's pre-crash steps were not fully observed within ${agent.runTimeoutMs ?? 15_000}ms: ` +
-                `${llm.state.served[crashCarrier!.name] ?? 0}/${crashBefore} model requests served, ${pending.length} tool call(s) still unresolved`,
+                `${llm.state.served[crashCarrier!.name] ?? 0}/${crashThreshold} model requests served, ${pending.length} tool call(s) still unresolved`,
             );
           }
           await sleep(100);

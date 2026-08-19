@@ -164,6 +164,13 @@ The death may also fall between submissions: a prompt sent after the
 restart MUST land on the same run and be answered from its recorded
 history, the way any follow-up is (below) — a recovered run is never a
 wedged one.
+The death may also land on the recovery itself, and what a recovery
+wrote is recorded work like any other: the closure it gave an
+interrupted invocation is final, so a later death MUST NOT lead you to
+invoke that call again behind it. Repairing a record is idempotent —
+what it owes is read off the record, never counted — so a run killed
+again while recovering reaches the state one death would have left it
+in, never half-repaired and never repaired twice.
 Only koans that script a `crash` exercise this; an implementation that
 keeps its runs in memory records those koans in its skiplist, with
 reasons (§6).
@@ -425,6 +432,7 @@ it cannot drift from the contract it indexes.
 | [074-follow-up-after-crash](./koans/074-follow-up-after-crash.yaml) | The death falls between submissions this time: after one turn settled, before the next was sent — the cheapest place a crash can land, since nothing is in flight when it does. The restarted process must resolve the same run and accept the next prompt like any other run does — a recovered run is never a wedged one — and that turn's model request must still carry the earlier turn's exchange: the follow-up contract (022), stretched across a death. |
 | [075-crash-after-acceptance](./koans/075-crash-after-acceptance.yaml) | The death lands at the earliest point there is: the run was accepted, and nothing else ever happened — no model request, no work, only the acceptance itself on record. That record is enough. The restarted process must still resolve the same run and drive it to the answer it was always going to give; a doomed process's own first request, if it got one off, died with it — the recovered process asks again, which is recovery, not a retry (SPEC.md §3). |
 | [076-crash-mid-delegation](./koans/076-crash-mid-delegation.yaml) | The agent's process is killed while a delegation is mid-task — the child's tool result already recorded, the child's next model request not yet answered — and started again. The sharp contrast with crash-in-flight-invocation: an in-flight tool invocation crossed into the world, so its outcome is unknown, and it is never re-invoked; a delegation never left the process, so nothing about it is unknown. The child's conversation is part of the run's record — what it had recorded survives the death the way the run's own record does, the child resumes to completion, and the delegation closes with the answer the child was always going to give, never with an unknown outcome. |
+| [077-crash-during-recovery](./koans/077-crash-during-recovery.yaml) | The death lands twice: first while a tool invocation is in flight — 068's position, leaving an unclosed call the recovery must repair — and again while the recovered process is making that very repair, its own first model request in flight. What the first recovery wrote is recorded work like any other: the closure it gave the interrupted invocation is final, so the third process must not invoke that call again behind it — the tool is invoked exactly once across all three lives, and the model hears the unknown outcome exactly once. A recovery reads what it owes off the record rather than counting it, so no crash shape leaves the run half-repaired or repaired twice (SPEC.md §3). |
 
 <!-- koan-index:end -->
 

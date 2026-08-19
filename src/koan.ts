@@ -193,9 +193,15 @@ export interface Conversation {
    * (mock-llm.ts) — otherwise the doomed process could race its own death
    * to the next exchange. Set on whichever conversation's own trace
    * carries the step — the main one, or a subagent's — never more than
-   * one across a trace (parse.ts's one-crash-per-koan rule).
+   * one across a trace (parse.ts's one-crash-per-koan rule), except the
+   * one pair it now admits: a tool step answered `crash` directly
+   * followed by a bare `crash`. That pair compiles to two entries here,
+   * both this same index — one per death the mock must gate a lift for
+   * (mock-llm.ts's `crashScript`), the tool invocation's own recovery and
+   * the recovery's own recovery. A single-death trace still compiles to
+   * one entry, so nothing about it changes.
    */
-  crashBefore?: number;
+  crashBefore?: number[];
 }
 
 /** One compiled trace variant: the main conversation plus any subagent conversations. */
@@ -380,6 +386,11 @@ function matchOpenCall(openCalls: OpenCall[], tool: string, args: ParsedArgs | u
 function compileSteps(steps: Step[], conv: Conversation, conversations: Conversation[]): void {
   const delegationBySubagent = new Map<string, DelegationInstruction>();
   let openCalls: OpenCall[] = [];
+  // Whether the step just compiled was a tool step answered `crash` —
+  // parse.ts's own adjacency check already proved a following bare
+  // `crash` is legal only directly after one, so this only ever needs to
+  // remember the immediately preceding step, not a running history.
+  let toolCrashJustClosed = false;
   // Read off the conversation, not a local: a `turns:` koan compiles each
   // turn's steps with a fresh call to this function, into the same
   // conversation, and the size a turn ends at is where the next one starts.
@@ -397,6 +408,7 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
                 .filter(isCall)
                 .map((source, i) => ({ source, compiled: turn.call_tools![i] }))
             : [];
+        toolCrashJustClosed = false;
         break;
       }
       case 'subagent': {
@@ -452,18 +464,26 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
         if (step.prompt !== undefined) match.compiled.promptDuring = step.prompt;
         if (step.retry !== undefined) match.compiled.retryDuring = true;
         openCalls = openCalls.filter((c) => c !== match);
+        toolCrashJustClosed = 'crash' in step.response;
         break;
       }
       case 'internal': {
         const match = matchOpenCall(openCalls, step.tool, step.args);
         match.compiled.internal = true;
         openCalls = openCalls.filter((c) => c !== match);
+        toolCrashJustClosed = false;
         break;
       }
       case 'crash': {
         // `openCalls` survives, like a fold's: the death is the process's,
         // not the conversation's, and a call still open is still owed.
-        conv.crashBefore = conv.turns.length;
+        // Directly after a tool step answered `crash` (parse.ts proved
+        // it, for the one pair that reaches here), this bare crash is a
+        // second death on the very call the first already caught — the
+        // mock needs one gate lift per death, both at this same index, so
+        // the entry is doubled rather than replaced.
+        conv.crashBefore = [...(toolCrashJustClosed ? [conv.turns.length] : []), conv.turns.length];
+        toolCrashJustClosed = false;
         break;
       }
       default:

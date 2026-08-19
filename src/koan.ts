@@ -242,10 +242,16 @@ export interface Judgment {
   output?: Matcher;
 }
 
-/** One entry of a `turns:` koan: what the caller does, and how the run is judged after it. */
+/**
+ * One entry of a `turns:` koan: what the caller does, and how the run is
+ * judged after it. `crash` carries neither — the earlier turn's own
+ * judgment already covers what settled before it, and there is nothing
+ * of this entry's own to judge.
+ */
 export type TurnSpec =
   | { kind: 'prompt'; prompt: string; then: Judgment }
-  | { kind: 'compact'; instructions?: string; retried?: boolean };
+  | { kind: 'compact'; instructions?: string; retried?: boolean }
+  | { kind: 'crash' };
 
 /** A compiled koan: shared `given`/`then` plus one or more trace variants. */
 export interface Koan {
@@ -593,19 +599,24 @@ function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): {
   turnSpecs: TurnSpec[];
 } {
   const turnSpecs: TurnSpec[] = turns.map((t) =>
-    t.kind === 'compact'
-      ? {
-          kind: 'compact',
-          ...(t.instructions !== undefined ? { instructions: t.instructions } : {}),
-          ...(t.retried ? { retried: true as const } : {}),
-        }
-      : { kind: 'prompt', prompt: t.prompt, then: compileJudgment(t.then) },
+    t === 'crash'
+      ? { kind: 'crash' as const }
+      : t.kind === 'compact'
+        ? {
+            kind: 'compact',
+            ...(t.instructions !== undefined ? { instructions: t.instructions } : {}),
+            ...(t.retried ? { retried: true as const } : {}),
+          }
+        : { kind: 'prompt', prompt: t.prompt, then: compileJudgment(t.then) },
   );
 
-  const oneOfIndex = turns.findIndex((t) => t.trace?.kind === 'one_of');
+  const oneOfIndex = turns.findIndex((t) => t !== 'crash' && t.trace?.kind === 'one_of');
   if (oneOfIndex === -1) return { traces: { '': compileTurnsVariant(turns) }, turnSpecs };
 
-  const variantsTurnTrace = turns[oneOfIndex].trace as Extract<ParsedTurnTrace, { kind: 'one_of' }>;
+  const variantsTurnTrace = (turns[oneOfIndex] as Exclude<ParsedTurn, 'crash'>).trace as Extract<
+    ParsedTurnTrace,
+    { kind: 'one_of' }
+  >;
   const traces: Record<string, Trace> = {};
   for (const variant of Object.keys(variantsTurnTrace.variants)) {
     traces[variant] = compileTurnsVariant(turns, oneOfIndex, variant);
@@ -625,6 +636,11 @@ function compileTurnsVariant(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]], t
   conversations.push(main);
 
   for (const [i, t] of turns.entries()) {
+    // Contributes no step and no follow-up boundary: the prompt turns on
+    // either side compile exactly as if they were adjacent. The runner
+    // drives the actual kill-and-restart from `koan.turns`, not from
+    // anything compiled here.
+    if (t === 'crash') continue;
     if (t.kind === 'prompt' && i > 0) followUps.push({ start: main.turns.length, prompt: t.prompt });
     const steps = turnStepsOf(t, i === turnIndex ? variant : undefined);
     const before = main.turns.length;
@@ -655,8 +671,9 @@ function compileTurnsVariant(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]], t
 
 // A turn's own steps: `when`'s single trace, or the named member of
 // `one_of`'s variants this compile is walking — `pickVariant` is only
-// ever set for the one turn a koan may write `one_of` on.
-function turnStepsOf(t: ParsedTurn, pickVariant: string | undefined): Step[] | undefined {
+// ever set for the one turn a koan may write `one_of` on. Never called
+// with `'crash'`: its caller skips that entry before reaching this.
+function turnStepsOf(t: Exclude<ParsedTurn, 'crash'>, pickVariant: string | undefined): Step[] | undefined {
   if (t.trace === undefined) return undefined;
   if (t.trace.kind === 'one') return t.trace.trace.steps;
   return t.trace.variants[pickVariant as string].steps;

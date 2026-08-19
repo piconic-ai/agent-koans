@@ -1,0 +1,27 @@
+name: follow-up-after-crash
+description: >
+  The death falls between submissions this time: after one turn settled,
+  before the next was sent — the cheapest place a crash can land, since
+  nothing is in flight when it does. The restarted process must resolve
+  the same run and accept the next prompt like any other run does — a
+  recovered run is never a wedged one — and that turn's model request
+  must still carry the earlier turn's exchange: the follow-up contract
+  (022), stretched across a death.
+
+turns:
+  - prompt: "Log operator code R-6-3390 for the overnight shift."
+    when:
+      - request: model
+        response: "Logged operator code R-6-3390."
+
+  # The record is on disk (or is not — that is the test): the process
+  # holding the conversation in memory dies here, between the two turns.
+  - crash
+
+  - prompt: "What was that operator code?"
+    when:
+      - request: model
+        response: "The operator code was R-6-3390."
+    then:
+      status: completed
+      output: { contains: "R-6-3390" }

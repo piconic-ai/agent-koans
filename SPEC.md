@@ -149,6 +149,10 @@ happened. Work in flight and never recorded has an unknown outcome, and
 an unknown outcome reaches the model the way a tool failure does; the
 follow-up call, if any, is the model's next instruction, never your own
 retry. `KOAN_STATE_DIR` (§2) is where you keep whatever this takes.
+The death may also fall between submissions: a prompt sent after the
+restart MUST land on the same run and be answered from its recorded
+history, the way any follow-up is (below) — a recovered run is never a
+wedged one.
 Only koans that script a `crash` exercise this; an implementation that
 keeps its runs in memory records those koans in its skiplist, with
 reasons (§6).
@@ -407,6 +411,7 @@ it cannot drift from the contract it indexes.
 | [071-retry-compact](./koans/071-retry-compact.yaml) | The caller's ask for a fold arrives twice — the same ask, re-sent while the fold it brought about is still summarizing. The repeat must not start a second fold: it joins the one already running, and both answers wait for that one fold to settle (SPEC.md §3). |
 | [072-result-size-fidelity](./koans/072-result-size-fidelity.yaml) | A tool's result comes back large — tens of kilobytes, well past anything else in the suite. The agent must forward it to the model whole: nothing here says a size earns different treatment, and no declared tool's result is truncated, summarized, or otherwise altered on its way to the model (SPEC.md §4). |
 | [073-undeclared-delegation](./koans/073-undeclared-delegation.yaml) | The model delegates to a subagent name the run never declared — a hallucination, not a typo the mock plays along with. The agent must open no child conversation: the refusal is the delegation's outcome, it reaches the parent's model the way an unknown tool call's does (004), and the model corrects itself with a delegation to the one name the run did declare. An implementation that wants open-ended, on-demand delegation offers it under a declared name of its own — a general-purpose delegate a caller names in `given.subagents` like any other — never by serving a name that does not exist, which is a hallucination the model deserves to hear about. |
+| [074-follow-up-after-crash](./koans/074-follow-up-after-crash.yaml) | The death falls between submissions this time: after one turn settled, before the next was sent — the cheapest place a crash can land, since nothing is in flight when it does. The restarted process must resolve the same run and accept the next prompt like any other run does — a recovered run is never a wedged one — and that turn's model request must still carry the earlier turn's exchange: the follow-up contract (022), stretched across a death. |
 
 <!-- koan-index:end -->
 

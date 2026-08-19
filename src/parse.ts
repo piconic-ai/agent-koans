@@ -337,7 +337,28 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
   // naming every combination across more than one such turn is not a
   // thing this format takes on.
   let oneOfTurnAt = -1;
+  // Whether a "crash" entry has already been seen — at most one death per
+  // koan, the same one-per-trace rule a mid-trace "crash" step carries
+  // (parseTrace), just checked here instead since this "crash" is an
+  // entry of "turns" itself rather than a step of one turn's own trace.
+  let crashAt = -1;
   for (let i = 0; i < rawTurns.length; i++) {
+    if (rawTurns[i] === 'crash') {
+      if (i === 0) {
+        return problem('turns[0]: "crash" cannot open the koan — the record it tests is written by the turns before it');
+      }
+      if (i === rawTurns.length - 1) {
+        return problem(`turns[${i}]: nothing follows this "crash" — a koan that ends at the death tests nothing about recovery`);
+      }
+      if (crashAt !== -1) {
+        return problem(
+          `turns[${i}]: a second "crash" — one death per koan; what survives it is the same record however often you kill the process`,
+        );
+      }
+      crashAt = i;
+      thens.push({});
+      continue;
+    }
     const rt = (rawTurns[i] ?? {}) as Record<string, unknown>;
     const asking = rt.compact !== undefined;
     for (const key of Object.keys(rt)) {
@@ -399,6 +420,10 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
 
   const turns: Turn[] = [];
   for (let i = 0; i < rawTurns.length; i++) {
+    if (rawTurns[i] === 'crash') {
+      turns.push('crash');
+      continue;
+    }
     const rt = rawTurns[i] as Record<string, unknown>;
     const last = i === rawTurns.length - 1;
     // Omitted only where nothing could follow: a prompt the agent answers
@@ -431,7 +456,10 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
     turns.push({ kind: 'prompt', prompt: rt.prompt as string, trace: turnTrace, then: thens[i] });
   }
 
-  if (turns[0].kind !== 'prompt') return problem('turns[0] must be a prompt — a run starts from one');
+  // "crash" is already rejected as turns[0] above; the check still reads
+  // off the built value rather than assuming it, the way this rule always
+  // has.
+  if (turns[0] === 'crash' || turns[0].kind !== 'prompt') return problem('turns[0] must be a prompt — a run starts from one');
   return { kind: 'turns', turns: turns as [Turn, Turn, ...Turn[]] };
 }
 
@@ -619,7 +647,9 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
 
     if (item === 'crash') {
       if (inTurns) {
-        return problem(`${at_i}: "crash" cannot appear inside a "turns" koan — killing the agent between scripted turns is not supported yet`);
+        return problem(
+          `${at_i}: "crash" cannot appear inside a turn's own trace — between scripted turns, write it as an entry of "turns" itself`,
+        );
       }
       if (inSubagent) {
         return problem(`${at_i}: "crash" cannot appear inside a subagent block — the process that dies is the whole agent's`);
@@ -816,7 +846,9 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       }
       if (crashes) {
         if (inTurns) {
-          return problem(`${at_i}: a tool step answered "crash" cannot appear inside a "turns" koan — killing the agent between scripted turns is not supported yet`);
+          return problem(
+            `${at_i}: a tool step answered "crash" cannot appear inside a "turns" koan — between scripted turns, write it as an entry of "turns" itself`,
+          );
         }
         if (inSubagent) {
           return problem(`${at_i}: a tool step answered "crash" cannot appear inside a subagent block — the process that dies is the whole agent's`);
@@ -1303,29 +1335,38 @@ function scriptedTraces(koan: KoanFile): ScriptedTrace[] {
 // flattens each entry into one step list) and `scriptedConversations`
 // (which needs the turn-by-turn boundaries kept apart).
 function turnsScriptedConversations(turns: Turn[]): Array<{ label: string; conv: ConversationTurns }> {
-  const oneOfIndex = turns.findIndex((t) => t.trace?.kind === 'one_of');
-  const stepsOf = (t: Turn): Step[] => (t.trace?.kind === 'one' ? t.trace.trace.steps : []);
+  const oneOfIndex = turns.findIndex((t) => t !== 'crash' && t.trace?.kind === 'one_of');
+  const stepsOf = (t: Exclude<Turn, 'crash'>): Step[] => (t.trace?.kind === 'one' ? t.trace.trace.steps : []);
 
+  // A "crash" entry contributes no turn of its own — the death sits
+  // between two turns' steps, not inside either, so every rule that reads
+  // a conversation's scripted steps (delegation resolution, tool
+  // matching, budgets, window sizes) never sees it at all.
   const build = (variant?: string): ConversationTurns =>
-    turns.map((t, i) => {
+    turns.flatMap((t, i) => {
+      if (t === 'crash') return [];
       if (oneOfIndex !== -1 && i === oneOfIndex && variant !== undefined) {
         const variantsTurnTrace = t.trace as Extract<TurnTrace, { kind: 'one_of' }>;
-        return {
-          steps: variantsTurnTrace.variants[variant].steps,
-          at: `turns[${i}].one_of.${variant}`,
-          ...(t.kind === 'compact' ? { compact: true as const } : {}),
-        };
+        return [
+          {
+            steps: variantsTurnTrace.variants[variant].steps,
+            at: `turns[${i}].one_of.${variant}`,
+            ...(t.kind === 'compact' ? { compact: true as const } : {}),
+          },
+        ];
       }
-      return {
-        steps: stepsOf(t),
-        at: `turns[${i}].when`,
-        ...(t.kind === 'compact' ? { compact: true as const } : {}),
-      };
+      return [
+        {
+          steps: stepsOf(t),
+          at: `turns[${i}].when`,
+          ...(t.kind === 'compact' ? { compact: true as const } : {}),
+        },
+      ];
     });
 
   if (oneOfIndex === -1) return [{ label: 'turns', conv: build() }];
 
-  const variantsTurnTrace = turns[oneOfIndex].trace as Extract<TurnTrace, { kind: 'one_of' }>;
+  const variantsTurnTrace = (turns[oneOfIndex] as Exclude<Turn, 'crash'>).trace as Extract<TurnTrace, { kind: 'one_of' }>;
   return Object.keys(variantsTurnTrace.variants).map((variant) => ({
     label: `turns.one_of.${variant}`,
     conv: build(variant),

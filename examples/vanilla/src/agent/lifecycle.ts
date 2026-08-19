@@ -226,7 +226,15 @@ export function createAgent(
       return last.content ?? '';
     }
     await repairUnclosedCalls(conv, children, run);
-    return runConversation(conv, run, new AbortController().signal);
+    try {
+      return await runConversation(conv, run, new AbortController().signal);
+    } catch (err) {
+      // Not rethrown, matching the subagent tool's own catch: losing the
+      // model ends the child's conversation, not the recovery — thrown,
+      // it would reject the fire-and-forget resume() and kill the process
+      // instead of closing the delegation with its outcome.
+      return `Error: subagent delegation failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   // Wires a session's `children` map into the hooks `createRun` gives its

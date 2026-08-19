@@ -931,6 +931,26 @@ const rows: Row[] = [
       'turns[0].when[1]: "crash" cannot appear inside a turn\'s own trace — a mid-submission death is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
   },
   {
+    rule: 'a turn forbids "crash" at every depth — a nested subagent block included',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request: model
+            response: { subagent: helper, prompt: go }
+          - subagent: helper
+            when:
+              - request: model
+                response: { tool: t, args: {} }
+              - crash
+              - request: model
+                response: done
+          - request: model
+            response: ok
+    `),
+    message:
+      'turns[0].when[1].when[1]: "crash" cannot appear inside a turn\'s own trace — a mid-submission death is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
+  },
+  {
     rule: '"crash" cannot share a trace with "abort"',
     yaml: koan(`
       when:

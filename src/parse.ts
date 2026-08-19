@@ -719,7 +719,10 @@ function parseTrace(
       if (typeof block.subagent !== 'string' || block.subagent.length === 0) {
         return problem(`${at_i}.subagent must be a non-empty delegate name`);
       }
-      const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), false, true, crashSeen);
+      // `inTurns` rides into the child: a block nested in a turn's trace
+      // is still inside that turn, so what a turn forbids — a
+      // mid-submission death above all — stays forbidden at every depth.
+      const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), inTurns, true, crashSeen);
       if (isProblem(childTrace)) return childTrace;
       const childLast = childTrace.steps[childTrace.steps.length - 1];
       const settles =

@@ -20,25 +20,31 @@ export interface SubagentDef {
  * Run a briefing as a conversation of its own; `undefined` when the budget
  * ran out first. `context` is the matched `SubagentDef`'s own — absent for
  * a delegate the run declared none for, which is what leaves that
- * conversation's window and threshold both unset.
+ * conversation's window and threshold both unset. `callId` is the wire
+ * `tool_call_id` of the delegation instruction, threaded through so the
+ * child conversation it starts can be found again after a crash.
  */
 export type Delegate = (
   prompt: string,
   context: RunContext | undefined,
   signal: AbortSignal,
+  callId: string,
 ) => Promise<string | undefined>;
 
 /**
- * Make delegation runnable, over the delegates the run declared.
- *
- * The tool's name and argument names are agent-koans' neutral default
- * (the runner's `DEFAULT_DELEGATION`), so they are written here rather
- * than read from anywhere: this example declares no vocabulary of its own.
+ * The delegation tool's own name — the runner's neutral default
+ * (agent-koans' `DEFAULT_DELEGATION`), written here rather than read from
+ * anywhere since this example declares no vocabulary of its own. Exported
+ * so lifecycle.ts's crash recovery can recognize an unclosed call as a
+ * delegation without repeating the string.
  */
+export const SUBAGENT_TOOL_NAME = 'subagent';
+
+/** Make delegation runnable, over the delegates the run declared. */
 export function createSubagentTool(subagents: SubagentDef[], delegate: Delegate): Tool {
   return {
     def: {
-      name: 'subagent',
+      name: SUBAGENT_TOOL_NAME,
       description:
         'Delegate a focused task to a named subagent. Available: ' +
         subagents.map((s) => (s.description ? `${s.name} (${s.description})` : s.name)).join(', '),
@@ -48,7 +54,7 @@ export function createSubagentTool(subagents: SubagentDef[], delegate: Delegate)
         required: ['name', 'prompt'],
       },
     },
-    async invoke(argsJson, signal) {
+    async invoke(argsJson, signal, callId) {
       const args = parseArgs(argsJson);
       const name = typeof args?.name === 'string' ? args.name : undefined;
       const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined;
@@ -64,7 +70,7 @@ export function createSubagentTool(subagents: SubagentDef[], delegate: Delegate)
       // parent's, and what the parent gets back is this one answer.
       let text: string | undefined;
       try {
-        text = await delegate(prompt, def.context, signal);
+        text = await delegate(prompt, def.context, signal, callId);
       } catch (err) {
         // Not rethrown: losing the model ends the child's conversation,
         // not the run — the parent's model decides what a failed

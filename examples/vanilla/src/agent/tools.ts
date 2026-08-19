@@ -20,8 +20,14 @@ export interface ToolDef {
 /** A tool the model may call: what the model is told about it, and how this agent runs it. */
 export interface Tool {
   def: ToolDef;
-  /** Run one call. Resolves to what goes back to the model — failures as text, too. */
-  invoke(argsJson: string, signal: AbortSignal): Promise<string>;
+  /**
+   * Run one call. Resolves to what goes back to the model — failures as
+   * text, too. `callId` is the wire `tool_call_id` of this invocation;
+   * most tools have no use for it, but the subagent tool does (it is
+   * what lets a delegation's child conversation be found again after a
+   * crash — SPEC.md §3).
+   */
+  invoke(argsJson: string, signal: AbortSignal, callId: string): Promise<string>;
 }
 
 /** Read a call's arguments; `undefined` when the model did not write a JSON object. */

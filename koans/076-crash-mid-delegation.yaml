@@ -1,0 +1,45 @@
+name: crash-mid-delegation
+description: >
+  The agent's process is killed while a delegation is mid-task — the
+  child's tool result already recorded, the child's next model request
+  not yet answered — and started again. The sharp contrast with
+  crash-in-flight-invocation: an in-flight tool invocation crossed into
+  the world, so its outcome is unknown, and it is never re-invoked; a
+  delegation never left the process, so nothing about it is unknown. The
+  child's conversation is part of the run's record — what it had
+  recorded survives the death the way the run's own record does, the
+  child resumes to completion, and the delegation closes with the answer
+  the child was always going to give, never with an unknown outcome.
+
+given:
+  tools:
+    check_stock:
+      description: "Look up the current price of a stock ticker"
+      input_schema:
+        type: object
+        properties:
+          ticker: { type: string }
+        required: [ticker]
+
+prompt: "Have a researcher check NVDA's current stock price and report it."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Look up NVDA's current stock price." }
+  - subagent: researcher
+    when:
+      - request: model
+        response: { tool: check_stock, args: { ticker: "NVDA" } }
+      - request: { tool: check_stock }
+        response: { status: 200, body: { price: 187.42 } }
+      # The child's result is on record; the process — parent, child, and
+      # all — dies here. What was recorded is not unknown, and not redone.
+      - crash
+      - request: model
+        response: "NVDA is trading at $187.42."
+  - request: model
+    response: "NVDA is trading at $187.42."
+
+then:
+  status: completed
+  output: { contains: "187.42" }

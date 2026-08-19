@@ -497,14 +497,17 @@ export function startMockLlm(
     return matches.length === 1 ? matches[0] : undefined;
   };
 
-  // A bare `crash` step parks the exchange after it: whichever process
-  // sends the request for the turn at `crashBefore`, it is answered only
-  // once the runner has killed and restarted the agent (liftCrashGate) —
-  // otherwise the doomed process could race its own death to the next
-  // exchange and settle before dying. A parked request whose process died
-  // leaves with its socket; the recovered one's is served on the lift.
-  const crashBefore = main.conv.crashBefore;
-  let crashLifted = crashBefore === undefined;
+  // A bare `crash` step parks the exchange after it: the request for the
+  // turn at `crashBefore`, on whichever conversation's own trace carries
+  // the step — the main one, or a subagent's mid-delegation — is answered
+  // only once the runner has killed and restarted the agent
+  // (liftCrashGate) — otherwise the doomed process could race its own
+  // death to the next exchange and settle before dying. A parked request
+  // whose process died leaves with its socket; the recovered one's is
+  // served on the lift.
+  const crashScript = scripts.find((s) => s.conv.crashBefore !== undefined);
+  const crashBefore = crashScript?.conv.crashBefore;
+  let crashLifted = crashScript === undefined;
   const parked: Array<{ script: ConversationScript; body: ChatRequest; res: http.ServerResponse; requestNo: number }> = [];
 
   const serve = async (script: ConversationScript, body: ChatRequest, res: http.ServerResponse, requestNo: number): Promise<void> => {
@@ -753,7 +756,7 @@ export function startMockLlm(
       );
       return respond(400, { error: { message: 'mock LLM: request matches no scripted conversation' } });
     }
-    if (!crashLifted && script === scripts[0] && script.served >= (crashBefore as number)) {
+    if (!crashLifted && script === crashScript && script.served >= (crashBefore as number)) {
       const entry = { script, body, res, requestNo };
       parked.push(entry);
       res.on('close', () => {

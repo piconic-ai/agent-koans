@@ -558,9 +558,17 @@ function abortKindOf(trace: Trace): AbortKind {
  * function still has to, against the raw list. `inTurns`/`inSubagent` are
  * context, not shape: they say where this array sits, for the rules that
  * read that context (`abort` and a mid-run `prompt` inside a `turns`
- * koan or a subagent block).
+ * koan or a subagent block). `crashSeen` is threaded through this
+ * function's own recursion into a subagent block, rather than a fresh
+ * local each call: "one death per koan" has to see across that boundary,
+ * which a call-local flag could not.
  */
-function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): Parsed<Trace> {
+function parseTrace(
+  ctx: Ctx<unknown>,
+  inTurns: boolean,
+  inSubagent: boolean,
+  crashSeen: { at?: string } = {},
+): Parsed<Trace> {
   const { node, at } = ctx;
   // Unquoted, unlike the callers above: they already reject a missing or
   // empty `when` before calling this, quoting the YAML key itself
@@ -583,8 +591,6 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
   if (bareRetryAt !== -1) {
     return problem(`${at}[${bareRetryAt}]: "retry" names what the caller re-sends — write "retry: prompt"`);
   }
-
-  let crashed = false;
 
   let abort = false;
   let abortRetried = false;
@@ -651,16 +657,13 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
           `${at_i}: "crash" cannot appear inside a turn's own trace — a mid-submission death is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself`,
         );
       }
-      if (inSubagent) {
-        return problem(`${at_i}: "crash" cannot appear inside a subagent block — the process that dies is the whole agent's`);
-      }
       if (abort) {
         return problem(`${at_i}: "crash" cannot share a trace with "abort" — one ending per run is all this format scripts`);
       }
-      if (crashed) {
-        return problem(`${at_i}: a trace carries at most one "crash" — one death and one recovery per koan`);
+      if (crashSeen.at !== undefined) {
+        return problem(`${at_i}: a second "crash" — one death per koan, wherever it lands`);
       }
-      crashed = true;
+      crashSeen.at = at_i;
       steps.push({ kind: 'crash' });
       continue;
     }
@@ -716,7 +719,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       if (typeof block.subagent !== 'string' || block.subagent.length === 0) {
         return problem(`${at_i}.subagent must be a non-empty delegate name`);
       }
-      const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), false, true);
+      const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), false, true, crashSeen);
       if (isProblem(childTrace)) return childTrace;
       const childLast = childTrace.steps[childTrace.steps.length - 1];
       const settles =
@@ -853,10 +856,10 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
         if (abort) {
           return problem(`${at_i}: "crash" cannot share a trace with "abort" — one ending per run is all this format scripts`);
         }
-        if (crashed) {
-          return problem(`${at_i}: a trace carries at most one "crash" — one death and one recovery per koan`);
+        if (crashSeen.at !== undefined) {
+          return problem(`${at_i}: a second "crash" — one death per koan, wherever it lands`);
         }
-        crashed = true;
+        crashSeen.at = at_i;
       }
       const r = disconnects || never || crashes ? undefined : (res as { status: number; body?: unknown });
       if (rawPrompt !== undefined) {

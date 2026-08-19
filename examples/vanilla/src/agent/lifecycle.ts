@@ -10,8 +10,10 @@ import path from 'node:path';
 import { foldOnRequest, type RunEvent } from './compaction.js';
 import { runConversation, type Conversation } from './conversation.js';
 import { createModelClient, type ChatMessage, type ToolCall } from './model.js';
-import { createRun, type Run, type RunSetup } from './run.js';
+import { createRun, type Run, type RunHooks, type RunSetup } from './run.js';
+import { SUBAGENT_TOOL_NAME } from './subagents.js';
 import type { Tool } from './tools.js';
+import type { ConversationSize } from './window.js';
 
 /**
  * What makes one agent a particular agent: what it is told it is, and what
@@ -43,6 +45,16 @@ interface RunSession {
   state: RunState;
   run: Run;
   conversation: Conversation;
+  /**
+   * Every delegation currently in flight, keyed by the parent's own
+   * `tool_call_id` for it — main's or a nested delegate's, this map is
+   * flat regardless of depth, since a `tool_call_id` is unique across the
+   * whole run. An entry lives here from its child's first recorded
+   * message (`onChildStart`, run.ts) until its delegation closes
+   * (`onChildEnd`): what remains is exactly what a crash could still
+   * catch mid-delegation, which is what `resume()` needs to find again.
+   */
+  children: Map<string, Conversation>;
   /** What the run was submitted with — kept to rebuild `run` after a crash, which loses the in-memory Run itself. */
   setup: RunSetup;
   /**
@@ -82,6 +94,8 @@ interface RunRow {
   setup: RunSetup;
   messages: ChatMessage[];
   size: { used: number };
+  /** `RunSession.children`, in the same shape a wire row keeps every conversation in: no `onRecord` (it is reattached on reload), no `context` (SPEC.md §3 does not require a delegation's window to survive a crash to be conformant, and the koans do not exercise the combination — a real durable agent may keep it). */
+  children: Record<string, { messages: ChatMessage[]; size: ConversationSize }>;
   /** Not elapsed wall-clock time: a resumed run re-arms `max_duration_ms` from zero — only the request count survives a crash here. */
   budgetUsed: number;
   queued: string[];
@@ -114,6 +128,9 @@ export function createAgent(
       setup: session.setup,
       messages: session.conversation.messages,
       size: session.conversation.size,
+      children: Object.fromEntries(
+        [...session.children].map(([callId, conv]) => [callId, { messages: conv.messages, size: conv.size }]),
+      ),
       budgetUsed: session.run.budget.used,
       queued: session.queued,
     }));
@@ -147,9 +164,92 @@ export function createAgent(
     };
   }
 
+  // Closes every call still open on a conversation's last turn — the one
+  // the crash caught. Ordinarily interrupted (SPEC.md §3: nothing was
+  // recorded, so the outcome is unknown). A delegation is different when
+  // its child made it into `children`: the child never left the process,
+  // so nothing about it is unknown either — it is resumed to its own real
+  // answer instead, recursively, since a grandchild delegation the same
+  // death left open is repaired by the same rule. Reports whether it
+  // changed anything, and records the change (`conv.onRecord`) when it did
+  // — the same save the conversation's own turns already trigger.
+  async function repairUnclosedCalls(conv: Conversation, children: Map<string, Conversation>, run: Run): Promise<boolean> {
+    const { messages } = conv;
+    let turnIndex = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
+        turnIndex = i;
+        break;
+      }
+    }
+    if (turnIndex === -1) return false;
+    const closedIds = new Set(
+      messages
+        .slice(turnIndex + 1)
+        .filter((m) => m.role === 'tool')
+        .map((m) => m.tool_call_id),
+    );
+    let changed = false;
+    for (const call of messages[turnIndex].tool_calls ?? []) {
+      if (closedIds.has(call.id)) continue;
+      const child = call.function.name === SUBAGENT_TOOL_NAME ? children.get(call.id) : undefined;
+      if (child === undefined) {
+        messages.push(interruptedClosure(call));
+      } else {
+        const text = await resumeChild(child, children, run);
+        // Dead weight from here: the delegation this child answered has
+        // closed, its record now fully carried by the tool message below.
+        children.delete(call.id);
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: text ?? `Error: subagent delegation did not finish before the model-request budget ran out`,
+        });
+      }
+      changed = true;
+    }
+    if (changed) conv.onRecord?.();
+    return changed;
+  }
+
+  // A delegation's child, settled to its own final answer: already
+  // recorded (an assistant reply with no `tool_calls`), or reached by
+  // repairing whatever the crash left open on its own last turn and
+  // running the rest of its loop forward — no abort signal of its own,
+  // since a resumed child runs to completion the way the koan's own
+  // record does, outside any caller's cancellation window that had not
+  // even reopened yet.
+  async function resumeChild(conv: Conversation, children: Map<string, Conversation>, run: Run): Promise<string | undefined> {
+    const last = conv.messages.at(-1);
+    if (last?.role === 'assistant' && !(last.tool_calls && last.tool_calls.length > 0)) {
+      return last.content ?? '';
+    }
+    await repairUnclosedCalls(conv, children, run);
+    return runConversation(conv, run, new AbortController().signal);
+  }
+
+  // Wires a session's `children` map into the hooks `createRun` gives its
+  // delegations: a child conversation is registered the moment it starts
+  // (and saved right away, so a crash before its own first message still
+  // finds it) and dropped once its delegation closes — `save` reattached
+  // here rather than persisted, since a function cannot survive JSON.
+  function childHooks(children: Map<string, Conversation>): RunHooks {
+    return {
+      onChildStart: (callId, conv) => {
+        conv.onRecord = save;
+        children.set(callId, conv);
+        save();
+      },
+      onChildEnd: (callId) => {
+        children.delete(callId);
+      },
+    };
+  }
+
   // Closes any invocation the crash caught in flight (SPEC.md §3), then
   // resumes the loop from the recorded history.
-  function resume(session: RunSession): void {
+  async function resume(session: RunSession): Promise<void> {
     const { messages } = session.conversation;
     const last = messages.at(-1);
     if (last?.role === 'assistant' && !(last.tool_calls && last.tool_calls.length > 0)) {
@@ -160,30 +260,7 @@ export function createAgent(
       startNextTurn(session);
       return;
     }
-    let turnIndex = -1;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-        turnIndex = i;
-        break;
-      }
-    }
-    if (turnIndex !== -1) {
-      const closedIds = new Set(
-        messages
-          .slice(turnIndex + 1)
-          .filter((m) => m.role === 'tool')
-          .map((m) => m.tool_call_id),
-      );
-      let changed = false;
-      for (const call of messages[turnIndex].tool_calls ?? []) {
-        if (!closedIds.has(call.id)) {
-          messages.push(interruptedClosure(call));
-          changed = true;
-        }
-      }
-      if (changed) save();
-    }
+    await repairUnclosedCalls(session.conversation, session.children, session.run);
     runTurn(session);
   }
 
@@ -194,16 +271,23 @@ export function createAgent(
     const existing = runId === undefined ? undefined : sessions.get(runId);
     if (existing !== undefined) return existing.state;
     const state: RunState = { run_id: runId ?? `r_${crypto.randomUUID()}`, status: 'running', events: [] };
+    const children = new Map<string, Conversation>();
     const session: RunSession = {
       state,
-      run: createRun(parts, setup, (event) => {
-        state.events.push(event);
-        // A completed fold's own onRecord save (right after) covers the
-        // rewrite and this event together — saving here first would let
-        // a crash land between the two. "started"/"failed" have no such
-        // following save.
-        if (event.phase !== 'completed') save();
-      }),
+      run: createRun(
+        parts,
+        setup,
+        (event) => {
+          state.events.push(event);
+          // A completed fold's own onRecord save (right after) covers the
+          // rewrite and this event together — saving here first would let
+          // a crash land between the two. "started"/"failed" have no such
+          // following save.
+          if (event.phase !== 'completed') save();
+        },
+        undefined,
+        childHooks(children),
+      ),
       setup,
       // The run's own `context` provisions the run's own conversation
       // (SPEC.md §3) — a delegate's conversation carries its own instead
@@ -214,6 +298,7 @@ export function createAgent(
         context: setup.context,
         onRecord: save,
       },
+      children,
       queued: [],
       maxDurationMs: setup.limits?.max_duration_ms,
     };
@@ -229,6 +314,16 @@ export function createAgent(
   // map — resuming inline here would rewrite runs.json before later rows
   // in this loop were reseated, dropping them from that write.
   const reseated = loadRows().map((row) => {
+    // Seeded from the row rather than left empty: a delegation still open
+    // at the crash must be found here for `resume()` to rebuild and run —
+    // `onRecord` is reattached the same way the main conversation's is,
+    // since a function cannot survive JSON.
+    const children = new Map<string, Conversation>(
+      Object.entries(row.children ?? {}).map(([callId, child]) => [
+        callId,
+        { messages: child.messages, size: child.size, onRecord: save },
+      ]),
+    );
     const session: RunSession = {
       state: row.state,
       run: createRun(
@@ -241,9 +336,11 @@ export function createAgent(
           if (event.phase !== 'completed') save();
         },
         row.budgetUsed,
+        childHooks(children),
       ),
       setup: row.setup,
       conversation: { messages: row.messages, size: row.size, context: row.setup.context, onRecord: save },
+      children,
       queued: row.queued,
       maxDurationMs: row.setup.limits?.max_duration_ms,
     };
@@ -251,7 +348,7 @@ export function createAgent(
     return session;
   });
   for (const session of reseated) {
-    if (session.state.status === 'running') resume(session);
+    if (session.state.status === 'running') void resume(session);
     // A terminal row can still carry a queue: same drain sendPrompt does
     // when no turn is in flight.
     else if (session.queued.length > 0) startNextTurn(session);

@@ -5,7 +5,7 @@
 // which is the agent's to drive (agent.ts).
 import { createBudget, type Budget, type RunLimits } from './budget.js';
 import type { ReportEvent } from './compaction.js';
-import { runConversation } from './conversation.js';
+import { runConversation, type Conversation } from './conversation.js';
 import type { ModelClient } from './model.js';
 import { createSubagentTool, type Delegate, type SubagentDef } from './subagents.js';
 import { createDeclaredTool, type Tool, type ToolDef } from './tools.js';
@@ -42,8 +42,22 @@ export interface Run {
   model: ModelClient;
 }
 
+/**
+ * What a run's caller (lifecycle.ts) needs to know about a delegation's
+ * child conversation, for durability (SPEC.md §3): that it exists, from
+ * the moment it starts, and that it stops mattering once its delegation
+ * closes. Optional throughout — a caller that persists nothing may omit
+ * both.
+ */
+export interface RunHooks {
+  /** A child conversation has started; `conv` is the same object `delegate` runs, so its messages keep growing in place. */
+  onChildStart?: (callId: string, conv: Conversation) => void;
+  /** The delegation this child answered has closed — nothing about the child is worth keeping past this point. */
+  onChildEnd?: (callId: string) => void;
+}
+
 /** Assemble a run from what it was submitted with. `spent` resumes a prior process's own request count (SPEC.md §3). */
-export function createRun(parts: AgentParts, setup: RunSetup, report: ReportEvent, spent = 0): Run {
+export function createRun(parts: AgentParts, setup: RunSetup, report: ReportEvent, spent = 0, hooks?: RunHooks): Run {
   const tools = new Map<string, Tool>();
   const run: Run = {
     tools,
@@ -57,8 +71,15 @@ export function createRun(parts: AgentParts, setup: RunSetup, report: ReportEven
   // `context` is the delegate's own declaration, not the run's: absent
   // when the run declared this delegate none, which is what leaves its
   // conversation with no window and no threshold (SPEC.md §3).
-  const delegate: Delegate = (briefing, context, signal) =>
-    runConversation({ messages: [{ role: 'user', content: briefing }], size: { used: 0 }, context }, run, signal);
+  const delegate: Delegate = async (briefing, context, signal, callId) => {
+    const conv: Conversation = { messages: [{ role: 'user', content: briefing }], size: { used: 0 }, context };
+    hooks?.onChildStart?.(callId, conv);
+    try {
+      return await runConversation(conv, run, signal);
+    } finally {
+      hooks?.onChildEnd?.(callId);
+    }
+  };
 
   for (const def of setup.tools) register(tools, createDeclaredTool(def, parts.toolsBaseUrl));
   // Registered after the run's own, so a run that declares one of these

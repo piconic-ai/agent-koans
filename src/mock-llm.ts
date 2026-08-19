@@ -144,7 +144,7 @@ function conversationValues(trace: Trace): Map<string, string[]> {
   const issuedPrompts = (conv: Conversation): string[] =>
     conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.prompt));
   const receivedFinals = (conv: Conversation): string[] =>
-    conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.final));
+    conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.final).filter((f): f is string => f !== undefined));
   // A failure crosses the same seam a final reply does: the endpoint's
   // refusal is scripted into the conversation it refused, and it is the
   // delegation's outcome in the conversation that delegated.
@@ -312,6 +312,9 @@ function checkCoherence(
   // that failed instead of answering has its failure carried the same
   // way: the parent's model cannot react to an outcome it was not told.
   for (const d of delegations) {
+    // No content check for a refused delegation: its phrasing is the
+    // agent's own, same as a refused tool call's above.
+    if (d.undeclared) continue;
     if (d.fails !== undefined) {
       const indicators = [String(d.fails.status), ...scalarLeaves(d.fails.body)];
       if (!indicators.some((s) => text.includes(s))) {
@@ -320,7 +323,7 @@ function checkCoherence(
             `the request carries none of ${JSON.stringify(indicators)}, so the model cannot know the delegation failed`,
         );
       }
-    } else if (d.final.length > 0 && !text.includes(d.final)) {
+    } else if ((d.final ?? '').length > 0 && !text.includes(d.final ?? '')) {
       violations.push(
         `request #${requestNo}: subagent "${d.subagent}"'s final reply did not reach ${label(conv)} — ` +
           `the delegation must be closed with the child's final answer`,
@@ -390,7 +393,7 @@ function turnValues(conv: Conversation, uptoIndex: number): string[] {
       }
       if (member.readsFile !== undefined) values.push(member.readsFile);
     }
-    for (const d of turn.delegations ?? []) values.push(d.final);
+    for (const d of turn.delegations ?? []) if (d.final !== undefined) values.push(d.final);
   }
   return values;
 }

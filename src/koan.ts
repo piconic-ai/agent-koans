@@ -93,10 +93,22 @@ export interface DelegationInstruction {
   subagent: string;
   /** The briefing that opens the delegate's conversation. */
   prompt: string;
-  /** The delegate's final reply, lifted from the subagent block that scripts it. Empty when the child never answered — it failed, or the run's abort cut it off. */
-  final: string;
+  /**
+   * The delegate's final reply, lifted from the subagent block that
+   * scripts it. Empty when the child never answered — it failed, or the
+   * run's abort cut it off. Absent only for an `undeclared` delegation,
+   * which has no block.
+   */
+  final?: string;
   /** The model API failure that ended the child instead of a reply; the parent's next request must carry it as the delegation's outcome. */
   fails?: HttpResponse;
+  /**
+   * Set when this delegation names someone outside the run's declared
+   * roster (`given.subagents`): no subagent block exists for it, the mock
+   * still emits its tool call, and only its closure is checked — never
+   * the refusal's phrasing.
+   */
+  undeclared?: boolean;
 }
 
 /** One compiled model turn of a trace. */
@@ -298,10 +310,10 @@ function compileCallTool(instr: CallInstruction): CallToolInstruction {
 }
 
 function compileDelegationInstruction(instr: DelegateInstruction): DelegationInstruction {
-  // `final` is filled in once the matching subagent block compiles, right
-  // after this turn is pushed — the block is mandatory (parse.ts), so a
-  // placeholder can never survive to runtime.
-  return { subagent: instr.subagent, prompt: instr.prompt, final: '' };
+  // `final` is not seeded here: the matching subagent block assigns it,
+  // and its absence after the walk is what marks an undeclared name
+  // (compileSteps' sweep).
+  return { subagent: instr.subagent, prompt: instr.prompt };
 }
 
 function compileModelTurn(response: ModelResponse, usedTokens: number): ModelTurn {
@@ -448,6 +460,16 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
       }
       default:
         assertNever(step);
+    }
+  }
+
+  // Swept from the turns rather than `delegationBySubagent`: the map
+  // keeps one entry per name, and a name hallucinated twice must mark
+  // every instance. No `final` means no block compiled for it — legal
+  // only for a name outside a declared roster (parse.ts).
+  for (const turn of conv.turns) {
+    for (const d of turn.delegations ?? []) {
+      if (d.final === undefined) d.undeclared = true;
     }
   }
 }

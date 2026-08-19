@@ -61,19 +61,25 @@ export interface Given {
   limits?: { max_model_requests?: number; max_duration_ms?: number };
   /** The window the run's own conversation grows into, and when to fold it down. */
   context?: ContextSetup;
-  /** Subagent name → what the run declares for it beyond its existence. Names come from the trace; an entry here only provisions one. */
+  /**
+   * Subagent name → what the run declares for it beyond its existence.
+   * Absent, every delegated name is declared implicitly by its block.
+   * Written at all, it is the run's complete roster: a delegation naming
+   * anything outside it is scripted as refused and carries no subagent
+   * block — the way a call to an undeclared tool carries no tool request.
+   */
   subagents?: Record<string, SubagentSetup>;
 }
 
 /**
- * What the run declares for one delegate beyond its existence. `context`
- * is required — an entry declaring nothing would provision nothing, so
- * there is no reason to write one — but the shape is a mapping rather than
- * `context` itself so a future declaration can grow another field beside
- * it without every existing entry changing shape.
+ * What the run declares for one delegate beyond its existence — possibly
+ * nothing (`{}`): once `given.subagents` is a roster, the key alone tells
+ * a real delegate apart from a hallucinated name. The shape is a mapping
+ * rather than `context` itself so a future declaration can grow another
+ * field beside it without every existing entry changing shape.
  */
 export interface SubagentSetup {
-  context: ContextSetup;
+  context?: ContextSetup;
 }
 
 /**

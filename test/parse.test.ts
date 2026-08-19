@@ -253,18 +253,6 @@ const rows: Row[] = [
     message: 'given.subagents["researcher"] has unknown key "description" (allowed: context)',
   },
   {
-    rule: 'a "given.subagents" entry needs "context"',
-    yaml: koan(`
-      given:
-        subagents:
-          researcher: {}
-      when:
-        - request: model
-          response: ok
-    `),
-    message: 'given.subagents["researcher"] needs "context" — an entry declaring nothing would provision nothing',
-  },
-  {
     rule: 'a "given.subagents" entry\'s "context" is well-formed',
     yaml: koan(`
       given:
@@ -1076,6 +1064,50 @@ const rows: Row[] = [
               response: { tool: x, args: {} }
     `),
     message: `when[1]: a subagent block must end with the child's final text reply or its model API failure — what came of the delegation is what returns to the parent`,
+  },
+  {
+    rule: 'a subagent block\'s name must be a "given.subagents" key, once the run declares a roster',
+    yaml: koan(`
+      given:
+        subagents:
+          researcher: {}
+      when:
+        - request: model
+          response: { subagent: researcher, prompt: "go look" }
+        - subagent: field-scout
+          when:
+            - request: model
+              response: ok
+    `),
+    message: `when[1]: subagent block "field-scout" is not in given.subagents — when the run declares its delegates, a conversation can only belong to one of them`,
+  },
+  {
+    rule: 'a declared roster still requires a block for a delegation to one of its own keys',
+    yaml: koan(`
+      given:
+        subagents:
+          researcher: {}
+      when:
+        - request: model
+          response: { subagent: researcher, prompt: "go look" }
+    `),
+    message: `when[1]: delegation to "researcher" has no following "subagent" block — every delegation's conversation must be scripted`,
+  },
+  {
+    rule: 'a declared roster still refuses a delegation to a name outside it, even when a block follows',
+    yaml: koan(`
+      given:
+        subagents:
+          researcher: {}
+      when:
+        - request: model
+          response: { subagent: field-scout, prompt: "go look" }
+        - subagent: field-scout
+          when:
+            - request: model
+              response: ok
+    `),
+    message: `when[1]: subagent block "field-scout" is not in given.subagents — when the run declares its delegates, a conversation can only belong to one of them`,
   },
   {
     rule: 'a trace entry needs "request"',

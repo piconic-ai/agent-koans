@@ -258,14 +258,9 @@ function parseSubagents(raw: unknown): Parsed<Record<string, SubagentSetup> | un
         return problem(`given.subagents["${name}"] has unknown key "${key}" (allowed: context)`);
       }
     }
-    if (e.context === undefined) {
-      return problem(`given.subagents["${name}"] needs "context" — an entry declaring nothing would provision nothing`);
-    }
     const context = parseContext(e.context, `given.subagents["${name}"].context`);
     if (isProblem(context)) return context;
-    // Non-undefined: parseContext only returns undefined for undefined
-    // input, and `e.context` was just checked to be defined.
-    built[name] = { context: context as ContextSetup };
+    built[name] = { context };
   }
   return built;
 }
@@ -1375,24 +1370,41 @@ function checkFoldsReachTheirConversation(steps: Step[], at: string): Problem | 
   return undefined;
 }
 
-/** Unlike a tool call, a delegation has no round trip a koan may omit: it must be answered. */
+/**
+ * Unlike a tool call, a delegation has no round trip a koan may omit: it
+ * must be answered — unless it names someone outside a declared roster,
+ * which must have no block at all. The roster rule rides the same walk:
+ * both decide which delegations get a block.
+ */
 function everyDelegationHasABlock(koan: KoanFile): Problem | undefined {
+  const roster = koan.given.subagents ? new Set(Object.keys(koan.given.subagents)) : undefined;
   for (const { steps, at } of scriptedTraces(koan)) {
-    const found = checkDelegationsResolved(steps, at);
+    const found = checkDelegationsResolved(steps, at, roster);
     if (found) return found;
   }
   return undefined;
 }
 
-function checkDelegationsResolved(steps: Step[], at: string): Problem | undefined {
+// `roster` is threaded through the recursion rather than re-derived per
+// block: it is the whole run's, not each conversation's own. A non-roster
+// delegation is dropped from `unresolved` rather than flagged — it is
+// intentionally blockless, the way an undeclared tool call gets no tool
+// request.
+function checkDelegationsResolved(steps: Step[], at: string, roster: Set<string> | undefined): Problem | undefined {
   let unresolved: Array<{ subagent: string; prompt: string }> = [];
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const at_i = `${at}[${i}]`;
     if (step.kind === 'model') {
       if (unresolved.length > 0) return problem(unresolvedDelegationMessage(at_i, unresolved));
-      unresolved = step.response.kind === 'instructions' ? step.response.instructions.filter(isDelegate) : [];
+      const delegations = step.response.kind === 'instructions' ? step.response.instructions.filter(isDelegate) : [];
+      unresolved = roster ? delegations.filter((d) => roster.has(d.subagent)) : delegations;
     } else if (step.kind === 'subagent') {
+      if (roster && !roster.has(step.name)) {
+        return problem(
+          `${at_i}: subagent block "${step.name}" is not in given.subagents — when the run declares its delegates, a conversation can only belong to one of them`,
+        );
+      }
       const di = unresolved.findIndex((d) => d.subagent === step.name);
       if (di === -1) {
         return problem(
@@ -1400,7 +1412,7 @@ function checkDelegationsResolved(steps: Step[], at: string): Problem | undefine
         );
       }
       unresolved.splice(di, 1);
-      const found = checkDelegationsResolved(step.trace.steps, `${at_i}.when`);
+      const found = checkDelegationsResolved(step.trace.steps, `${at_i}.when`, roster);
       if (found) return found;
     }
   }

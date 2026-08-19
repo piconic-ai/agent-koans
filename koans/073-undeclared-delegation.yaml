@@ -1,0 +1,49 @@
+name: undeclared-delegation
+description: >
+  The model delegates to a subagent name the run never declared — a
+  hallucination, not a typo the mock plays along with. The agent must
+  open no child conversation: the refusal is the delegation's outcome, it
+  reaches the parent's model the way an unknown tool call's does (004),
+  and the model corrects itself with a delegation to the one name the run
+  did declare. An implementation that wants open-ended, on-demand
+  delegation offers it under a declared name of its own — a
+  general-purpose delegate a caller names in `given.subagents` like any
+  other — never by serving a name that does not exist, which is a
+  hallucination the model deserves to hear about.
+
+given:
+  subagents:
+    researcher: {}
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+prompt: "Have someone look up incident INC-9 and report its operator code."
+
+when:
+  - request: model
+    response: { subagent: field-scout, prompt: "Head out to the INC-9 site and confirm the operator code on the equipment tag." }
+  # no subagent block here: "field-scout" names no delegate this run
+  # declared — no conversation opens, and the refusal is the delegation's
+  # outcome
+  - request: model
+    response: { subagent: researcher, prompt: "Look up incident INC-9 and report its operator code." }
+  - subagent: researcher
+    when:
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-9" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "Q-9-4471" } }
+      - request: model
+        response: "INC-9's operator code is Q-9-4471."
+  - request: model
+    response: "INC-9's operator code is Q-9-4471."
+
+then:
+  status: completed
+  output: { contains: "Q-9-4471" }

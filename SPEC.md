@@ -246,7 +246,10 @@ streaming (`stream: true`, SSE) or not, as your client prefers. When a run
 declares tools, every request of the conversation its prompt opened MUST
 carry function definitions for all of them; what a delegate is given is
 your business. A tool call is answered with a `role: "tool"` message whose
-`tool_call_id` matches it.
+`tool_call_id` matches it, and whatever the tool answered reaches the
+model exactly as it came back — however large. Nothing here says a
+size earns different treatment: a declared tool's result MUST NOT be
+truncated, summarized, or otherwise altered on its way to the model.
 
 You execute a declared tool at `POST {KOAN_TOOLS_URL}/invoke/{name}`, the
 parsed arguments as the body. A status of 400 or above is a failure. So
@@ -393,6 +396,7 @@ it cannot drift from the contract it indexes.
 | [069-tool-timeout](./koans/069-tool-timeout.yaml) | The tool declares how long an invocation of it is waited for (`timeout_ms`), and the tool server accepts the call and never answers. The agent must give the invocation up at the declared timeout — not sooner: a declared wait is a promise to wait — with the timeout reaching the model as a tool failure, and the run carrying on to a graceful answer instead of dying. The agent must not re-invoke on its own; there is no follow-up call here, so exactly one invocation is made. |
 | [070-retry-abort](./koans/070-retry-abort.yaml) | The caller's abort arrives twice — the same delivery, retried, once the run has already settled from the first. The second must be accepted too, and it must not rewrite the committed result: repeated aborts are idempotent (SPEC.md §3). |
 | [071-retry-compact](./koans/071-retry-compact.yaml) | The caller's ask for a fold arrives twice — the same ask, re-sent while the fold it brought about is still summarizing. The repeat must not start a second fold: it joins the one already running, and both answers wait for that one fold to settle (SPEC.md §3). |
+| [072-result-size-fidelity](./koans/072-result-size-fidelity.yaml) | A tool's result comes back large — tens of kilobytes, well past anything else in the suite. The agent must forward it to the model whole: nothing here says a size earns different treatment, and no declared tool's result is truncated, summarized, or otherwise altered on its way to the model (SPEC.md §4). |
 
 <!-- koan-index:end -->
 

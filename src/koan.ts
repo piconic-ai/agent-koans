@@ -96,19 +96,17 @@ export interface DelegationInstruction {
   /**
    * The delegate's final reply, lifted from the subagent block that
    * scripts it. Empty when the child never answered — it failed, or the
-   * run's abort cut it off. Absent when `undeclared` is set: there is no
-   * subagent block to lift a reply from.
+   * run's abort cut it off. Absent only for an `undeclared` delegation,
+   * which has no block.
    */
   final?: string;
   /** The model API failure that ended the child instead of a reply; the parent's next request must carry it as the delegation's outcome. */
   fails?: HttpResponse;
   /**
    * Set when this delegation names someone outside the run's declared
-   * roster (`given.subagents`, when the koan writes one) — parse.ts
-   * guarantees it then has no subagent block. The mock still emits it as
-   * a real tool call (the model's hallucination is real wire traffic);
-   * the agent's own refusal phrasing is unchecked, the same as a refused
-   * tool call's — see mock-llm.ts's `checkCoherence`.
+   * roster (`given.subagents`): no subagent block exists for it, the mock
+   * still emits its tool call, and only its closure is checked — never
+   * the refusal's phrasing.
    */
   undeclared?: boolean;
 }
@@ -312,10 +310,9 @@ function compileCallTool(instr: CallInstruction): CallToolInstruction {
 }
 
 function compileDelegationInstruction(instr: DelegateInstruction): DelegationInstruction {
-  // `final` is filled in once the matching subagent block compiles, right
-  // after this turn is pushed. A name outside a declared roster gets no
-  // such block (parse.ts) and is swept into `undeclared` once this
-  // conversation's whole step list has been walked (compileSteps, below).
+  // `final` is not seeded here: the matching subagent block assigns it,
+  // and its absence after the walk is what marks an undeclared name
+  // (compileSteps' sweep).
   return { subagent: instr.subagent, prompt: instr.prompt };
 }
 
@@ -466,11 +463,14 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
     }
   }
 
-  // A delegation left in the map with no `final` never met a matching
-  // subagent block in this same step list — legal only for a name outside
-  // a declared roster (parse.ts), so that is what it must have been.
-  for (const d of delegationBySubagent.values()) {
-    if (d.final === undefined) d.undeclared = true;
+  // Swept from the turns rather than `delegationBySubagent`: the map
+  // keeps one entry per name, and a name hallucinated twice must mark
+  // every instance. No `final` means no block compiled for it — legal
+  // only for a name outside a declared roster (parse.ts).
+  for (const turn of conv.turns) {
+    for (const d of turn.delegations ?? []) {
+      if (d.final === undefined) d.undeclared = true;
+    }
   }
 }
 

@@ -159,6 +159,13 @@ export interface ModelTurn {
   abort?: 'live' | 'late';
   /** Set alongside a live `abort`: the caller's abort delivered a second time once the run has settled from the first (`- retry: abort`). */
   abortRetried?: boolean;
+  /**
+   * Set alongside a live `abort`: the agent's process dies right after
+   * the abort was delivered and before the run settled (`- crash`,
+   * written right after `- abort`) — the restarted process must still
+   * settle the run `aborted` (SPEC.md §3).
+   */
+  abortCrashed?: boolean;
 }
 
 /**
@@ -597,6 +604,7 @@ function compileTrace(trace: ParsedTrace, briefing: string): Trace {
   compileSteps(trace.steps, main, conversations);
   if (trace.abort !== undefined) main.turns.at(-1)!.abort = trace.abort;
   if (trace.abortRetried) main.turns.at(-1)!.abortRetried = true;
+  if (trace.abortCrashed) main.turns.at(-1)!.abortCrashed = true;
   const boundaries = promptBoundaries(main);
   if (boundaries.length > 0) main.followUps = boundaries;
   return { conversations };

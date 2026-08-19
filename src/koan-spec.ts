@@ -195,6 +195,15 @@ export interface Trace {
    * not already.
    */
   abortRetried?: boolean;
+  /**
+   * The agent's process dies right after a live `- abort` was delivered
+   * and before the run settled (`- crash`, written right after `- abort`)
+   * — the restarted process must still settle the run `aborted` (SPEC.md
+   * §3: an accepted abort is durable intent, so a death never rewrites
+   * it). Live only, the same as `abortRetried`: a late abort already
+   * settled, so a death after it tests nothing new.
+   */
+  abortCrashed?: boolean;
 }
 
 /** Derived: `live` cancels a run in progress, `late` one already settled. */

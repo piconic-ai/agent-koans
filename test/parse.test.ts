@@ -929,7 +929,7 @@ const rows: Row[] = [
     message: 'when[0]: "crash" needs at least one exchange before it — a run must exist before its process can die',
   },
   {
-    rule: '"crash" cannot appear inside a "turns" koan',
+    rule: '"crash" cannot appear inside a turn\'s own trace',
     yaml: turnsKoan(`
       - prompt: a
         when:
@@ -937,7 +937,8 @@ const rows: Row[] = [
             response: ok
           - crash
     `),
-    message: 'turns[0].when[1]: "crash" cannot appear inside a "turns" koan — killing the agent between scripted turns is not supported yet',
+    message:
+      'turns[0].when[1]: "crash" cannot appear inside a turn\'s own trace — a mid-submission death is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
   },
   {
     rule: '"crash" cannot appear inside a subagent block',
@@ -986,7 +987,53 @@ const rows: Row[] = [
           - request: { tool: x }
             response: crash
     `),
-    message: 'turns[0].when[1]: a tool step answered "crash" cannot appear inside a "turns" koan — killing the agent between scripted turns is not supported yet',
+    message:
+      'turns[0].when[1]: a tool step answered "crash" cannot appear inside a "turns" koan — a mid-invocation death is not supported here yet, and the "- crash" entry of "turns" scripts a different death: between two turns, with nothing in flight',
+  },
+  {
+    rule: '"crash" cannot open a "turns" koan',
+    yaml: bareKoan(`
+      turns:
+        - crash
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+    `),
+    message: 'turns[0]: "crash" cannot open the koan — the record it tests is written by the turns before it',
+  },
+  {
+    rule: '"crash" cannot be the last entry of "turns"',
+    yaml: bareKoan(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - crash
+    `),
+    message: 'turns[1]: nothing follows this "crash" — a koan that ends at the death tests nothing about recovery',
+  },
+  {
+    rule: '"turns" carries at most one "crash"',
+    yaml: bareKoan(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - crash
+        - prompt: b
+          when:
+            - request: model
+              response: ok
+        - crash
+        - prompt: c
+          when:
+            - request: model
+              response: ok
+    `),
+    message: 'turns[3]: a second "crash" — one death per koan; what survives it is the same record however often you kill the process',
   },
   {
     rule: 'a tool step answered "crash" cannot carry "prompt"',

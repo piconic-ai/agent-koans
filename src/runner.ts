@@ -686,6 +686,14 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             }
           }
           const entry = koan.turns[t];
+          if (entry.kind === 'crash') {
+            // The previous prompt turn was already judged above, against
+            // a fully settled run: nothing is in flight here, so the
+            // settlement this loop already polled for is the whole
+            // synchronization a between-turns death needs.
+            await crashAndRecover();
+            continue;
+          }
           if (entry.kind === 'compact') {
             const before = foldsEnded(run);
             const askInit = {

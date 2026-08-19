@@ -120,8 +120,15 @@ export type Body =
  * another, so they are two shapes rather than one carrying a flag — an
  * ask has no prompt to send and no outcome to judge, and the fold it
  * brings about is its own exchange, not the next prompt's.
+ *
+ * `'crash'` is the third: the agent's process is killed between the
+ * earlier turn's settlement and the next turn's prompt. Nothing is in
+ * flight at that seam — the earlier submission has already been judged,
+ * the next has not been sent — so it is written as a bare literal rather
+ * than a shape of its own, the same way YAML writes it. What must survive
+ * is the record, not any exchange this entry itself could carry.
  */
-export type Turn = PromptTurn | CompactTurn;
+export type Turn = PromptTurn | CompactTurn | 'crash';
 
 /** The caller sent a prompt. `trace` is absent where no model request followed it. */
 export interface PromptTurn {

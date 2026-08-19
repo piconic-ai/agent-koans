@@ -657,9 +657,6 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       if (abort) {
         return problem(`${at_i}: "crash" cannot share a trace with "abort" — one ending per run is all this format scripts`);
       }
-      if (steps.length === 0) {
-        return problem(`${at_i}: "crash" needs at least one exchange before it — a run must exist before its process can die`);
-      }
       if (crashed) {
         return problem(`${at_i}: a trace carries at most one "crash" — one death and one recovery per koan`);
       }

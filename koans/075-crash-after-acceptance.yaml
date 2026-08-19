@@ -1,0 +1,22 @@
+name: crash-after-acceptance
+description: >
+  The death lands at the earliest point there is: the run was accepted,
+  and nothing else ever happened — no model request, no work, only the
+  acceptance itself on record. That record is enough. The restarted
+  process must still resolve the same run and drive it to the answer it
+  was always going to give; a doomed process's own first request, if it
+  got one off, died with it — the recovered process asks again, which
+  is recovery, not a retry (SPEC.md §3).
+
+prompt: "Log operator code R-6-3390 for the overnight shift."
+
+when:
+  # The acceptance is on record; the process that accepted dies before
+  # the model ever hears anything.
+  - crash
+  - request: model
+    response: "Logged operator code R-6-3390."
+
+then:
+  status: completed
+  output: { contains: "R-6-3390" }

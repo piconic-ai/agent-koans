@@ -561,13 +561,16 @@ function abortKindOf(trace: Trace): AbortKind {
  * koan or a subagent block). `crashSeen` is threaded through this
  * function's own recursion into a subagent block, rather than a fresh
  * local each call: "one death per koan" has to see across that boundary,
- * which a call-local flag could not.
+ * which a call-local flag could not. `kind` records which shape the one
+ * death seen so far was — only a tool step answered "crash" leaves room
+ * for a second, and only directly after it (checked locally, against
+ * `prev`, since that adjacency does not cross the recursion boundary).
  */
 function parseTrace(
   ctx: Ctx<unknown>,
   inTurns: boolean,
   inSubagent: boolean,
-  crashSeen: { at?: string } = {},
+  crashSeen: { at?: string; kind?: 'tool' | 'bare' } = {},
 ): Parsed<Trace> {
   const { node, at } = ctx;
   // Unquoted, unlike the callers above: they already reject a missing or
@@ -660,10 +663,21 @@ function parseTrace(
       if (abort) {
         return problem(`${at_i}: "crash" cannot share a trace with "abort" — one ending per run is all this format scripts`);
       }
-      if (crashSeen.at !== undefined) {
-        return problem(`${at_i}: a second "crash" — one death per koan, wherever it lands`);
+      // One death per koan, except the one pair this admits: the death
+      // that already reached this trace was a tool step answered
+      // "crash" (below), and this bare "crash" directly follows it — the
+      // recovery's own first request, caught in flight in turn. Anywhere
+      // else a second "crash" still means a second, ungrounded death.
+      const directlyAfterToolCrash = prev?.kind === 'tool' && 'crash' in prev.response;
+      if (crashSeen.at !== undefined && !directlyAfterToolCrash) {
+        return problem(
+          crashSeen.kind === 'tool'
+            ? `${at_i}: a second "crash" is admitted only directly after the tool step it recovers from — landing anywhere else is just a second, ungrounded death`
+            : `${at_i}: a second "crash" — one death per koan, wherever it lands`,
+        );
       }
       crashSeen.at = at_i;
+      crashSeen.kind = 'bare';
       steps.push({ kind: 'crash' });
       continue;
     }
@@ -863,6 +877,7 @@ function parseTrace(
           return problem(`${at_i}: a second "crash" — one death per koan, wherever it lands`);
         }
         crashSeen.at = at_i;
+        crashSeen.kind = 'tool';
       }
       const r = disconnects || never || crashes ? undefined : (res as { status: number; body?: unknown });
       if (rawPrompt !== undefined) {

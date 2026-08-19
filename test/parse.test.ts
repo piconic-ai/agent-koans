@@ -966,12 +966,13 @@ const rows: Row[] = [
     yaml: koan(`
       when:
         - request: model
-          response: { tool: x, args: {} }
-        - request: { tool: x }
-          response: crash
+          response: ok
+        - crash
+        - request: model
+          response: ok
         - crash
     `),
-    message: 'when[2]: a second "crash" — one death per koan, wherever it lands',
+    message: 'when[3]: a second "crash" — one death per koan, wherever it lands',
   },
   {
     rule: 'a koan carries at most one "crash", across the main trace and a subagent block',
@@ -989,6 +990,49 @@ const rows: Row[] = [
             - crash
     `),
     message: 'when[3].when[1]: a second "crash" — one death per koan, wherever it lands',
+  },
+  {
+    rule: 'a tool step answered "crash" admits at most one bare "crash" after it too',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: crash
+        - request: model
+          response: { tool: y, args: {} }
+        - request: { tool: y }
+          response: crash
+    `),
+    message: 'when[3]: a second "crash" — one death per koan, wherever it lands',
+  },
+  {
+    rule: 'a bare "crash" following a tool step answered "crash" must come directly after it',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: crash
+        - request: model
+          response: ok
+        - crash
+    `),
+    message:
+      'when[3]: a second "crash" is admitted only directly after the tool step it recovers from — landing anywhere else is just a second, ungrounded death',
+  },
+  {
+    rule: 'the tool-crash/bare-crash pair is admitted once, not chained further',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: crash
+        - crash
+        - crash
+    `),
+    message: 'when[3]: a second "crash" — one death per koan, wherever it lands',
   },
   {
     rule: 'a tool step answered "crash" cannot appear inside a "turns" koan',

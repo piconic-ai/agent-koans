@@ -39,10 +39,13 @@ interface MockLlm {
     violations: string[];
   };
   /**
-   * Opens the crash gate a bare `crash` step armed (Conversation's
-   * `crashBefore`): parked requests are served, later ones flow. The
-   * runner calls this once the restarted agent is healthy; a no-op for a
-   * trace that scripts no crash.
+   * Consumes the next lift of the crash gate a `crash` step armed
+   * (Conversation's `crashBefore`): parked requests are served now; later
+   * ones flow too, unless the sequence has a further death still ahead of
+   * this one, in which case the gate closes again for them. The runner
+   * calls this once the restarted agent is healthy — once per death, in
+   * order; a no-op for a trace that scripts no crash, or once the
+   * sequence is already fully lifted.
    */
   liftCrashGate(): void;
   close(): Promise<void>;
@@ -505,10 +508,32 @@ export function startMockLlm(
   // death to the next exchange and settle before dying. A parked request
   // whose process died leaves with its socket; the recovered one's is
   // served on the lift.
+  //
+  // `crashBefore` is a SEQUENCE now, not a single threshold: the crash
+  // that reaches this conversation's gate may itself be followed by
+  // another (a tool invocation's own crash, then the recovery's own),
+  // and each needs its own lift before the gate opens for good. `stage`
+  // is how many of the sequence's lifts have landed so far; a request
+  // parks only against the threshold its own stage names, so a lift that
+  // is not the sequence's last leaves the gate closed rather than open —
+  // a request already parked stays parked (re-checked against the new
+  // stage, `gated` below), and the next one to arrive parks again too.
+  // A single-crash trace's sequence has one entry, so its first (and
+  // only) lift opens the gate for good, same as always.
   const crashScript = scripts.find((s) => s.conv.crashBefore !== undefined);
   const crashBefore = crashScript?.conv.crashBefore;
-  let crashLifted = crashScript === undefined;
+  let crashStage = 0;
   const parked: Array<{ script: ConversationScript; body: ChatRequest; res: http.ServerResponse; requestNo: number }> = [];
+
+  // Whether a request for `script` still belongs behind the gate at the
+  // CURRENT stage — checked both when a fresh request arrives and again
+  // when a lift fires, since a lift that only advances the stage (not
+  // the last one) must not wave through a request parked under an
+  // earlier stage's threshold: the death still ahead of it has not
+  // landed yet, and serving early is exactly the race this gate exists
+  // to prevent.
+  const gated = (script: ConversationScript): boolean =>
+    crashBefore !== undefined && crashStage < crashBefore.length && script === crashScript && script.served >= crashBefore[crashStage];
 
   const serve = async (script: ConversationScript, body: ChatRequest, res: http.ServerResponse, requestNo: number): Promise<void> => {
     const respond = (status: number, payload: unknown) => {
@@ -756,7 +781,7 @@ export function startMockLlm(
       );
       return respond(400, { error: { message: 'mock LLM: request matches no scripted conversation' } });
     }
-    if (!crashLifted && script === crashScript && script.served >= (crashBefore as number)) {
+    if (gated(script)) {
       const entry = { script, body, res, requestNo };
       parked.push(entry);
       res.on('close', () => {
@@ -776,8 +801,18 @@ export function startMockLlm(
   });
 
   const liftCrashGate = (): void => {
-    crashLifted = true;
-    for (const p of parked.splice(0)) {
+    if (crashBefore !== undefined && crashStage < crashBefore.length) crashStage += 1;
+    // Re-checked against the new stage, not released unconditionally: a
+    // request parked under an earlier stage may still be gated by this
+    // one (a sequence's non-final lift), and must stay parked rather
+    // than serving into a death that has not happened yet.
+    const [release, keep] = [
+      parked.filter((p) => !gated(p.script)),
+      parked.filter((p) => gated(p.script)),
+    ];
+    parked.length = 0;
+    parked.push(...keep);
+    for (const p of release) {
       void serve(p.script, p.body, p.res, p.requestNo).catch((err: unknown) => {
         state.violations.push(
           `request #${p.requestNo} crashed the mock after crash recovery: ${err instanceof Error ? err.message : String(err)}`,

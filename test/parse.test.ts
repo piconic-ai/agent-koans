@@ -535,7 +535,7 @@ const rows: Row[] = [
         - request: model
           response: again
     `),
-    message: `when[2]: nothing can follow "abort" — it must be the trace's last step, or "retry: abort"`,
+    message: `when[2]: nothing can follow "abort" — it must be the trace's last step, "retry: abort", or "crash"`,
   },
   {
     rule: 'two bare "abort"s in a row still falls to "nothing follows"',
@@ -546,7 +546,7 @@ const rows: Row[] = [
         - abort
         - abort
     `),
-    message: `when[2]: nothing can follow "abort" — it must be the trace's last step, or "retry: abort"`,
+    message: `when[2]: nothing can follow "abort" — it must be the trace's last step, "retry: abort", or "crash"`,
   },
   {
     rule: 'a real step with a stray "retry" key after "abort" still falls to "nothing follows"',
@@ -559,7 +559,7 @@ const rows: Row[] = [
           response: again
           retry: prompt
     `),
-    message: `when[2]: nothing can follow "abort" — it must be the trace's last step, or "retry: abort"`,
+    message: `when[2]: nothing can follow "abort" — it must be the trace's last step, "retry: abort", or "crash"`,
   },
   {
     rule: 'a retry step after "abort" has no other key',
@@ -951,7 +951,7 @@ const rows: Row[] = [
       'turns[0].when[1].when[1]: "crash" cannot appear inside a turn\'s own trace — a mid-submission death is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
   },
   {
-    rule: '"crash" cannot share a trace with "abort"',
+    rule: 'a bare "crash" before "abort" still cannot share a trace with it',
     yaml: koan(`
       when:
         - request: model
@@ -959,7 +959,58 @@ const rows: Row[] = [
         - crash
         - abort
     `),
-    message: 'when[1]: "crash" cannot share a trace with "abort" — one ending per run is all this format scripts',
+    message:
+      'when[1]: "crash" cannot share a trace with "abort" — the only pairing this format admits is a bare "crash" ' +
+      'directly after a live "abort", the trace\'s last two steps; anywhere else, one ending per run is all this format scripts',
+  },
+  {
+    rule: 'a tool step answered "crash" before "abort" still cannot share a trace with it',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: crash
+        - abort
+    `),
+    message:
+      'when[1]: "crash" cannot share a trace with "abort" — the only pairing this format admits is a bare "crash" ' +
+      'directly after a live "abort", not a tool step\'s own; anywhere else, one ending per run is all this format scripts',
+  },
+  {
+    rule: '"crash" after "abort" only follows a live abort',
+    yaml: koan(`
+      when:
+        - request: model
+          response: ok
+        - abort
+        - crash
+    `),
+    message: 'when: "crash" only follows a live abort — a late one already settled, and a death after it tests nothing new',
+  },
+  {
+    rule: '"crash" after "abort" still owes the one-crash-per-koan rule',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { subagent: r, prompt: "go" }
+        - subagent: r
+          when:
+            - request: model
+              response: { tool: t, args: {} }
+            - request: { tool: t }
+              response: { status: 200 }
+            - crash
+            - request: model
+              response: done
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - abort
+        - crash
+    `),
+    message: 'when[5]: a second "crash" — one death per koan, wherever it lands',
   },
   {
     rule: 'a koan carries at most one "crash"',

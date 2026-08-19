@@ -180,7 +180,11 @@ everything of the run still unsettled: the turn in flight, a prompt
 accepted but not yet answered, and a delegation mid-task all stop with
 it — nothing may serve any of them afterwards. A run that has
 already settled MUST keep the state it settled on: a late abort never
-rewrites a committed result, and repeated aborts are idempotent.
+rewrites a committed result, and repeated aborts are idempotent. An
+abort you accepted is durable intent: if your process dies before the
+run settled, the run MUST still settle `aborted` once a process is
+back — a death never rewrites an accepted abort, the way a late abort
+never rewrites a committed result.
 
 **Follow-up prompts.** A prompt sent to a settled run MUST re-open it:
 `status` returns to `running`, the run reaches a terminal state again, and
@@ -433,6 +437,7 @@ it cannot drift from the contract it indexes.
 | [075-crash-after-acceptance](./koans/075-crash-after-acceptance.yaml) | The death lands at the earliest point there is: the run was accepted, and nothing else ever happened — no model request, no work, only the acceptance itself on record. That record is enough. The restarted process must still resolve the same run and drive it to the answer it was always going to give; a doomed process's own first request, if it got one off, died with it — the recovered process asks again, which is recovery, not a retry (SPEC.md §3). |
 | [076-crash-mid-delegation](./koans/076-crash-mid-delegation.yaml) | The agent's process is killed while a delegation is mid-task — the child's tool result already recorded, the child's next model request not yet answered — and started again. The sharp contrast with crash-in-flight-invocation: an in-flight tool invocation crossed into the world, so its outcome is unknown, and it is never re-invoked; a delegation never left the process, so nothing about it is unknown. The child's conversation is part of the run's record — what it had recorded survives the death the way the run's own record does, the child resumes to completion, and the delegation closes with the answer the child was always going to give, never with an unknown outcome. |
 | [077-crash-during-recovery](./koans/077-crash-during-recovery.yaml) | The death lands twice: first while a tool invocation is in flight — 068's position, leaving an unclosed call the recovery must repair — and again while the recovered process is making that very repair, its own first model request in flight. What the first recovery wrote is recorded work like any other: the closure it gave the interrupted invocation is final, so the third process must not invoke that call again behind it — the tool is invoked exactly once across all three lives, and the model hears the unknown outcome exactly once. A recovery reads what it owes off the record rather than counting it, so no crash shape leaves the run half-repaired or repaired twice (SPEC.md §3). |
+| [078-abort-survives-crash](./koans/078-abort-survives-crash.yaml) | An accepted abort is durable intent, not a message in flight. 019 says a late abort never rewrites a committed result; this says the mirror — a death never rewrites an accepted abort. The caller aborts a run still working, the process dies before it settled, and the restarted process must still settle it aborted, asking the world for nothing further. |
 
 <!-- koan-index:end -->
 

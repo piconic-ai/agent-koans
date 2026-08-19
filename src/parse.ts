@@ -597,11 +597,19 @@ function parseTrace(
 
   let abort = false;
   let abortRetried = false;
+  // Set here, not inside the per-item loop below: the marker this admits
+  // is popped off `written` before that loop ever sees it (same move as
+  // `retryingAbort`'s), since it is a property of the trace's last turn
+  // (koan.ts), not a step of its own. Whether it is legal at all still
+  // waits on the trace being built — a late abort already settled, so
+  // this cannot be confirmed until `abortKindOf` has something to read.
+  let abortCrashed = false;
   const abortAt = written.findIndex((s) => s === 'abort');
   if (abortAt !== -1) {
     const after = written.slice(abortAt + 1);
-    // The one thing that may follow "abort": the caller's own abort,
-    // delivered again — anything else ends the trace here, same as today.
+    // The two things that may follow "abort": the caller's own abort,
+    // delivered again, or the process dying before the run settled —
+    // anything else ends the trace here, same as today.
     const retryingAbort =
       after.length === 1 &&
       typeof after[0] === 'object' &&
@@ -609,9 +617,10 @@ function parseTrace(
       !Array.isArray(after[0]) &&
       'retry' in after[0] &&
       !('request' in after[0]);
-    if (after.length > 1 || (after.length === 1 && !retryingAbort)) {
+    const crashingAbort = after.length === 1 && after[0] === 'crash';
+    if (after.length > 1 || (after.length === 1 && !retryingAbort && !crashingAbort)) {
       return problem(
-        `${at}[${abortAt + 1}]: nothing can follow "abort" — it must be the trace's last step, or "retry: abort"`,
+        `${at}[${abortAt + 1}]: nothing can follow "abort" — it must be the trace's last step, "retry: abort", or "crash"`,
       );
     }
     if (inTurns) {
@@ -637,6 +646,10 @@ function parseTrace(
       written.pop();
       abortRetried = true;
     }
+    if (crashingAbort) {
+      written.pop();
+      abortCrashed = true;
+    }
     written.pop();
     abort = true;
   }
@@ -661,7 +674,10 @@ function parseTrace(
         );
       }
       if (abort) {
-        return problem(`${at_i}: "crash" cannot share a trace with "abort" — one ending per run is all this format scripts`);
+        return problem(
+          `${at_i}: "crash" cannot share a trace with "abort" — the only pairing this format admits is a bare "crash" ` +
+            `directly after a live "abort", the trace's last two steps; anywhere else, one ending per run is all this format scripts`,
+        );
       }
       // One death per koan, except the one pair this admits: the death
       // that already reached this trace was a tool step answered
@@ -871,7 +887,10 @@ function parseTrace(
           return problem(`${at_i}: a tool step answered "crash" cannot appear inside a subagent block — the process that dies is the whole agent's`);
         }
         if (abort) {
-          return problem(`${at_i}: "crash" cannot share a trace with "abort" — one ending per run is all this format scripts`);
+          return problem(
+            `${at_i}: "crash" cannot share a trace with "abort" — the only pairing this format admits is a bare "crash" ` +
+              `directly after a live "abort", not a tool step's own; anywhere else, one ending per run is all this format scripts`,
+          );
         }
         if (crashSeen.at !== undefined) {
           return problem(`${at_i}: a second "crash" — one death per koan, wherever it lands`);
@@ -941,6 +960,19 @@ function parseTrace(
       return problem(`${at}: "retry: abort" only follows a live abort — a late one already tests nothing more by repeating`);
     }
     trace.abortRetried = true;
+  }
+  if (abortCrashed) {
+    if (trace.abort !== 'live') {
+      return problem(`${at}: "crash" only follows a live abort — a late one already settled, and a death after it tests nothing new`);
+    }
+    // Checked only now, not while popping the marker off `written` above:
+    // an earlier crash elsewhere in this same trace is only known once the
+    // steps before it have actually been walked (the loop just above),
+    // same as the ordinary one-crash-per-koan rule this still owes.
+    if (crashSeen.at !== undefined) {
+      return problem(`${at}[${abortAt + 1}]: a second "crash" — one death per koan, wherever it lands`);
+    }
+    trace.abortCrashed = true;
   }
   return trace;
 }

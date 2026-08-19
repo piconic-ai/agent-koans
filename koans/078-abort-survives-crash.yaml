@@ -1,0 +1,30 @@
+name: abort-survives-crash
+description: >
+  An accepted abort is durable intent, not a message in flight. 019 says a
+  late abort never rewrites a committed result; this says the mirror — a
+  death never rewrites an accepted abort. The caller aborts a run still
+  working, the process dies before it settled, and the restarted process
+  must still settle it aborted, asking the world for nothing further.
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - abort
+  - crash
+
+then:
+  status: aborted

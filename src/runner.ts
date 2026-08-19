@@ -479,6 +479,11 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // unreached and the run-timeout deadline below serves only the
       // live-abort wait.
       const abortKind = trace.conversations[0].turns.at(-1)?.abort;
+      // Set alongside a live `abortKind` only: the process dies right
+      // after the abort is delivered and before the run settled, so the
+      // recovered process must still find it settled `aborted` (SPEC.md
+      // §3) — a death never rewrites an accepted abort.
+      const abortCrashed = trace.conversations[0].turns.at(-1)?.abortCrashed === true;
       const deadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
 
       // Fire the abort exactly when the trace says the caller does: as
@@ -521,9 +526,20 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         llm.liftCrashGate();
       };
 
+      // The accepted abort, then — if the trace scripts it — the death:
+      // SIGKILL before the run had any chance to settle from the abort
+      // alone. What the koan asserts is what the restarted process does
+      // with that, not anything this harness has to check itself.
+      const postAbortAndMaybeCrash = async () => {
+        await postAbort();
+        if (abortCrashed) {
+          await crashAndRecover();
+        }
+      };
+
       if (abortKind === 'live' && actions.length === 0) {
         await waitForPreAbortSteps();
-        await postAbort();
+        await postAbortAndMaybeCrash();
       }
 
       for (const [k, action] of actions.entries()) {
@@ -587,7 +603,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
           // accepted and provably unanswered when the abort arrives.
           if (abortKind === 'live' && k === actions.length - 1) {
             await waitForPreAbortSteps();
-            await postAbort();
+            await postAbortAndMaybeCrash();
           }
         } finally {
           // Released even on failure: the tool mock is parked on this,
@@ -613,7 +629,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       const crashCarrier = crashCarrierOf(trace);
       const crashBefore = crashCarrier?.crashBefore;
       const crashThreshold = crashBefore?.at(-1);
-      const crashed = crashBefore !== undefined || actions.some((a) => a.kind === 'crash');
+      const crashed = crashBefore !== undefined || actions.some((a) => a.kind === 'crash') || abortCrashed;
       if (crashThreshold !== undefined) {
         const crashDeadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
         while ((llm.state.served[crashCarrier!.name] ?? 0) < crashThreshold || pending.length !== 0) {

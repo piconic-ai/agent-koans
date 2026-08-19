@@ -260,9 +260,6 @@ function parseSubagents(raw: unknown): Parsed<Record<string, SubagentSetup> | un
     }
     const context = parseContext(e.context, `given.subagents["${name}"].context`);
     if (isProblem(context)) return context;
-    // An entry with no "context" key declares only existence — legal
-    // since `given.subagents`, once written, is the run's whole roster
-    // and a key can matter on its own, with nothing beyond it provisioned.
     built[name] = { context };
   }
   return built;
@@ -1376,8 +1373,8 @@ function checkFoldsReachTheirConversation(steps: Step[], at: string): Problem | 
 /**
  * Unlike a tool call, a delegation has no round trip a koan may omit: it
  * must be answered — unless it names someone outside a declared roster,
- * which must have no block at all (the roster rule, checked here too:
- * both are "which delegations get a block", so one walk covers both).
+ * which must have no block at all. The roster rule rides the same walk:
+ * both decide which delegations get a block.
  */
 function everyDelegationHasABlock(koan: KoanFile): Problem | undefined {
   const roster = koan.given.subagents ? new Set(Object.keys(koan.given.subagents)) : undefined;
@@ -1388,12 +1385,11 @@ function everyDelegationHasABlock(koan: KoanFile): Problem | undefined {
   return undefined;
 }
 
-// `roster` is the run-wide `given.subagents` key set, or undefined when
-// the koan declares none — threaded through the recursion into subagent
-// blocks rather than re-derived there, since it is the whole run's, not
-// each conversation's own. A delegation naming a non-roster name is
-// dropped from `unresolved` rather than flagged: it is intentionally
-// blockless, the way an undeclared tool call gets no tool request.
+// `roster` is threaded through the recursion rather than re-derived per
+// block: it is the whole run's, not each conversation's own. A non-roster
+// delegation is dropped from `unresolved` rather than flagged — it is
+// intentionally blockless, the way an undeclared tool call gets no tool
+// request.
 function checkDelegationsResolved(steps: Step[], at: string, roster: Set<string> | undefined): Problem | undefined {
   let unresolved: Array<{ subagent: string; prompt: string }> = [];
   for (let i = 0; i < steps.length; i++) {

@@ -63,27 +63,20 @@ export interface Given {
   context?: ContextSetup;
   /**
    * Subagent name → what the run declares for it beyond its existence.
-   * Absent, every name a trace delegates to needs no declaration of its
-   * own and gets one implicitly, as before. Written at all, it is the
-   * run's complete roster: a delegation naming one of its keys gets that
-   * entry's declaration (nothing beyond existence, when the entry is
-   * `{}`); a delegation naming anything else is scripted as refused, and
-   * carries no subagent block — the way a call to an undeclared tool
-   * carries no tool request.
+   * Absent, every delegated name is declared implicitly by its block.
+   * Written at all, it is the run's complete roster: a delegation naming
+   * anything outside it is scripted as refused and carries no subagent
+   * block — the way a call to an undeclared tool carries no tool request.
    */
   subagents?: Record<string, SubagentSetup>;
 }
 
 /**
- * What the run declares for one delegate beyond its existence. When
- * `given.subagents` is written at all, it is the run's complete roster,
- * so an entry may declare nothing beyond existence — `{}` — and still be
- * the one thing that tells a real delegate apart from a hallucinated
- * name: the key is what matters, not what the entry carries. `context`
- * is the one thing beyond existence there is yet to declare; the shape
- * is a mapping rather than `context` itself so a future declaration can
- * grow another field beside it without every existing entry changing
- * shape.
+ * What the run declares for one delegate beyond its existence — possibly
+ * nothing (`{}`): once `given.subagents` is a roster, the key alone tells
+ * a real delegate apart from a hallucinated name. The shape is a mapping
+ * rather than `context` itself so a future declaration can grow another
+ * field beside it without every existing entry changing shape.
  */
 export interface SubagentSetup {
   context?: ContextSetup;

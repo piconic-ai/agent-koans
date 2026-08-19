@@ -143,8 +143,6 @@ function conversationValues(trace: Trace): Map<string, string[]> {
     conv.turns.flatMap((t) => (t.call_tools ?? []).flatMap((m) => (m.readsFile !== undefined ? [m.readsFile] : [])));
   const issuedPrompts = (conv: Conversation): string[] =>
     conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.prompt));
-  // An undeclared delegation has no `final` to carry — it never opened a
-  // conversation, so there is no reply to be visible anywhere.
   const receivedFinals = (conv: Conversation): string[] =>
     conv.turns.flatMap((t) => (t.delegations ?? []).map((d) => d.final).filter((f): f is string => f !== undefined));
   // A failure crosses the same seam a final reply does: the endpoint's
@@ -314,9 +312,8 @@ function checkCoherence(
   // that failed instead of answering has its failure carried the same
   // way: the parent's model cannot react to an outcome it was not told.
   for (const d of delegations) {
-    // No content check for a refused delegation: it opened no
-    // conversation, so there is no scripted final to look for, the same
-    // as a refused tool call's report phrasing above.
+    // No content check for a refused delegation: its phrasing is the
+    // agent's own, same as a refused tool call's above.
     if (d.undeclared) continue;
     if (d.fails !== undefined) {
       const indicators = [String(d.fails.status), ...scalarLeaves(d.fails.body)];

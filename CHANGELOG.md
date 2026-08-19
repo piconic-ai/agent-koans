@@ -1,5 +1,17 @@
 # agent-koans
 
+## 0.15.0
+
+### Minor Changes
+
+- 155a635: A `when:` trace may now end with `- abort` followed by `- crash` — the caller's abort accepted while the run is still working, then the agent's process killed before the run settled. Add koan 078, which pins that an accepted abort is durable intent: the restarted process must still settle the run `aborted`, never resuming the turn the abort cut off. SPEC.md §3's Abort paragraph now also states this: a death never rewrites an accepted abort, the way a late abort never rewrites a committed result.
+- edd4352: A `when:` trace may now open with `- crash` — the agent's process killed right after its run's acceptance, before any model exchange. Add koan 075, which pins that the acceptance alone is enough record to recover from: the restarted process must still resolve the run and drive it to the answer it was always going to give. SPEC.md §3 now also states what a crash does to a model request that was in flight and unanswered at the death: the recovered process asks again from the recorded history, as recovery rather than retry.
+- 1dc6bcd: A trace may now script a second death: a bare `- crash` directly after a tool step answered `crash`, landing on the recovery's own first model request. Add koan 077, which pins that a third process reaches exactly the state a single death would have left it in — repairing a record must be idempotent, read off the record rather than counted, so no crash shape leaves a run half-repaired or repaired twice (SPEC.md §3).
+- bd7a9c3: A bare `- crash` may now land inside a subagent block — the whole process dies mid-delegation, not just the child's. Add koan 076, which pins the contrast with an in-flight tool invocation (068): the child's conversation is part of the run's record, it resumes to completion, and the delegation closes with the child's real answer, never an unknown outcome.
+- be2dd46: `turns:` koans may now script `- crash` between two turns — the agent's process killed after one turn settles and before the next prompt is sent. Add koan 074, which pins the contract: a prompt sent after the death lands on the same run, is accepted normally, and is answered from the recorded history.
+- c558705: Add koan 072: a tool's result comes back tens of kilobytes large, and the agent must forward it to the model whole. Nothing in SPEC.md said a size earns different treatment; it does now (§4) — a declared tool's result MUST NOT be truncated, summarized, or otherwise altered on its way to the model.
+- c62ff3f: Add koan 073: the model delegates to a subagent name the run never declared. The agent must open no child conversation — the refusal is the delegation's outcome, and it must reach the parent's model the way an unknown tool call's does (004) — and the run must not end for it. `given.subagents`, once written, is now the run's complete roster: an entry may declare nothing beyond existence (`{}`), and a delegation naming a name outside the map compiles as refused instead of requiring a subagent block.
+
 ## 0.14.0
 
 ### Minor Changes

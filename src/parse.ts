@@ -648,7 +648,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
     if (item === 'crash') {
       if (inTurns) {
         return problem(
-          `${at_i}: "crash" cannot appear inside a turn's own trace — between scripted turns, write it as an entry of "turns" itself`,
+          `${at_i}: "crash" cannot appear inside a turn's own trace — a mid-submission death is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself`,
         );
       }
       if (inSubagent) {
@@ -847,7 +847,7 @@ function parseTrace(ctx: Ctx<unknown>, inTurns: boolean, inSubagent: boolean): P
       if (crashes) {
         if (inTurns) {
           return problem(
-            `${at_i}: a tool step answered "crash" cannot appear inside a "turns" koan — between scripted turns, write it as an entry of "turns" itself`,
+            `${at_i}: a tool step answered "crash" cannot appear inside a "turns" koan — a mid-invocation death is not supported here yet, and the "- crash" entry of "turns" scripts a different death: between two turns, with nothing in flight`,
           );
         }
         if (inSubagent) {

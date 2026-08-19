@@ -938,7 +938,7 @@ const rows: Row[] = [
           - crash
     `),
     message:
-      'turns[0].when[1]: "crash" cannot appear inside a turn\'s own trace — between scripted turns, write it as an entry of "turns" itself',
+      'turns[0].when[1]: "crash" cannot appear inside a turn\'s own trace — a mid-submission death is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
   },
   {
     rule: '"crash" cannot appear inside a subagent block',
@@ -988,7 +988,7 @@ const rows: Row[] = [
             response: crash
     `),
     message:
-      'turns[0].when[1]: a tool step answered "crash" cannot appear inside a "turns" koan — between scripted turns, write it as an entry of "turns" itself',
+      'turns[0].when[1]: a tool step answered "crash" cannot appear inside a "turns" koan — a mid-invocation death is not supported here yet, and the "- crash" entry of "turns" scripts a different death: between two turns, with nothing in flight',
   },
   {
     rule: '"crash" cannot open a "turns" koan',

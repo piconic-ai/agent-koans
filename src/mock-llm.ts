@@ -565,7 +565,10 @@ export function startMockLlm(
 
     // Not asked of a compaction request: it asks the model to summarize
     // rather than to act, so whether it offers tools is not the suite's.
-    if (givenToolNames.length > 0 && !entry.compaction) {
+    // Nor of a delegate's, whose toolset the contract leaves to the
+    // implementation: asked of every conversation, this would fail one
+    // that briefs its delegates more narrowly than the run.
+    if (script === main && givenToolNames.length > 0 && !entry.compaction) {
       const offered = new Set(
         (body.tools ?? []).map((t) => t.function?.name).filter(Boolean),
       );

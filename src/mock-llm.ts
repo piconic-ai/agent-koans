@@ -296,15 +296,33 @@ function checkCoherence(
     if (!('status' in responds)) continue;
 
     const { status, body } = responds;
-    const failed = status >= 400;
-    const indicators = failed ? [String(status), ...scalarLeaves(body)] : scalarLeaves(body);
-    if (indicators.length === 0) continue;
-
     const content = messageText(msg);
-    if (!indicators.some((s) => content.includes(s))) {
+    if (status >= 400) {
+      // Any one indicator, because a failure is told either way (SPEC.md
+      // §1): an implementation that reports the status without the body's
+      // own words, or the words without the status, has told the model the
+      // call failed.
+      const indicators = [String(status), ...scalarLeaves(body)];
+      if (!indicators.some((s) => content.includes(s))) {
+        violations.push(
+          `request #${requestNo}: the tool failure (status ${status}) for "${member.name}" did not reach ` +
+            `the model — the tool message carries none of ${JSON.stringify(indicators)}`,
+        );
+      }
+      continue;
+    }
+    // A success is held to all of them: the result reaches the model as it
+    // came back (SPEC.md §4), and one field out of several would otherwise
+    // satisfy an implementation that dropped the rest. Values only, never
+    // their keys or their punctuation — re-encoding the JSON, or handing
+    // it to the model as text, alters no answer the tool gave.
+    const leaves = scalarLeaves(body);
+    if (leaves.length === 0) continue;
+    const missing = leaves.filter((s) => !content.includes(s));
+    if (missing.length > 0) {
       violations.push(
-        `request #${requestNo}: the tool ${failed ? `failure (status ${status})` : 'result'} for "${member.name}" did not reach ` +
-          `the model — the tool message carries none of ${JSON.stringify(indicators)}`,
+        `request #${requestNo}: the tool result for "${member.name}" did not reach the model whole — ` +
+          `the tool message is missing ${JSON.stringify(missing)}`,
       );
     }
   }

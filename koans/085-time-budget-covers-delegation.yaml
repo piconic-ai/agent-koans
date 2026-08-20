@@ -1,0 +1,36 @@
+name: time-budget-covers-delegation
+description: >
+  The run declares a wall-clock budget and spends it inside a
+  delegation: the child waits on a tool that never answers. Time a
+  delegate spends is the run's time — the budget covers the whole
+  submission, not only the conversation the prompt opened — so the run
+  must end aborted once it expires (SPEC.md §3).
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+  subagents:
+    desk: {}
+  limits:
+    max_duration_ms: 2000
+
+prompt: "Have the desk report the current weather in Osaka."
+
+when:
+  - request: model
+    response: { subagent: desk, prompt: "Look up the current weather in Osaka and report it." }
+  - subagent: desk
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Osaka" } }
+      - request: { tool: get_weather }
+        response: never
+
+then:
+  status: aborted

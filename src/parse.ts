@@ -764,7 +764,16 @@ function parseTrace(
       // only the trace's last step can be that child, since the abort
       // follows it directly.
       const cutOff = abort && i === written.length - 1;
-      if (!settles && !cutOff) {
+      // A declared wall-clock budget cuts a child off the same way, and
+      // leaves the same trace behind: the invocation nothing will answer
+      // is where the submission ends, exactly as it is when the main
+      // conversation is the one waiting there.
+      const outOfTime =
+        ctx.koan.given.limits?.max_duration_ms !== undefined &&
+        i === written.length - 1 &&
+        childLast.kind === 'tool' &&
+        'never' in childLast.response;
+      if (!settles && !cutOff && !outOfTime) {
         return problem(
           `${at_i}: a subagent block must end with the child's final text reply or its model API failure — what came of the delegation is what returns to the parent`,
         );

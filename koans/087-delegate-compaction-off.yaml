@@ -1,0 +1,47 @@
+name: delegate-compaction-off
+description: >
+  A delegate is declared a window and told never to fold, and its
+  conversation runs right up against that window: 95000 of 100000. A
+  delegate's context declaration provisions its conversation the way the
+  run's own does, `off` included — so the delegate must carry its history
+  as it stands, and the trace has no compaction step for a fold to
+  consume (029's contract line, now for a delegate).
+
+given:
+  subagents:
+    researcher:
+      context:
+        window: 100000
+        compaction: off
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+prompt: "Have the researcher look up incident INC-7."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Look up incident INC-7 and report its operator code." }
+  - subagent: researcher
+    when:
+      - request: model
+        response:
+          body: { tool: lookup_incident, args: { id: "INC-7" } }
+          used_tokens: 95000
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "K-7-2280" } }
+      - request: model
+        response:
+          body: "INC-7's operator code is K-7-2280."
+          used_tokens: 96000
+  - request: model
+    response: "The researcher reports INC-7's operator code as K-7-2280."
+
+then:
+  status: completed
+  output: { contains: "K-7-2280" }

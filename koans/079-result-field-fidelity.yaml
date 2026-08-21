@@ -1,0 +1,37 @@
+name: result-field-fidelity
+description: >
+  A tool answers with several fields at once. Every one of them must
+  reach the model, not just the one the agent judged interesting:
+  a result is forwarded as it came back, and keeping one field out of a
+  body alters it as surely as truncating it does (SPEC.md §4).
+
+given:
+  tools:
+    read_gauges:
+      description: "Read every gauge on a vessel"
+      input_schema:
+        type: object
+        properties:
+          vessel: { type: string }
+        required: [vessel]
+
+prompt: "Read the gauges on vessel V-12 and tell me whether any reading is out of range."
+
+when:
+  - request: model
+    response: { tool: read_gauges, args: { vessel: "V-12" } }
+  - request: { tool: read_gauges }
+    response:
+      status: 200
+      body:
+        pressure: "P-4471"
+        temperature: "T-8829"
+        flow: "F-1630"
+        valve: "V-3160"
+        ceiling: "L-7205"
+  - request: model
+    response: "All five gauges read inside the ceiling L-7205: P-4471, T-8829, F-1630, V-3160."
+
+then:
+  status: completed
+  output: { contains: "F-1630" }

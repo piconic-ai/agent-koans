@@ -1,0 +1,32 @@
+name: tool-failure-at-the-boundary
+description: >
+  400 is the lowest status that counts as a failure, and the tool sends
+  nothing with it — so the status itself is the whole of what the model
+  must be told. A 400 is also the one failure an agent is tempted to read
+  as its own fault and repair: the call is made exactly once, and the
+  follow-up is the model's to decide (SPEC.md §4).
+
+given:
+  tools:
+    file_claim:
+      description: "File an insurance claim against a policy"
+      input_schema:
+        type: object
+        properties:
+          policy: { type: string }
+          amount: { type: number }
+        required: [policy, amount]
+
+prompt: "File a claim of 4200 on policy PL-3355 and tell me what happened."
+
+when:
+  - request: model
+    response: { tool: file_claim, args: { policy: "PL-3355", amount: 4200 } }
+  - request: { tool: file_claim }
+    response: { status: 400 }
+  - request: model
+    response: "The claims service rejected the filing for PL-3355, so nothing was filed."
+
+then:
+  status: completed
+  output: { contains: "nothing was filed" }

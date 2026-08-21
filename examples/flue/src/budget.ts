@@ -17,11 +17,20 @@ let budget: number | undefined;
 let used = 0;
 let tripped = false;
 
-/** Arm (or disarm, with undefined) the budget for the run about to start. */
-export function armBudget(maxModelRequests: number | undefined): void {
+/**
+ * Arm (or disarm, with undefined) the budget for the run about to start.
+ * `spent` is what the run had already drawn — zero for a run starting
+ * now, the recorded count for one being recovered after a crash.
+ */
+export function armBudget(maxModelRequests: number | undefined, spent = 0): void {
   budget = maxModelRequests;
-  used = 0;
+  used = spent;
   tripped = false;
+}
+
+/** How many model requests the armed budget has been drawn for so far. */
+export function budgetSpent(): number {
+  return used;
 }
 
 /** Account for one model request; throws instead of letting it exceed the budget. */

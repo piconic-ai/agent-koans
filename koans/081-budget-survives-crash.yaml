@@ -1,0 +1,52 @@
+name: budget-survives-crash
+description: >
+  The run declares a model-request budget, one turn spends half of it,
+  and the process dies between submissions. What was already spent is
+  recorded work like any other: the restarted process carries on with
+  what was left, never with a fresh budget. Two requests remain, the
+  delegation and the child's answer take both, and the second turn ends
+  aborted with the parent never reporting (SPEC.md §3).
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+  subagents:
+    desk: {}
+  limits:
+    max_model_requests: 4
+
+turns:
+  - prompt: "Get the current weather in Tokyo and report it."
+    when:
+      - request: model
+        response: { tool: get_weather, args: { city: "Tokyo" } }
+      - request: { tool: get_weather }
+        response: { status: 200, body: { temp: 31 } }
+      - request: model
+        response: "The weather in Tokyo is 31°C."
+    then:
+      status: completed
+      output: { contains: "31" }
+
+  # Two requests of four are spent and on record. The run is settled, so
+  # nothing is in flight to be lost — only the count itself can be.
+  - crash
+
+  - prompt: "Now have the desk look up Osaka."
+    when:
+      - request: model
+        response: { subagent: desk, prompt: "Look up the current temperature in Osaka." }
+      - subagent: desk
+        when:
+          - request: model
+            response: "33°C."
+      # budget exhausted (two before the death plus two after): the parent
+      # never gets its own next request to report the child's answer
+    then:
+      status: aborted

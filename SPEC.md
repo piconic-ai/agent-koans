@@ -152,7 +152,10 @@ retry. A model request in flight and unanswered at the death is the
 opposite case: nothing of it was recorded and nothing of it reached the
 conversation, so the recovered process asks again from the recorded
 history. That is recovery, not a retry — a question that was never
-answered cost nothing and changed nothing.
+answered cost nothing and changed nothing. What the run had already
+spent of a declared budget is recorded work like anything else: a
+restart MUST NOT hand it a fresh one, and the requests left after the
+death are the requests that were left before it.
 A delegation in flight is not a tool invocation: nothing of it left
 the process, so nothing about it is unknown. The child's conversation
 is part of the run's record — what it had recorded survives the way
@@ -440,6 +443,7 @@ it cannot drift from the contract it indexes.
 | [078-abort-survives-crash](./koans/078-abort-survives-crash.yaml) | An accepted abort is durable intent, not a message in flight. 019 says a late abort never rewrites a committed result; this says the mirror — a death never rewrites an accepted abort. The caller aborts a run still working, the process dies before it settled, and the restarted process must still settle it aborted, asking the world for nothing further. |
 | [079-result-field-fidelity](./koans/079-result-field-fidelity.yaml) | A tool answers with several fields at once. Every one of them must reach the model, not just the one the agent judged interesting: a result is forwarded as it came back, and keeping one field out of a body alters it as surely as truncating it does (SPEC.md §4). |
 | [080-tool-failure-at-the-boundary](./koans/080-tool-failure-at-the-boundary.yaml) | 400 is the lowest status that counts as a failure, and the tool sends nothing with it — so the status itself is the whole of what the model must be told. A 400 is also the one failure an agent is tempted to read as its own fault and repair: the call is made exactly once, and the follow-up is the model's to decide (SPEC.md §4). |
+| [081-budget-survives-crash](./koans/081-budget-survives-crash.yaml) | The run declares a model-request budget, one turn spends half of it, and the process dies between submissions. What was already spent is recorded work like any other: the restarted process carries on with what was left, never with a fresh budget. Two requests remain, the delegation and the child's answer take both, and the second turn ends aborted with the parent never reporting (SPEC.md §3). |
 
 <!-- koan-index:end -->
 

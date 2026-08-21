@@ -8,7 +8,7 @@ import { Hono } from 'hono';
 import { AgentRunError, type AgentInstanceHandle, init, observe } from '@flue/runtime';
 import { sqlite, start } from '@flue/runtime/node';
 import { Assistant, type AssistantData, type RunContext } from './agents/assistant.js';
-import { armBudget, budgetTripped } from './budget.js';
+import { armBudget, budgetSpent, budgetTripped } from './budget.js';
 import { armWindow, noteFoldFailed, noteUsed } from './window.js';
 import { armDuration, declaredDuration } from './duration.js';
 import { compactConversation } from './compaction.js';
@@ -65,6 +65,7 @@ interface RunRow {
   prompt: string;
   initialData: AssistantData;
   limits?: RunLimits;
+  spent?: number;
 }
 
 const rows = new Map<string, RunRow>();
@@ -73,6 +74,10 @@ const stateFile = path.join(config.state.dir, 'runs.json');
 // Temp-then-rename, so a crash mid-write never truncates the record it
 // was meant to protect.
 function saveRuns(): void {
+  // Stamped here rather than by whoever mutates a row: the budget is one
+  // slot for the one run in flight, and every writer would otherwise have
+  // to remember to copy it out.
+  for (const row of rows.values()) if (row.run.status === 'running') row.spent = budgetSpent();
   const tmp = `${stateFile}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify([...rows.values()]));
   fs.renameSync(tmp, stateFile);
@@ -92,6 +97,14 @@ function loadRunRows(): RunRow[] {
 // expose — so this listener only forwards it, and does not have to know
 // when the runtime decided to fold.
 observe((observation, ctx) => {
+  // Ahead of the run lookup, and keyed on the answer rather than on the
+  // draw: a request the model never answered cost nothing (SPEC.md §3),
+  // so recording the draw when it is made would charge a restart for a
+  // question the death erased. Every conversation's turns pass here,
+  // including a delegate's, which the lookup below deliberately misses.
+  // Skipped where no budget was drawn, so a run that declares none keeps
+  // the write pattern it had before there was a count to keep.
+  if (observation.type === 'turn' && observation.response !== undefined && budgetSpent() > 0) saveRuns();
   const run = ctx.id === undefined ? undefined : runsByInstance.get(ctx.id);
   if (!run) return;
   if (observation.type === 'turn' && observation.purpose === 'agent' && observation.response?.usage) {
@@ -241,8 +254,12 @@ for (const row of loadRunRows()) {
   const agent = init(Assistant, { id: run.run_id });
   handles.set(run.run_id, agent);
   runsByInstance.set(agent.id, run);
+  // Outside the `running` branch: the request budget is run-wide, so a
+  // run that had already settled still owes its remainder to whatever
+  // prompt arrives next — left unarmed, a follow-up after a crash would
+  // spend without limit.
+  armBudget(row.limits?.max_model_requests, row.spent ?? 0);
   if (run.status === 'running') {
-    armBudget(row.limits?.max_model_requests);
     armWindow(row.initialData.context?.window);
     armDuration(row.limits?.max_duration_ms);
     runTurn(run, agent, row.prompt, row.initialData, run.run_id);

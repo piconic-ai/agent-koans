@@ -71,8 +71,8 @@ export function createRun(parts: AgentParts, setup: RunSetup, report: ReportEven
   // `context` is the delegate's own declaration, not the run's: absent
   // when the run declared this delegate none, which is what leaves its
   // conversation with no window and no threshold (SPEC.md §3).
-  const delegate: Delegate = async (briefing, context, signal, callId) => {
-    const conv: Conversation = { messages: [{ role: 'user', content: briefing }], size: { used: 0 }, context };
+  const delegate: Delegate = async (briefing, context, signal, callId, depth) => {
+    const conv: Conversation = { messages: [{ role: 'user', content: briefing }], size: { used: 0 }, context, depth };
     hooks?.onChildStart?.(callId, conv);
     try {
       return await runConversation(conv, run, signal);
@@ -85,7 +85,9 @@ export function createRun(parts: AgentParts, setup: RunSetup, report: ReportEven
   // Registered after the run's own, so a run that declares one of these
   // names cannot reroute a capability of the agent's to the tool server.
   for (const tool of parts.own) register(tools, tool);
-  if (setup.subagents.length > 0) register(tools, createSubagentTool(setup.subagents, delegate));
+  if (setup.subagents.length > 0) {
+    register(tools, createSubagentTool(setup.subagents, delegate, setup.limits?.run?.delegation_depth));
+  }
   return run;
 }
 

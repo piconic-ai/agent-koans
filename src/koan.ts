@@ -109,6 +109,15 @@ export interface DelegationInstruction {
    * the refusal's phrasing.
    */
   undeclared?: boolean;
+  /**
+   * Set when this delegation is issued from a conversation already at
+   * `given.limits.run.delegation_depth`: a declared name, but still no
+   * subagent block, for the same reason an `undeclared` one has none — the
+   * cap is crossed before the name is even looked up. Kept apart from
+   * `undeclared` since the two are different rules that happen to compile
+   * to the same shape (mock-llm.ts checks both).
+   */
+  overDepth?: boolean;
 }
 
 /** One compiled model turn of a trace. */
@@ -407,9 +416,14 @@ function matchOpenCall(openCalls: OpenCall[], tool: string, args: ParsedArgs | u
  * `turns:` koan's later turns extend the same conversation), and
  * recursively compiles any subagent block into a fresh
  * Conversation appended to `conversations` — the main one first, then
- * subagents in first-appearance order.
+ * subagents in first-appearance order. `depth` is this conversation's own
+ * (0 for the main one, one more than the parent's for every subagent
+ * block) and `cap` is the run's declared `given.limits.run.
+ * delegation_depth`, if any — both read only by the sweep at the end,
+ * which is where a depth-refused delegation gets marked the same way an
+ * undeclared one does.
  */
-function compileSteps(steps: Step[], conv: Conversation, conversations: Conversation[]): void {
+function compileSteps(steps: Step[], conv: Conversation, conversations: Conversation[], depth = 0, cap?: number): void {
   const delegationBySubagent = new Map<string, DelegationInstruction>();
   let openCalls: OpenCall[] = [];
   // Whether the step just compiled was a tool step answered `crash` —
@@ -441,7 +455,7 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
         const delegation = delegationBySubagent.get(step.name)!;
         const child: Conversation = { name: step.name, parent: conv.name, turns: [], briefing: delegation.prompt };
         conversations.push(child);
-        compileSteps(step.trace.steps, child, conversations);
+        compileSteps(step.trace.steps, child, conversations, depth + 1, cap);
         // A subagent block always closes a delegation from this same
         // conversation's own turns (parse.ts's pairing) — the child's
         // final reply is what returns to the parent. A child that never
@@ -520,10 +534,17 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
   // Swept from the turns rather than `delegationBySubagent`: the map
   // keeps one entry per name, and a name hallucinated twice must mark
   // every instance. No `final` means no block compiled for it — legal
-  // only for a name outside a declared roster (parse.ts).
+  // only for a name outside a declared roster, or one issued at or past
+  // `cap` (parse.ts's own check already proved which; nothing else could
+  // have left `final` unset once that check has passed). Checked here
+  // rather than there: parse.ts's `depth` is the issuing conversation's,
+  // the same `depth` this function already carries for it.
   for (const turn of conv.turns) {
     for (const d of turn.delegations ?? []) {
-      if (d.final === undefined) d.undeclared = true;
+      if (d.final === undefined) {
+        if (cap !== undefined && depth >= cap) d.overDepth = true;
+        else d.undeclared = true;
+      }
     }
   }
 }
@@ -616,11 +637,11 @@ export function actionsDuringOf(trace: Trace): HeldAction[] {
   return actions;
 }
 
-function compileTrace(trace: ParsedTrace, briefing: string): Trace {
+function compileTrace(trace: ParsedTrace, briefing: string, cap?: number): Trace {
   const conversations: Conversation[] = [];
   const main: Conversation = { name: '', turns: [], briefing };
   conversations.push(main);
-  compileSteps(trace.steps, main, conversations);
+  compileSteps(trace.steps, main, conversations, 0, cap);
   if (trace.abort !== undefined) main.turns.at(-1)!.abort = trace.abort;
   if (trace.abortRetried) main.turns.at(-1)!.abortRetried = true;
   if (trace.abortCrashed) main.turns.at(-1)!.abortCrashed = true;
@@ -653,7 +674,10 @@ function compileJudgment(then: ParsedJudgment | undefined): Judgment {
  * drives turn by turn — never vary by variant: only a chosen variant's
  * wire steps do.
  */
-function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): {
+function compileTurnsTrace(
+  turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]],
+  cap?: number,
+): {
   traces: Record<string, Trace>;
   turnSpecs: TurnSpec[];
 } {
@@ -670,7 +694,7 @@ function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): {
   );
 
   const oneOfIndex = turns.findIndex((t) => t !== 'crash' && t.trace?.kind === 'one_of');
-  if (oneOfIndex === -1) return { traces: { '': compileTurnsVariant(turns) }, turnSpecs };
+  if (oneOfIndex === -1) return { traces: { '': compileTurnsVariant(turns, cap) }, turnSpecs };
 
   const variantsTurnTrace = (turns[oneOfIndex] as Exclude<ParsedTurn, 'crash'>).trace as Extract<
     ParsedTurnTrace,
@@ -678,7 +702,7 @@ function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): {
   >;
   const traces: Record<string, Trace> = {};
   for (const variant of Object.keys(variantsTurnTrace.variants)) {
-    traces[variant] = compileTurnsVariant(turns, oneOfIndex, variant);
+    traces[variant] = compileTurnsVariant(turns, cap, oneOfIndex, variant);
   }
   return { traces, turnSpecs };
 }
@@ -686,7 +710,12 @@ function compileTurnsTrace(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]]): {
 // One conforming shape of a `turns:` koan's whole conversation: every
 // turn's own steps in order — the one `one_of` turn's named choice where
 // `turnIndex` names it, every other turn's single `when` trace otherwise.
-function compileTurnsVariant(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]], turnIndex = -1, variant?: string): Trace {
+function compileTurnsVariant(
+  turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]],
+  cap?: number,
+  turnIndex = -1,
+  variant?: string,
+): Trace {
   const conversations: Conversation[] = [];
   const followUps: TurnBoundary[] = [];
   // parse.ts requires the first entry to be a prompt: a run starts from one.
@@ -703,7 +732,7 @@ function compileTurnsVariant(turns: [ParsedTurn, ParsedTurn, ...ParsedTurn[]], t
     if (t.kind === 'prompt' && i > 0) followUps.push({ start: main.turns.length, prompt: t.prompt });
     const steps = turnStepsOf(t, i === turnIndex ? variant : undefined);
     const before = main.turns.length;
-    if (steps) compileSteps(steps, main, conversations);
+    if (steps) compileSteps(steps, main, conversations, 0, cap);
     if (t.kind === 'compact' && t.instructions !== undefined) {
       // Every request the fold costs carries the ask, not just one member
       // of a many-request group (SPEC.md §3: the words must reach the
@@ -783,21 +812,22 @@ function compileKoan(parsed: KoanFile): Koan {
   let prompt: string | undefined;
   let turns: TurnSpec[] | undefined;
   let traces: Record<string, Trace>;
+  const delegationDepthCap = parsed.given.limits?.run?.delegation_depth;
 
   switch (parsed.body.kind) {
     case 'single':
       prompt = parsed.body.prompt;
-      traces = { '': compileTrace(parsed.body.trace, prompt) };
+      traces = { '': compileTrace(parsed.body.trace, prompt, delegationDepthCap) };
       break;
     case 'variants':
       prompt = parsed.body.prompt;
       traces = {};
       for (const [variant, trace] of Object.entries(parsed.body.variants)) {
-        traces[variant] = compileTrace(trace, prompt);
+        traces[variant] = compileTrace(trace, prompt, delegationDepthCap);
       }
       break;
     case 'turns': {
-      const compiled = compileTurnsTrace(parsed.body.turns);
+      const compiled = compileTurnsTrace(parsed.body.turns, delegationDepthCap);
       traces = compiled.traces;
       turns = compiled.turnSpecs;
       break;

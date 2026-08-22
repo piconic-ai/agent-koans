@@ -356,7 +356,15 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
   const port = await getFreePort();
   const base = `http://127.0.0.1:${port}`;
   const totalTurns = trace.conversations.reduce((n, c) => n + c.turns.length, 0);
-  const subagentNames = trace.conversations.filter((c) => c.name !== '').map((c) => c.name);
+  // The run's declared roster when there is one, not the compiled
+  // conversations: a name past `delegation_depth` (or otherwise refused)
+  // still belongs to the roster the real agent must be told about, even
+  // though it compiles no conversation of its own (koan.ts). Without a
+  // declared roster, a koan's delegate names exist only as whichever
+  // conversations its trace compiled — the pre-roster shape (058).
+  const subagentNames = koan.given.subagents
+    ? Object.keys(koan.given.subagents)
+    : trace.conversations.filter((c) => c.name !== '').map((c) => c.name);
 
   // Always created, even without given.files: KOAN_WORKSPACE is part of
   // the environment contract (SPEC.md §2), and an agent must be able to

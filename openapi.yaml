@@ -228,6 +228,19 @@ components:
                   description: >-
                     Maximum number of model requests the run may make in
                     total, every conversation counted.
+                delegation_depth:
+                  type: integer
+                  minimum: 1
+                  description: >-
+                    How many delegation levels below the run's own
+                    conversation may open — 1 means the run's own
+                    conversation may delegate but a delegate may not. Not a
+                    budget: nothing is spent against it request by request,
+                    it is crossed rather than exhausted, and crossing it
+                    ends nothing. A delegation that would cross it opens no
+                    conversation; it is refused the way a delegation to an
+                    undeclared name is, the refusal reaches the conversation
+                    that delegated, and the run carries on.
             prompt:
               type: object
               description: Budgets that restart fresh for every prompt the caller sends.

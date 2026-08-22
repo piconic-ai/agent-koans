@@ -16,7 +16,8 @@ given:
           city: { type: string }
         required: [city]
   limits:
-    max_duration_ms: 2000
+    prompt:
+      duration_ms: 2000
 
 prompt: "Get the current weather in Tokyo and report it."
 

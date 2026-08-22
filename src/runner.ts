@@ -34,12 +34,12 @@ export interface AgentConfig {
 
 const TERMINAL_STATES = new Set(['completed', 'failed', 'aborted']);
 
-// A declared `max_duration_ms` (SPEC.md §3) is checked from both ends: an
+// A declared `limits.prompt.duration_ms` (SPEC.md §3) is checked from both ends: an
 // agent must not still be running well past it (the grace absorbs the
 // mocks' and the poll loop's own overhead, which is not the agent's to
 // answer for), and it must not have settled aborted well before it either
 // (a budget is a ceiling, not a quota to spend — 045's contract line for
-// max_model_requests, restated here for wall time). Both are slack, not
+// limits.run.model_requests, restated here for wall time). Both are slack, not
 // precision: a budget this suite can pin to the millisecond would be
 // pinning the mocks' own timing, not the agent's.
 const TIME_LIMIT_GRACE_MS = 2000;
@@ -82,7 +82,7 @@ function sleep(ms: number): Promise<void> {
 // be charged for time an earlier one already spent waiting.
 //
 // `settled` is what a mid-run prompt adds: a queueing agent settles the
-// submission it interrupted first, so its first terminal state is not the
+// prompt it interrupted first, so its first terminal state is not the
 // run's last word.
 //
 // `onOverrun` lets a caller polling against its own declared budget
@@ -115,12 +115,12 @@ async function pollToTerminal(
   }
 }
 
-// Wraps pollToTerminal with a submission's own declared time budget
+// Wraps pollToTerminal with a prompt's own declared time budget
 // (SPEC.md §3), when `maxDurationMs` is set: the poll deadline becomes
 // the budget plus grace instead of the generic run timeout, and a still-
 // running overrun names the declared field. `elapsed` is read off
 // `acceptedAt` regardless — the caller compares it against the same
-// budget once the submission settles, to catch the opposite failure: an
+// budget once the prompt's work settles, to catch the opposite failure: an
 // agent that gives up before the budget expires.
 async function pollWithinBudget(
   base: string,
@@ -140,7 +140,7 @@ async function pollWithinBudget(
           settled,
           (r) =>
             `run still "${r.status}" ${Date.now() - acceptedAt}ms after acceptance, past ` +
-            `given.limits.max_duration_ms (${maxDurationMs}ms) plus grace`,
+            `given.limits.prompt.duration_ms (${maxDurationMs}ms) plus grace`,
         );
   return { run, elapsed: Date.now() - acceptedAt };
 }
@@ -153,7 +153,7 @@ async function pollWithinBudget(
 function earlyAbortFailure(elapsed: number, maxDurationMs: number): string {
   return (
     `the run settled aborted ${elapsed}ms after acceptance, before its declared ` +
-    `given.limits.max_duration_ms (${maxDurationMs}ms) — a time budget is a ceiling, not permission to stop early`
+    `given.limits.prompt.duration_ms (${maxDurationMs}ms) — a time budget is a ceiling, not permission to stop early`
   );
 }
 
@@ -459,11 +459,11 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       if (submitRes.status !== 201 && submitRes.status !== 202) {
         throw new Error(`POST /runs returned ${submitRes.status}, expected 201 or 202`);
       }
-      // The clock a declared max_duration_ms is measured against
+      // The clock a declared prompt duration budget is measured against
       // (SPEC.md §3) starts here, at acceptance — not wherever below this
       // submission happens to finish polling.
       const openingAcceptedAt = Date.now();
-      const maxDurationMs = koan.given.limits?.max_duration_ms;
+      const maxDurationMs = koan.given.limits?.prompt?.duration_ms;
       const { run_id: runId } = (await submitRes.json()) as { run_id?: string };
       if (typeof runId !== 'string' || runId.length === 0) {
         throw new Error('POST /runs response is missing "run_id"');

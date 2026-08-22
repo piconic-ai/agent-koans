@@ -233,11 +233,18 @@ export type Matcher =
   | boolean
   | { equals?: unknown; contains?: string; matches?: string };
 
-/** Optional per-run budgets, forwarded verbatim to the run submission. */
+/** Optional budgets, forwarded verbatim in the creation request, each written under the scope it covers (SPEC.md §3). */
 export interface RunLimits {
-  max_model_requests?: number;
-  /** Wall-clock budget in milliseconds, per submission, from acceptance to that submission's terminal state (SPEC.md §3). */
-  max_duration_ms?: number;
+  /** Budgets covering the whole run, crash recovery included. */
+  run?: {
+    /** How many model requests the run may make in total, every conversation counted. */
+    model_requests?: number;
+  };
+  /** Budgets that start again at every prompt the caller sends. */
+  prompt?: {
+    /** Wall-clock budget in milliseconds, from a prompt's acceptance to its terminal state. */
+    duration_ms?: number;
+  };
 }
 
 /**

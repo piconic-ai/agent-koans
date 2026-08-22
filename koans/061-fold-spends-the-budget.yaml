@@ -8,7 +8,7 @@ description: >
   request left for it to make.
 
 given:
-  limits: { max_model_requests: 2 }
+  limits: { run: { model_requests: 2 } }
   context:
     window: 100000
     compaction: off

@@ -12,13 +12,13 @@ const MAX_STEPS = 16;
 /**
  * What a run declared about how much it may spend (SPEC.md §3). Both
  * budgets travel on the same wire object, so they share this one type
- * rather than each getting a shape of its own; `max_duration_ms` is
+ * rather than each getting a shape of its own; `prompt.duration_ms` is
  * spent by lifecycle.ts's own timer, not this file's `take()` — a
  * wall-clock ceiling is not a claim this module hands out.
  */
 export interface RunLimits {
-  max_model_requests?: number;
-  max_duration_ms?: number;
+  run?: { model_requests?: number };
+  prompt?: { duration_ms?: number };
 }
 
 /** A claim on one model request. */
@@ -38,7 +38,7 @@ export interface Budget {
 
 /** Open a budget for a run, never wider than this agent's own ceiling. `spent` resumes a prior process's own count. */
 export function createBudget(limits?: RunLimits, spent = 0): Budget {
-  const max = Math.min(MAX_STEPS, limits?.max_model_requests ?? MAX_STEPS);
+  const max = Math.min(MAX_STEPS, limits?.run?.model_requests ?? MAX_STEPS);
   let used = spent;
   return {
     max,

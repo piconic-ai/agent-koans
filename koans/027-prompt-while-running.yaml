@@ -5,8 +5,8 @@ description: >
   settled. The agent must accept it, must not lose it, and must still
   settle with an answer to it. Two processes are acceptable, and the koan
   is silent about which: join the live conversation at the next turn
-  boundary, or queue the prompt as its own turn once the first submission
-  settles. Either way the held tool call is still closed. A delivery at
+  boundary, or queue the prompt as its own turn once the first prompt's
+  work settles. Either way the held tool call is still closed. A delivery at
   any other moment of a run is not covered.
 
 given:

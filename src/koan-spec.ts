@@ -53,12 +53,12 @@ export interface Given {
   /** Relative path → content, materialized into `KOAN_WORKSPACE` (§2). */
   files?: Record<string, string>;
   /**
-   * Budgets the caller lets the agent spend on this run; exhausting any
-   * one of them must end the run `aborted`. `max_duration_ms` is a
-   * wall-clock ceiling measured per submission, from the moment a prompt
-   * is accepted.
+   * Budgets the caller lets the agent spend; exhausting any one of them
+   * must end the run `aborted`. Each budget is written under its scope:
+   * `run` budgets cover the whole run and survive a crash, `prompt`
+   * budgets start again at every prompt the caller sends.
    */
-  limits?: { max_model_requests?: number; max_duration_ms?: number };
+  limits?: { run?: { model_requests?: number }; prompt?: { duration_ms?: number } };
   /** The window the run's own conversation grows into, and when to fold it down. */
   context?: ContextSetup;
   /**
@@ -352,7 +352,7 @@ export interface HttpToolResponse {
  * union rather than an optional `status`, so a response that answers
  * always has one to answer with. `never` is withheld forever — the agent
  * sees neither a status line nor a severed connection, only silence; what
- * a koan pairs it with is a declared `max_duration_ms`, since nothing
+ * a koan pairs it with is a declared `limits.prompt.duration_ms`, since nothing
  * else ends the wait.
  *
  * `crash` is not the tool server's doing at all: while this invocation is

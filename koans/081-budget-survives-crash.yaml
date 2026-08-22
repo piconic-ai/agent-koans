@@ -1,7 +1,7 @@
 name: budget-survives-crash
 description: >
   The run declares a model-request budget, one turn spends half of it,
-  and the process dies between submissions. What was already spent is
+  and the process dies between prompts. What was already spent is
   recorded work like any other: the restarted process carries on with
   what was left, never with a fresh budget. Two requests remain, the
   delegation and the child's answer take both, and the second turn ends
@@ -19,7 +19,8 @@ given:
   subagents:
     desk: {}
   limits:
-    max_model_requests: 4
+    run:
+      model_requests: 4
 
 turns:
   - prompt: "Get the current weather in Tokyo and report it."

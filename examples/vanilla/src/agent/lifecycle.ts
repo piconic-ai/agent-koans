@@ -96,7 +96,7 @@ interface RunRow {
   size: { used: number };
   /** `RunSession.children`, in the same shape a wire row keeps every conversation in: no `onRecord` (it is reattached on reload), no `context` (SPEC.md §3 does not require a delegation's window to survive a crash to be conformant, and the koans do not exercise the combination — a real durable agent may keep it). */
   children: Record<string, { messages: ChatMessage[]; size: ConversationSize }>;
-  /** Not elapsed wall-clock time: a resumed run re-arms `max_duration_ms` from zero — only the request count survives a crash here. */
+  /** Not elapsed wall-clock time: a resumed run re-arms `prompt.duration_ms` from zero — only the request count survives a crash here. */
   budgetUsed: number;
   queued: string[];
 }
@@ -308,7 +308,7 @@ export function createAgent(
       },
       children,
       queued: [],
-      maxDurationMs: setup.limits?.max_duration_ms,
+      maxDurationMs: setup.limits?.prompt?.duration_ms,
     };
     sessions.set(state.run_id, session);
     // Before the turn starts: a crash between acceptance and the first
@@ -350,7 +350,7 @@ export function createAgent(
       conversation: { messages: row.messages, size: row.size, context: row.setup.context, onRecord: save },
       children,
       queued: row.queued,
-      maxDurationMs: row.setup.limits?.max_duration_ms,
+      maxDurationMs: row.setup.limits?.prompt?.duration_ms,
     };
     sessions.set(session.state.run_id, session);
     return session;

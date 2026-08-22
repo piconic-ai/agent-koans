@@ -15,7 +15,8 @@ given:
           city: { type: string }
         required: [city]
   limits:
-    max_model_requests: 3
+    run:
+      model_requests: 3
 
 prompt: "Compare the current temperature in Tokyo and Osaka."
 

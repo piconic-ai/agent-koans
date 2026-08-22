@@ -1,7 +1,7 @@
-name: time-budget-per-submission
+name: time-budget-per-prompt
 description: >
   The run declares a wall-clock budget, and two prompts each spend most
-  of one. The budget belongs to a submission, not to the run: it starts
+  of one. The budget belongs to a prompt, not to the run: it starts
   again at every prompt the caller sends, so the second turn has the
   whole of it however long the first one took. An agent measuring from
   the run's own beginning would give up part-way through the second
@@ -18,7 +18,8 @@ given:
           city: { type: string }
         required: [city]
   limits:
-    max_duration_ms: 2500
+    prompt:
+      duration_ms: 2500
 
 turns:
   - prompt: "Get the current weather in Tokyo and report it."
@@ -41,7 +42,7 @@ turns:
       - request: { tool: get_weather }
         response: never
       # Another 1500ms — past the budget for a run-wide clock, well
-      # inside it for this submission's own.
+      # inside it for this prompt's own.
       - request: model
         response: "Still nothing from the weather service, so I have no reading for Osaka either."
     then:

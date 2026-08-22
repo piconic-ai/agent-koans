@@ -185,13 +185,51 @@ const rows: Row[] = [
     yaml: koan(`
       given:
         limits:
-          max_model_requests: 3
+          run:
+            model_requests: 3
           extra: 1
       when:
         - request: model
           response: ok
     `),
-    message: '"given.limits" has unknown key "extra" (allowed: max_model_requests, max_duration_ms)',
+    message: '"given.limits" has unknown key "extra" — a budget is written under its scope (allowed: run, prompt)',
+  },
+  {
+    rule: 'a flat budget names its scope instead',
+    yaml: koan(`
+      given:
+        limits:
+          max_model_requests: 3
+      when:
+        - request: model
+          response: ok
+    `),
+    message: '"given.limits" has unknown key "max_model_requests" — a budget is written under its scope (allowed: run, prompt)',
+  },
+  {
+    rule: '"given.limits.run" carries only its own budget',
+    yaml: koan(`
+      given:
+        limits:
+          run:
+            duration_ms: 2000
+      when:
+        - request: model
+          response: ok
+    `),
+    message: '"given.limits.run" has unknown key "duration_ms" (allowed: model_requests)',
+  },
+  {
+    rule: '"given.limits.run" declares no budget when empty',
+    yaml: koan(`
+      given:
+        limits:
+          run: {}
+      when:
+        - request: model
+          response: ok
+    `),
+    message: '"given.limits.run" declares no budget',
   },
   {
     rule: '"given.limits" declares no budget when empty',
@@ -205,28 +243,30 @@ const rows: Row[] = [
     message: '"given.limits" declares no budget',
   },
   {
-    rule: '"given.limits.max_model_requests" is a positive integer',
+    rule: '"given.limits.run.model_requests" is a positive integer',
     yaml: koan(`
       given:
         limits:
-          max_model_requests: 0
+          run:
+            model_requests: 0
       when:
         - request: model
           response: ok
     `),
-    message: '"given.limits.max_model_requests" must be a positive integer',
+    message: '"given.limits.run.model_requests" must be a positive integer',
   },
   {
-    rule: '"given.limits.max_duration_ms" is a positive integer',
+    rule: '"given.limits.prompt.duration_ms" is a positive integer',
     yaml: koan(`
       given:
         limits:
-          max_duration_ms: 0
+          prompt:
+            duration_ms: 0
       when:
         - request: model
           response: ok
     `),
-    message: '"given.limits.max_duration_ms" must be a positive integer',
+    message: '"given.limits.prompt.duration_ms" must be a positive integer',
   },
   {
     rule: '"given.subagents" is a mapping of name to declaration',
@@ -514,7 +554,8 @@ const rows: Row[] = [
     yaml: koan(`
       given:
         limits:
-          max_duration_ms: 2000
+          prompt:
+            duration_ms: 2000
       when:
         - request: model
           response: { tool: x, args: {} }
@@ -810,7 +851,7 @@ const rows: Row[] = [
         - request: model
           response: ok
     `),
-    message: 'when[2].retry names what the caller re-sends — only "prompt" (this turn\'s own submission) is supported',
+    message: 'when[2].retry names what the caller re-sends — only "prompt" (this turn\'s own creation request) is supported',
   },
   {
     rule: 'a retry step has no other key',
@@ -840,7 +881,7 @@ const rows: Row[] = [
           - request: model
             response: ok
     `),
-    message: 'turns[0].when[2]: "retry" cannot appear inside a "turns" koan — retrying a follow-up submission is not supported yet',
+    message: 'turns[0].when[2]: "retry" cannot appear inside a "turns" koan — retrying a follow-up prompt is not supported yet',
   },
   {
     rule: '"retry" cannot appear inside a subagent block',
@@ -858,7 +899,7 @@ const rows: Row[] = [
             - request: model
               response: ok
     `),
-    message: 'when[1].when[2]: "retry" cannot appear inside a subagent block — only the caller\'s own submission can be retried',
+    message: 'when[1].when[2]: "retry" cannot appear inside a subagent block — only the caller\'s own request can be retried',
   },
   {
     rule: '"retry" directly follows a tool step',
@@ -878,7 +919,7 @@ const rows: Row[] = [
     rule: '"retry" cannot follow a tool step answered "never"',
     yaml: koan(`
       given:
-        limits: { max_duration_ms: 2000 }
+        limits: { prompt: { duration_ms: 2000 } }
       when:
         - request: model
           response: { tool: x, args: {} }
@@ -928,7 +969,7 @@ const rows: Row[] = [
           - crash
     `),
     message:
-      'turns[0].when[1]: "crash" cannot appear inside a turn\'s own trace — a mid-submission death is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
+      'turns[0].when[1]: "crash" cannot appear inside a turn\'s own trace — a death inside a prompt\'s own work is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
   },
   {
     rule: 'a turn forbids "crash" at every depth — a nested subagent block included',
@@ -948,7 +989,7 @@ const rows: Row[] = [
             response: ok
     `),
     message:
-      'turns[0].when[1].when[1]: "crash" cannot appear inside a turn\'s own trace — a mid-submission death is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
+      'turns[0].when[1].when[1]: "crash" cannot appear inside a turn\'s own trace — a death inside a prompt\'s own work is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
   },
   {
     rule: 'a bare "crash" before "abort" still cannot share a trace with it',
@@ -1320,7 +1361,7 @@ const rows: Row[] = [
       'when[1].response needs a numeric "status" for a tool request, "disconnect" for a connection severed without one, "never" for an invocation accepted and never answered, or "crash" for the agent\'s process killed while it is in flight',
   },
   {
-    rule: '"never" needs a declared "given.limits.max_duration_ms"',
+    rule: '"never" needs a declared "given.limits.prompt.duration_ms"',
     yaml: koan(`
       when:
         - request: model
@@ -1328,7 +1369,7 @@ const rows: Row[] = [
         - request: { tool: x }
           response: never
     `),
-    message: 'when[1]: "never" needs "given.limits.max_duration_ms" or a "timeout_ms" on the tool — nothing else ends the wait',
+    message: 'when[1]: "never" needs "given.limits.prompt.duration_ms" or a "timeout_ms" on the tool — nothing else ends the wait',
   },
   {
     rule: 'a tool "timeout_ms" is a positive integer of milliseconds',
@@ -1349,7 +1390,8 @@ const rows: Row[] = [
     yaml: koan(`
       given:
         limits:
-          max_duration_ms: 2000
+          prompt:
+            duration_ms: 2000
       when:
         - request: model
           response: { tool: x, args: {} }
@@ -2147,7 +2189,8 @@ const rows: Row[] = [
     yaml: `name: x\n${dedent(`
       given:
         limits:
-          max_model_requests: 2
+          run:
+            model_requests: 2
       turns:
         - prompt: a
           when:
@@ -2158,7 +2201,7 @@ const rows: Row[] = [
             - request: { type: model, purpose: compaction }
               response: { body: ["one", "two"], used_tokens: 5, compaction: completed }
     `)}`,
-    message: 'turns scripts 3 model requests, more than given.limits.max_model_requests (2) permits',
+    message: 'turns scripts 3 model requests, more than given.limits.run.model_requests (2) permits',
   },
   {
     rule: 'a tool request carries only "tool" and "args"',
@@ -2252,7 +2295,8 @@ const rows: Row[] = [
     yaml: koan(`
       given:
         limits:
-          max_model_requests: 1
+          run:
+            model_requests: 1
       when:
         - request: model
           response: { tool: x, args: {} }
@@ -2261,7 +2305,7 @@ const rows: Row[] = [
         - request: model
           response: done
     `),
-    message: 'when scripts 2 model requests, more than given.limits.max_model_requests (1) permits',
+    message: 'when scripts 2 model requests, more than given.limits.run.model_requests (1) permits',
   },
 ];
 

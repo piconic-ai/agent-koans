@@ -155,7 +155,7 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
     files = rawFiles as Record<string, string>;
   }
 
-  let limits: { max_model_requests?: number; max_duration_ms?: number } | undefined;
+  let limits: { run?: { model_requests?: number }; prompt?: { duration_ms?: number } } | undefined;
   if (g.limits !== undefined) {
     const rawLimits = g.limits;
     if (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits)) {
@@ -163,31 +163,51 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
     }
     const rl = rawLimits as Record<string, unknown>;
     for (const key of Object.keys(rl)) {
-      if (key !== 'max_model_requests' && key !== 'max_duration_ms') {
-        return problem(`"given.limits" has unknown key "${key}" (allowed: max_model_requests, max_duration_ms)`);
+      if (key !== 'run' && key !== 'prompt') {
+        return problem(`"given.limits" has unknown key "${key}" — a budget is written under its scope (allowed: run, prompt)`);
       }
     }
-    // Each key optional on its own, but a block with neither would budget
-    // nothing at all — that koan should not have written `limits:` to
-    // begin with.
+    // Each scope optional on its own, but a block with neither would
+    // budget nothing at all — that koan should not have written
+    // `limits:` to begin with. The same rule one level down: an empty
+    // scope block is a scope with nothing budgeted.
     if (Object.keys(rl).length === 0) return problem('"given.limits" declares no budget');
-    let max_model_requests: number | undefined;
-    if (rl.max_model_requests !== undefined) {
-      if (!Number.isInteger(rl.max_model_requests) || (rl.max_model_requests as number) < 1) {
-        return problem('"given.limits.max_model_requests" must be a positive integer');
+    const scoped = (scope: 'run' | 'prompt', allowed: string): Record<string, unknown> | Problem | undefined => {
+      if (rl[scope] === undefined) return undefined;
+      const raw = rl[scope];
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+        return problem(`"given.limits.${scope}" must be a mapping`);
       }
-      max_model_requests = rl.max_model_requests as number;
+      const block = raw as Record<string, unknown>;
+      for (const key of Object.keys(block)) {
+        if (key !== allowed) {
+          return problem(`"given.limits.${scope}" has unknown key "${key}" (allowed: ${allowed})`);
+        }
+      }
+      if (Object.keys(block).length === 0) return problem(`"given.limits.${scope}" declares no budget`);
+      return block;
+    };
+    const runBlock = scoped('run', 'model_requests');
+    if (isProblem(runBlock)) return runBlock;
+    const promptBlock = scoped('prompt', 'duration_ms');
+    if (isProblem(promptBlock)) return promptBlock;
+    let model_requests: number | undefined;
+    if (runBlock?.model_requests !== undefined) {
+      if (!Number.isInteger(runBlock.model_requests) || (runBlock.model_requests as number) < 1) {
+        return problem('"given.limits.run.model_requests" must be a positive integer');
+      }
+      model_requests = runBlock.model_requests as number;
     }
-    let max_duration_ms: number | undefined;
-    if (rl.max_duration_ms !== undefined) {
-      if (!Number.isInteger(rl.max_duration_ms) || (rl.max_duration_ms as number) < 1) {
-        return problem('"given.limits.max_duration_ms" must be a positive integer');
+    let duration_ms: number | undefined;
+    if (promptBlock?.duration_ms !== undefined) {
+      if (!Number.isInteger(promptBlock.duration_ms) || (promptBlock.duration_ms as number) < 1) {
+        return problem('"given.limits.prompt.duration_ms" must be a positive integer');
       }
-      max_duration_ms = rl.max_duration_ms as number;
+      duration_ms = promptBlock.duration_ms as number;
     }
     limits = {
-      ...(max_model_requests !== undefined ? { max_model_requests } : {}),
-      ...(max_duration_ms !== undefined ? { max_duration_ms } : {}),
+      ...(model_requests !== undefined ? { run: { model_requests } } : {}),
+      ...(duration_ms !== undefined ? { prompt: { duration_ms } } : {}),
     };
   }
 
@@ -673,7 +693,7 @@ function parseTrace(
     if (item === 'crash') {
       if (inTurns) {
         return problem(
-          `${at_i}: "crash" cannot appear inside a turn's own trace — a mid-submission death is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself`,
+          `${at_i}: "crash" cannot appear inside a turn's own trace — a death inside a prompt's own work is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself`,
         );
       }
       if (abort) {
@@ -713,14 +733,14 @@ function parseTrace(
           return problem(`${at_i}: "retry: abort" must directly follow "abort" — it retries the caller's abort delivery, not a held invocation`);
         }
         return problem(
-          `${at_i}.retry names what the caller re-sends — only "prompt" (this turn's own submission) is supported`,
+          `${at_i}.retry names what the caller re-sends — only "prompt" (this turn's own creation request) is supported`,
         );
       }
       if (inTurns) {
-        return problem(`${at_i}: "retry" cannot appear inside a "turns" koan — retrying a follow-up submission is not supported yet`);
+        return problem(`${at_i}: "retry" cannot appear inside a "turns" koan — retrying a follow-up prompt is not supported yet`);
       }
       if (inSubagent) {
-        return problem(`${at_i}: "retry" cannot appear inside a subagent block — only the caller's own submission can be retried`);
+        return problem(`${at_i}: "retry" cannot appear inside a subagent block — only the caller's own request can be retried`);
       }
       if (prev === undefined || prev.kind !== 'tool') {
         return problem(
@@ -754,7 +774,7 @@ function parseTrace(
       }
       // `inTurns` rides into the child: a block nested in a turn's trace
       // is still inside that turn, so what a turn forbids — a
-      // mid-submission death above all — stays forbidden at every depth.
+      // a death inside a prompt's work above all — stays forbidden at every depth.
       const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), inTurns, true, crashSeen);
       if (isProblem(childTrace)) return childTrace;
       const childLast = childTrace.steps[childTrace.steps.length - 1];
@@ -766,10 +786,10 @@ function parseTrace(
       const cutOff = abort && i === written.length - 1;
       // A declared wall-clock budget cuts a child off the same way, and
       // leaves the same trace behind: the invocation nothing will answer
-      // is where the submission ends, exactly as it is when the main
+      // is where the prompt's work ends, exactly as it is when the main
       // conversation is the one waiting there.
       const outOfTime =
-        ctx.koan.given.limits?.max_duration_ms !== undefined &&
+        ctx.koan.given.limits?.prompt?.duration_ms !== undefined &&
         i === written.length - 1 &&
         childLast.kind === 'tool' &&
         'never' in childLast.response;
@@ -882,11 +902,11 @@ function parseTrace(
       // failure than refusing to load the koan at all.
       if (
         never &&
-        ctx.koan.given.limits?.max_duration_ms === undefined &&
+        ctx.koan.given.limits?.prompt?.duration_ms === undefined &&
         ctx.koan.given.tools[reqTool]?.timeout_ms === undefined
       ) {
         return problem(
-          `${at_i}: "never" needs "given.limits.max_duration_ms" or a "timeout_ms" on the tool — nothing else ends the wait`,
+          `${at_i}: "never" needs "given.limits.prompt.duration_ms" or a "timeout_ms" on the tool — nothing else ends the wait`,
         );
       }
       if (crashes) {
@@ -1830,12 +1850,12 @@ function collectBriefings(steps: Step[], out: Array<{ label: string; text: strin
 // requests at the model endpoint, and a delegate's requests — and the one
 // that asks for a summary — arrive there as well.
 function theTraceFitsTheModelRequestBudget(koan: KoanFile): Problem | undefined {
-  const maxRequests = koan.given.limits?.max_model_requests;
+  const maxRequests = koan.given.limits?.run?.model_requests;
   if (maxRequests === undefined) return undefined;
   for (const { steps, at } of scriptedTraces(koan)) {
     const total = countModelRequests(steps);
     if (total > maxRequests) {
-      return problem(`${at} scripts ${total} model requests, more than given.limits.max_model_requests (${maxRequests}) permits`);
+      return problem(`${at} scripts ${total} model requests, more than given.limits.run.model_requests (${maxRequests}) permits`);
     }
   }
   return undefined;

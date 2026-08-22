@@ -2,7 +2,7 @@ name: abort-clears-the-queue
 description: >
   A second prompt is delivered while a tool invocation is held open, and
   the caller then aborts — the delivery is provably accepted and provably
-  unanswered when the abort lands. An abort covers every submission still
+  unanswered when the abort lands. An abort covers every prompt still
   unsettled, the queued prompt included: the trace ends here, so no model
   request may serve that prompt afterwards, and the run settles aborted.
 

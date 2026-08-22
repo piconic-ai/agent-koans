@@ -1,6 +1,6 @@
 name: follow-up-after-crash
 description: >
-  The death falls between submissions this time: after one turn settled,
+  The death falls between prompts this time: after one turn settled,
   before the next was sent — the cheapest place a crash can land, since
   nothing is in flight when it does. The restarted process must resolve
   the same run and accept the next prompt like any other run does — a

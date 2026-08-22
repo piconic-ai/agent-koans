@@ -18,8 +18,8 @@ import type { RunSubagentDef } from './subagents.js';
 import type { RunToolDef } from './tools.js';
 
 interface RunLimits {
-  max_model_requests?: number;
-  max_duration_ms?: number;
+  run?: { model_requests?: number };
+  prompt?: { duration_ms?: number };
 }
 
 const config = loadConfig();
@@ -152,7 +152,7 @@ function runTurn(
   idempotencyKey?: string,
 ): void {
   void (async () => {
-    // The declared budget covers this one submission (SPEC.md §3) and
+    // The declared budget covers this one prompt (SPEC.md §3) and
     // restarts fresh for every prompt, so the timer is armed here, on
     // every call, rather than once for the run. Not Flue's own
     // durability timeout (`timeoutMs` / DURABILITY_DEFAULT_TIMEOUT_MS):
@@ -211,9 +211,9 @@ function startRun(
   if (existing !== undefined) return existing;
   const run: Run = { run_id: runId ?? `r_${crypto.randomUUID()}`, status: 'running', events: [] };
   runs.set(run.run_id, run);
-  armBudget(limits?.max_model_requests);
+  armBudget(limits?.run?.model_requests);
   armWindow(context?.window);
-  armDuration(limits?.max_duration_ms);
+  armDuration(limits?.prompt?.duration_ms);
   // The instance is addressed by the run's own name — minted or
   // caller-named alike — so a restarted process can find it again
   // (SPEC.md §3 crash recovery). `uid: null` keeps this send create-only:
@@ -258,10 +258,10 @@ for (const row of loadRunRows()) {
   // run that had already settled still owes its remainder to whatever
   // prompt arrives next — left unarmed, a follow-up after a crash would
   // spend without limit.
-  armBudget(row.limits?.max_model_requests, row.spent ?? 0);
+  armBudget(row.limits?.run?.model_requests, row.spent ?? 0);
   if (run.status === 'running') {
     armWindow(row.initialData.context?.window);
-    armDuration(row.limits?.max_duration_ms);
+    armDuration(row.limits?.prompt?.duration_ms);
     runTurn(run, agent, row.prompt, row.initialData, run.run_id);
   }
 }

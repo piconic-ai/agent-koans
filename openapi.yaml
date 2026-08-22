@@ -209,25 +209,36 @@ components:
             $ref: "#/components/schemas/SubagentDef"
         limits:
           type: object
-          description: Optional per-run budgets the agent must honor (SPEC.md §3).
+          description: >-
+            Optional budgets the agent must honor (SPEC.md §3), each
+            written under the scope it covers: `run` budgets span the
+            whole run, `prompt` budgets start again at every prompt the
+            caller sends. Exhausting any budget before a final answer
+            must end the run as `aborted`, and every budget is a
+            ceiling: the agent must not end the run early just because
+            one is declared.
           properties:
-            max_model_requests:
-              type: integer
-              minimum: 1
-              description: >-
-                Maximum number of model requests the agent may issue for
-                this run. Exhausting the budget before a final answer must
-                end the run as `aborted`.
-            max_duration_ms:
-              type: integer
-              minimum: 1
-              description: >-
-                Per-submission wall-clock budget in milliseconds, measured
-                from the prompt's acceptance to the submission's terminal
-                state; time between submissions does not count.
-                Exhausting the budget before a final answer must end the
-                run as `aborted`. The budget is a ceiling: the agent must
-                not end the run early because one is declared.
+            run:
+              type: object
+              description: Budgets covering the whole run, crash recovery included.
+              properties:
+                model_requests:
+                  type: integer
+                  minimum: 1
+                  description: >-
+                    Maximum number of model requests the run may make in
+                    total, every conversation counted.
+            prompt:
+              type: object
+              description: Budgets that restart fresh for every prompt the caller sends.
+              properties:
+                duration_ms:
+                  type: integer
+                  minimum: 1
+                  description: >-
+                    Wall-clock budget in milliseconds, measured from a
+                    prompt's acceptance to its terminal state; time
+                    between prompts does not count.
         context:
           $ref: "#/components/schemas/RunContext"
           description: >-

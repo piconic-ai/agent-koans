@@ -912,6 +912,8 @@ const rows: Row[] = [
         - request: model
           response: ok
         - retry: prompt
+        - request: model
+          response: ok again
     `),
     message: 'when[3]: "retry" must directly follow a tool step — its held invocation is what proves the run is still running when the resend lands',
   },
@@ -958,6 +960,49 @@ const rows: Row[] = [
           response: ok
     `),
     message: 'when[3]: a held invocation carries one caller action — this tool step already carries "retry"',
+  },
+  {
+    rule: 'a trailing "retry: prompt" cannot follow a model API failure',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - request: model
+          response: { status: 400 }
+        - retry: prompt
+    `),
+    message:
+      'when[3]: a trailing "retry: prompt" cannot follow a model API failure — the resend of a FAILED run\'s creation is a different case this format does not script yet',
+  },
+  {
+    rule: 'a late "retry: prompt" cannot share a trace with "abort"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200 }
+        - request: model
+          response: ok
+        - retry: prompt
+        - abort
+    `),
+    message: 'when[3]: a late "retry: prompt" cannot share a trace with "abort" — one ending per trace is all this format scripts',
+  },
+  {
+    rule: 'a late "retry: prompt" cannot share a trace with "crash"',
+    yaml: koan(`
+      when:
+        - request: model
+          response: ok
+        - crash
+        - request: model
+          response: ok again
+        - retry: prompt
+    `),
+    message: 'when[3]: a late "retry: prompt" cannot share a trace with "crash" — one ending per trace is all this format scripts',
   },
   {
     rule: '"crash" cannot appear inside a turn\'s own trace',

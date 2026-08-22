@@ -110,9 +110,12 @@ the same acceptance — `201`/`202` and the same `run_id` — while the
 existing run carries on undisturbed. This is what makes creation safe
 to retry. A caller that never saw its acceptance sends the identical
 request again, lands on the run it already started, and the model sees
-one conversation, not two. What you do with a request that reuses a
-`run_id` but changes the rest of the body is yours; the contract covers
-the identical resend.
+one conversation, not two. The same holds after the run has settled: the
+identical resend still lands on that run, with the same acceptance, and
+the committed result stays — a creation retry is the caller catching up
+on an acceptance it never saw, never a way to run the task again. What
+you do with a request that reuses a `run_id` but changes the rest of
+the body is yours; the contract covers the identical resend.
 
 **Budgets.** Every budget in `given.limits` (openapi.yaml) is written
 under the scope it covers, because the two scopes behave differently
@@ -460,6 +463,7 @@ it cannot drift from the contract it indexes.
 | [087-delegate-compaction-off](./koans/087-delegate-compaction-off.yaml) | A delegate is declared a window and told never to fold, and its conversation runs right up against that window: 95000 of 100000. A delegate's context declaration provisions its conversation the way the run's own does, `off` included — so the delegate must carry its history as it stands, and the trace has no compaction step for a fold to consume (029's contract line, now for a delegate). |
 | [088-joining-ask-keeps-its-words](./koans/088-joining-ask-keeps-its-words.yaml) | The caller's fold ask carries instructions and arrives twice — the same ask, re-sent while the fold it brought about is still summarizing. The words reach the summarizing request as they were written, and once: a joining ask's own instructions do not reach the fold already running, because its wording was fixed when that fold began (SPEC.md §3). |
 | [089-unanswered-question-costs-nothing](./koans/089-unanswered-question-costs-nothing.yaml) | The run has exactly the budget its two answers need, and the process dies with the second question sent and unanswered. A question that was never answered cost nothing and changed nothing: the recovered process asks it again from the recorded history, and the budget still covers it — a restart that had charged the doomed request would find nothing left to ask with (SPEC.md §3). |
+| [090-creation-retry-after-settle](./koans/090-creation-retry-after-settle.yaml) | The caller names the run, never sees its acceptance, and re-sends the identical creation — after the run has already settled. The resend lands on the run it already started: the same acceptance with the same run_id, the committed result untouched, and no second conversation — a run is created once, however late the caller's retry arrives (SPEC.md §3). |
 
 <!-- koan-index:end -->
 

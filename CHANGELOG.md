@@ -1,5 +1,18 @@
 # agent-koans
 
+## 0.16.0
+
+### Minor Changes
+
+- 9c6fcec: Add koan 081: a run with a model-request budget spends half of it, the process dies between submissions, and the next prompt must find the budget where the death left it. No crash koan declared limits before this one, so nothing in the suite said what a restart does to a run's accounting — an implementation that armed a fresh budget on recovery passed everything. SPEC.md §3 now states it: what the run had already spent is recorded work like anything else, and the requests left after the death are the requests that were left before it. The bundled Flue example did re-arm from zero, and now resumes from the recorded count.
+- 555ce05: Add koan 079: a tool answers with five fields at once, and every one of them must reach the model. Result fidelity was pinned only for single-value bodies until now — the suite looked for any one of a result's scalars, so an implementation that forwarded one field of several passed 072 and everything around it. A successful tool result is now held to all of its values, while a failure is still told either way, by status or by the body's own words (SPEC.md §1).
+- 6d24f0d: Add koan 082: a run declares `max_duration_ms`, and two prompts each spend most of one budget. SPEC.md §3 has always said the budget belongs to a submission and starts again at every prompt, but `max_duration_ms` never appeared alongside `turns:` in the suite — only the opening submission's window was ever driven, so an implementation measuring from the run's own beginning passed. The second turn now has the whole budget however long the first one took.
+- ffdde94: Add koan 080: a declared tool answers 400 and sends nothing with it. SPEC.md §4 has always said a status of 400 or above is a failure, but no koan answered a tool invocation with exactly 400 — the lowest failing status in the suite was 404, so nothing told an implementation whose threshold starts one status too high. With no body to pass on, the status is the whole of what the model must be told, and the call is made once: a 400 is not the agent's cue to repair its own arguments and try again.
+
+### Patch Changes
+
+- c6912ab: Fix the suite demanding a run's tool definitions on a delegate's model requests. SPEC.md §4 requires them of the conversation the run's prompt opened and leaves what a delegate is given to the implementation, but the check ran on every conversation — so an implementation that briefs its delegates without the run's tools failed koans it conforms to (020, 024, 042, 043, 044, 050, 057, 058, 076). The check is now scoped to the run's own conversation.
+
 ## 0.15.0
 
 ### Minor Changes

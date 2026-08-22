@@ -1,0 +1,38 @@
+name: retry-after-timeout
+description: >
+  A declared tool is given up at its timeout, the model is told, and the
+  model asks for the same call again. Giving up ends one wait, not the
+  run's work: the agent must make that second invocation, because the
+  follow-up after a timeout is the model's instruction and the model
+  gave one (SPEC.md §3).
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      timeout_ms: 1200
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: never
+  # The timeout reaches the model, and the model asks again — so the
+  # second invocation is instructed work, not a retry of the agent's own.
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  - request: model
+    response: "The weather in Tokyo is 31°C."
+
+then:
+  status: completed
+  output: { contains: "31" }

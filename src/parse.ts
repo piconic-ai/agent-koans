@@ -544,10 +544,13 @@ function parseJudgment(ctx: Ctx<unknown>): Parsed<Judgment> {
   return { status: j.status as string | undefined, output: j.output as Matcher | undefined };
 }
 
-/** Derived, never written: a trace ending in a reply was already settled. */
+/** Derived, never written: a trace ending in a reply or a refused request was already settled. */
 function abortKindOf(trace: Trace): AbortKind {
   const last = trace.steps[trace.steps.length - 1];
-  return last.kind === 'model' && last.response.kind === 'reply' ? 'late' : 'live';
+  if (last.kind !== 'model') return 'live';
+  // A refusal counts with the reply, not against it: the run it ends is
+  // as settled as an answered one, so an abort behind it is late.
+  return last.response.kind === 'reply' || last.response.kind === 'api-failure' ? 'late' : 'live';
 }
 
 /**
@@ -1644,11 +1647,14 @@ function checkToolMatching(koan: KoanFile, steps: Step[], at: string): Problem |
 }
 
 /**
- * Nothing may follow a model API failure in its own conversation — the
- * conversation the endpoint refused stops there. For the main
- * conversation that ends the run, a trailing `abort` included; for a
- * subagent's it ends the child, whose parent runs on with the failure as
- * the delegation's outcome. Local adjacency in the old, mutation-based
+ * No exchange may follow a model API failure in its own conversation —
+ * the conversation the endpoint refused stops there. For the main
+ * conversation that ends the run; for a subagent's it ends the child,
+ * whose parent runs on with the failure as the delegation's outcome. A
+ * trailing `abort` is not an exchange and is admitted, because the run
+ * it lands on has settled: `abortKindOf` reads it as late, which is the
+ * caller aborting a `failed` run rather than the refused conversation
+ * carrying on. Local adjacency in the old, mutation-based
  * trace form; here a `tool` step following a failed `model` step is a
  * step of its own, and `abort` is not a step at all (koan-spec.ts's
  * header), so seeing whether anything comes after needs a fresh pass over
@@ -1656,22 +1662,21 @@ function checkToolMatching(koan: KoanFile, steps: Step[], at: string): Problem |
  * one.
  */
 function apiFailureEndsTheTrace(koan: KoanFile): Problem | undefined {
-  for (const { steps, at, abort } of scriptedTraces(koan)) {
-    const found = checkApiFailureEnds(steps, at, abort);
+  for (const { steps, at } of scriptedTraces(koan)) {
+    const found = checkApiFailureEnds(steps, at);
     if (found) return found;
   }
   return undefined;
 }
 
-function checkApiFailureEnds(steps: Step[], at: string, abort: AbortKind | undefined): Problem | undefined {
+function checkApiFailureEnds(steps: Step[], at: string): Problem | undefined {
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    const isLast = i === steps.length - 1;
-    if (step.kind === 'model' && step.response.kind === 'api-failure' && (!isLast || abort !== undefined)) {
+    if (step.kind === 'model' && step.response.kind === 'api-failure' && i !== steps.length - 1) {
       return problem(`${at}[${i + 1}]: nothing can follow a model API failure — the conversation it refused must stop`);
     }
     if (step.kind === 'subagent') {
-      const found = checkApiFailureEnds(step.trace.steps, `${at}[${i}].when`, undefined);
+      const found = checkApiFailureEnds(step.trace.steps, `${at}[${i}].when`);
       if (found) return found;
     }
   }

@@ -1,0 +1,37 @@
+name: unanswered-question-costs-nothing
+description: >
+  The run has exactly the budget its two answers need, and the process
+  dies with the second question sent and unanswered. A question that was
+  never answered cost nothing and changed nothing: the recovered process
+  asks it again from the recorded history, and the budget still covers
+  it — a restart that had charged the doomed request would find nothing
+  left to ask with (SPEC.md §3).
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+  limits:
+    run:
+      model_requests: 2
+
+prompt: "Get the current weather in Tokyo and report it."
+
+when:
+  - request: model
+    response: { tool: get_weather, args: { city: "Tokyo" } }
+  - request: { tool: get_weather }
+    response: { status: 200, body: { temp: 31 } }
+  # The second question is on the wire and unanswered; the process dies.
+  - crash
+  - request: model
+    response: "The weather in Tokyo is 31°C."
+
+then:
+  status: completed
+  output: { contains: "31" }

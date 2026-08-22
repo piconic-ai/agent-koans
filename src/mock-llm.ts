@@ -48,6 +48,8 @@ interface MockLlm {
    * sequence is already fully lifted.
    */
   liftCrashGate(): void;
+  /** How many model requests the crash gate is currently holding parked. */
+  parkedCount(): number;
   close(): Promise<void>;
 }
 
@@ -868,6 +870,7 @@ export function startMockLlm(
         url: `http://127.0.0.1:${port}`,
         state,
         liftCrashGate,
+        parkedCount: () => parked.length,
         close: () =>
           new Promise((r) => {
             // A parked request the lift never came for would hold the

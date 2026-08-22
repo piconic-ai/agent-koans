@@ -650,12 +650,27 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       const crashThreshold = crashBefore?.at(-1);
       const crashed = crashBefore !== undefined || actions.some((a) => a.kind === 'crash') || abortCrashed;
       if (crashThreshold !== undefined) {
-        const crashDeadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
-        while ((llm.state.served[crashCarrier!.name] ?? 0) < crashThreshold || pending.length !== 0) {
+        // Not killed at the threshold alone: without the doomed request
+        // parked at the gate, "in flight and unanswered at the death"
+        // (SPEC.md §3) would be a race the suite only sometimes exercises.
+        const expectsDoomedRequest = crashCarrier!.turns.length > crashThreshold;
+        // Not the generic run timeout when an earlier death already fired
+        // (a gate sequence of more than one entry): the request this wait
+        // owes is that death's own recovery, which runs on the cadence
+        // CRASH_RECOVERY_TIMEOUT_MS exists for.
+        const waitingThroughRecovery = expectsDoomedRequest && (crashBefore?.length ?? 0) > 1;
+        const crashTimeoutMs = waitingThroughRecovery ? CRASH_RECOVERY_TIMEOUT_MS : (agent.runTimeoutMs ?? 15_000);
+        const crashDeadline = Date.now() + crashTimeoutMs;
+        while (
+          (llm.state.served[crashCarrier!.name] ?? 0) < crashThreshold ||
+          pending.length !== 0 ||
+          (expectsDoomedRequest && llm.parkedCount() < 1)
+        ) {
           if (Date.now() > crashDeadline) {
             throw new Error(
-              `the trace's pre-crash steps were not fully observed within ${agent.runTimeoutMs ?? 15_000}ms: ` +
-                `${llm.state.served[crashCarrier!.name] ?? 0}/${crashThreshold} model requests served, ${pending.length} tool call(s) still unresolved`,
+              `the trace's pre-crash steps were not fully observed within ${crashTimeoutMs}ms: ` +
+                `${llm.state.served[crashCarrier!.name] ?? 0}/${crashThreshold} model requests served, ${pending.length} tool call(s) still unresolved, ` +
+                `${llm.parkedCount()} request(s) parked at the gate`,
             );
           }
           await sleep(100);

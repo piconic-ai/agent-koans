@@ -45,6 +45,12 @@ function discoverTargets(): Target[] {
 }
 
 const koans = discoverKoans(path.join(repoRoot, 'koans'));
+
+// Not the runner's crash-recovery window (60s) itself, and not imported
+// from it: a koan waiting out a recovery must fail on the runner's named
+// deadline rather than vitest's, and the constant is the runner's
+// internal business — this file only needs to stay comfortably above it.
+const KOAN_TIMEOUT_MS = 120_000;
 const allIds = new Set(koans.map((k) => k.id));
 
 /**
@@ -78,7 +84,7 @@ for (const target of discoverTargets()) {
     for (const { id, koan } of koans) {
       const reason = skip[id];
       const test = reason ? it.skip : it;
-      test(reason ? `${id} — SKIPPED: ${reason}` : id, { timeout: 60_000 }, async () => {
+      test(reason ? `${id} — SKIPPED: ${reason}` : id, { timeout: KOAN_TIMEOUT_MS }, async () => {
         await runKoan(koan, agent);
       });
     }

@@ -76,6 +76,13 @@ function scalarLeaves(value: unknown): string[] {
   return Object.values(value as object).flatMap(scalarLeaves);
 }
 
+function countOccurrences(text: string, value: string): number {
+  if (value.length === 0) return 0;
+  let count = 0;
+  for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + value.length)) count += 1;
+  return count;
+}
+
 function messageText(msg: ChatMessage): string {
   if (typeof msg.content === 'string') return msg.content;
   if (Array.isArray(msg.content)) {
@@ -614,11 +621,23 @@ export function startMockLlm(
       // What a framework hands its summarizer is otherwise its own, since
       // some fold only the older part and keep the rest verbatim. What a
       // fold must not lose is checked one request later.
-      if (entry.asked !== undefined && !requestText(messages).includes(entry.asked)) {
-        state.violations.push(
-          `request #${requestNo} folds the conversation without what the caller asked the fold to keep ` +
-            `(${JSON.stringify(entry.asked)}): an ask that says how is not an ask the agent may reword`,
-        );
+      if (entry.asked !== undefined) {
+        const count = countOccurrences(requestText(messages), entry.asked);
+        if (count === 0) {
+          state.violations.push(
+            `request #${requestNo} folds the conversation without what the caller asked the fold to keep ` +
+              `(${JSON.stringify(entry.asked)}): an ask that says how is not an ask the agent may reword`,
+          );
+        } else if (entry.compactRetried && count > 1) {
+          // Counted rather than merely found, and only where a repeated
+          // ask converged on this fold: with both deliveries carrying the
+          // same words, a joiner's instructions leaking into the running
+          // fold is observable as nothing but the words arriving twice.
+          state.violations.push(
+            `request #${requestNo} carries the fold's instructions ${count} times — however many asks converged on ` +
+              `this fold, its wording was fixed when it began, and a joining ask's own words never reach it`,
+          );
+        }
       }
     } else if (index === 0) {
       checkConversationStart(conv, requestNo, messages, state.violations);

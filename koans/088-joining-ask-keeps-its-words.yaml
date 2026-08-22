@@ -1,0 +1,40 @@
+name: joining-ask-keeps-its-words
+description: >
+  The caller's fold ask carries instructions and arrives twice — the
+  same ask, re-sent while the fold it brought about is still
+  summarizing. The words reach the summarizing request as they were
+  written, and once: a joining ask's own instructions do not reach the
+  fold already running, because its wording was fixed when that fold
+  began (SPEC.md §3).
+
+given:
+  context:
+    window: 100000
+    compaction: 90%
+
+turns:
+  - prompt: "Note for the record: the duty operator for incident INC-4407 is code R-8-1266."
+    when:
+      - request: model
+        response:
+          body: "Noted: incident INC-4407, duty operator R-8-1266."
+          used_tokens: 40000
+
+  - compact: "Keep every operator code verbatim."
+    retry: compact
+    when:
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          body: "Earlier: incident INC-4407 has duty operator code R-8-1266."
+          used_tokens: 8000
+          compaction: completed
+
+  - prompt: "What was that incident's duty operator code?"
+    when:
+      - request: model
+        response: "The duty operator code is R-8-1266."
+    then:
+      status: completed
+      output: { contains: "R-8-1266" }

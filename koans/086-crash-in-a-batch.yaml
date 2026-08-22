@@ -1,0 +1,37 @@
+name: crash-in-a-batch
+description: >
+  Two invocations are open at once and the process dies between them:
+  one result is on record, the other was in flight. The repair owes two
+  different things to the same turn, and must read both off the record
+  rather than count them — the recorded call keeps its answer, the
+  interrupted one closes with an unknown outcome, and neither is
+  invoked again (SPEC.md §3).
+
+given:
+  tools:
+    get_weather:
+      description: "Look up current weather for a city"
+      input_schema:
+        type: object
+        properties:
+          city: { type: string }
+        required: [city]
+
+prompt: "Compare the current temperature in Tokyo and Osaka."
+
+when:
+  - request: model
+    response:
+      - { tool: get_weather, args: { city: "Tokyo" } }
+      - { tool: get_weather, args: { city: "Osaka" } }
+  - request: { tool: get_weather, args: { city: "Tokyo" } }
+    response: { status: 200, body: { temp: 31 } }
+  # Tokyo's reading is recorded; Osaka's invocation dies with the process.
+  - request: { tool: get_weather, args: { city: "Osaka" } }
+    response: crash
+  - request: model
+    response: "Tokyo is 31°C. The Osaka reading never came back."
+
+then:
+  status: completed
+  output: { contains: "31" }

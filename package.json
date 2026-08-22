@@ -1,6 +1,6 @@
 {
   "name": "agent-koans",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Framework-agnostic conformance suite for AI agent implementations",
   "license": "MIT",
   "type": "module",

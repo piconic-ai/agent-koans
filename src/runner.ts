@@ -560,6 +560,25 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             `${agent.runTimeoutMs ?? 15_000}ms`,
         );
         try {
+          // The one moment this suite can prove work is in flight without
+          // pinning the agent's own timing: the held invocation is engaged,
+          // so a poll right now cannot race a settle. A fold ask's retry
+          // (kind 'compact') already `continue`s above and is deliberately
+          // not checked here — SPEC does not require a settled run to
+          // report `running` again for a fold ask. Inside the try, so a
+          // poll that throws still releases the hold below — the tool
+          // mock's server is parked on it and cannot close otherwise.
+          const heldStatusRes = await fetch(`${base}/runs/${runId}`);
+          if (!heldStatusRes.ok) {
+            failures.push(`GET /runs/${runId} returned ${heldStatusRes.status} while its tool invocation is held open for ${label}`);
+          } else {
+            const heldRun = (await heldStatusRes.json()) as RunState;
+            if (heldRun.status !== 'running') {
+              failures.push(
+                `the run reports "${heldRun.status}" while its tool invocation is held open for ${label} — a run with work in flight is a running run (SPEC.md §3)`,
+              );
+            }
+          }
           if (action.kind === 'prompt') {
             const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {
               method: 'POST',

@@ -166,6 +166,18 @@ export interface ModelTurn {
    * settle the run `aborted` (SPEC.md §3).
    */
   abortCrashed?: boolean;
+  /**
+   * Set on the trace's last turn when its `- retry: prompt` was written
+   * trailing, after the trace's final reply — the run had already
+   * settled when the caller's identical creation resent (SPEC.md §3;
+   * `koan-spec.ts`'s `Trace.creationRetriedLate`). The runner resends the
+   * same creation body it built once already, requires the same
+   * acceptance and `run_id`, and checks the committed result never
+   * moved. Unlike a live retry (`CallToolInstruction.retryDuring`), this
+   * carries no held invocation at all — there is nothing left running to
+   * hold one open.
+   */
+  creationRetriedLate?: true;
 }
 
 /**
@@ -612,6 +624,7 @@ function compileTrace(trace: ParsedTrace, briefing: string): Trace {
   if (trace.abort !== undefined) main.turns.at(-1)!.abort = trace.abort;
   if (trace.abortRetried) main.turns.at(-1)!.abortRetried = true;
   if (trace.abortCrashed) main.turns.at(-1)!.abortCrashed = true;
+  if (trace.creationRetriedLate) main.turns.at(-1)!.creationRetriedLate = true;
   const boundaries = promptBoundaries(main);
   if (boundaries.length > 0) main.followUps = boundaries;
   return { conversations };

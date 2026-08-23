@@ -65,6 +65,12 @@ interface Ctx<T = unknown> {
   koan: KoanFile;
 }
 
+// Narrowed from `Step`'s own union so a compaction step's `joinedBy` — set
+// only after `parseCompactionStep` returns, once its position and
+// multiplicity are known — assigns without every other step kind's own
+// shape getting in the way.
+type CompactionStep = Extract<Step, { kind: 'compaction' }>;
+
 /** A problem found while reading a file — the message its author will see. */
 export type Problem = { kind: 'problem'; message: string };
 
@@ -375,6 +381,17 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
   // naming every combination across more than one such turn is not a
   // thing this format takes on.
   let oneOfTurnAt = -1;
+  // Where a "joined_by" has already been written, if anywhere — turn-level
+  // (beside "compact", CompactTurn's own) or step-level (beside a
+  // compaction step's own "response", inside a plain turn's "when" — the
+  // threshold-fold case this koan adds). At most one per koan, wherever
+  // it lands: nothing in the suite yet needs a second, and a second would
+  // be an untested claim about how two independent fold holds pair up.
+  // Set below when the turn-level spelling is seen, and passed down into
+  // parseTrace (as the box, not a copy) so the step-level spelling — seen
+  // only once each turn's trace is walked, further down — checks and
+  // updates the very same record.
+  const joinedBySeen: { at?: string } = {};
   // Whether a "crash" entry has already been seen — at most one death per
   // koan, the same one-per-trace rule a mid-trace "crash" step carries
   // (parseTrace), just checked here instead since this "crash" is an
@@ -454,6 +471,12 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
             `turns[${i}].joined_by repeats this turn's own "compact" instructions — an identical resend is "retry: compact"'s to script, write that instead`,
           );
         }
+        if (joinedBySeen.at !== undefined) {
+          return problem(
+            `turns[${i}].joined_by: a koan may write "joined_by" once, wherever it lands — ${joinedBySeen.at} already does`,
+          );
+        }
+        joinedBySeen.at = `turns[${i}].joined_by`;
       }
       if (i === 0) {
         return problem(`turns[0].compact: the caller asks a run that has already answered — an ask cannot open a koan`);
@@ -487,7 +510,7 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
       turns.push({ kind: 'prompt', prompt: rt.prompt as string, then: thens[i] });
       continue;
     }
-    const turnTrace = parseTurnTraceField(ctx, rt, i);
+    const turnTrace = parseTurnTraceField(ctx, rt, i, rt.compact !== undefined, joinedBySeen);
     if (isProblem(turnTrace)) return turnTrace;
     if (rt.compact !== undefined) {
       const err = checkEachVariant(turnTrace, i, checkCompactStep);
@@ -523,8 +546,20 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
 
 // A turn's own trace: `when` (one step list) or `one_of` (named
 // variants, at least two) — never both, checked in the pass before this
-// one runs.
-function parseTurnTraceField(ctx: Ctx<KoanFile>, rt: Record<string, unknown>, i: number): Parsed<TurnTrace> {
+// one runs. `inCompactTurn` says whether this turn's own `compact` field
+// is set — a compaction step inside it is that ask's own fold, so a
+// step-level "joined_by" there is rejected (CompactTurn's own turn-level
+// field is how a joiner is written for it instead); `joinedBySeen` is
+// the whole koan's one shared record of where "joined_by" has already
+// been written, threaded down so parseTrace's own check of the
+// step-level spelling sees the turn-level pass's findings too.
+function parseTurnTraceField(
+  ctx: Ctx<KoanFile>,
+  rt: Record<string, unknown>,
+  i: number,
+  inCompactTurn: boolean,
+  joinedBySeen: { at?: string },
+): Parsed<TurnTrace> {
   if (rt.one_of !== undefined) {
     const rawOneOf = rt.one_of;
     if (typeof rawOneOf !== 'object' || rawOneOf === null || Array.isArray(rawOneOf)) {
@@ -537,7 +572,13 @@ function parseTurnTraceField(ctx: Ctx<KoanFile>, rt: Record<string, unknown>, i:
       if (!Array.isArray(rawSteps) || rawSteps.length === 0) {
         return problem(`turns[${i}].one_of.${variant} must be a non-empty list of trace steps`);
       }
-      const trace = parseTrace(into(ctx, `turns[${i}].one_of.${variant}`, rawSteps), true, false);
+      // `oneOfVariant: true` — a step-level "joined_by" is rejected here
+      // even where a threshold fold itself is legal (a variant's own
+      // first step): koan.ts's compiled `TurnSpec` does not vary by
+      // variant, so a joiner would have to hold across whichever variant
+      // the trace picks, and nothing here proves every variant picks the
+      // same words, or even has a fold to join at all.
+      const trace = parseTrace(into(ctx, `turns[${i}].one_of.${variant}`, rawSteps), true, false, undefined, inCompactTurn, joinedBySeen, true);
       if (isProblem(trace)) return trace;
       variants[variant] = trace;
     }
@@ -546,7 +587,7 @@ function parseTurnTraceField(ctx: Ctx<KoanFile>, rt: Record<string, unknown>, i:
   if (!Array.isArray(rt.when) || rt.when.length === 0) {
     return problem(`turns[${i}].when must be a non-empty list of trace steps`);
   }
-  const trace = parseTrace(into(ctx, `turns[${i}].when`, rt.when), true, false);
+  const trace = parseTrace(into(ctx, `turns[${i}].when`, rt.when), true, false, undefined, inCompactTurn, joinedBySeen);
   if (isProblem(trace)) return trace;
   return { kind: 'one', trace };
 }
@@ -661,13 +702,28 @@ function abortKindOf(trace: Trace): AbortKind {
  * could not. `kind` records which shape the one death seen so far was —
  * only a tool step answered "crash" leaves room for a second, and only
  * directly after it (checked locally, against `prev`, since that
- * adjacency does not cross the recursion boundary).
+ * adjacency does not cross the recursion boundary). `inCompactTurn`,
+ * `joinedBySeen`, and `oneOfVariant` are this same kind of threaded
+ * context and record, carried down from `parseTurnTraceField` for a
+ * compaction step's own "joined_by" (koan-spec.ts's `Step`):
+ * `inCompactTurn` says whether the enclosing turn is itself an ask (so a
+ * step-level joiner there is rejected — that turn's own `joined_by`,
+ * beside `compact`, is how one is written), `oneOfVariant` says this
+ * array is one named member of a turn's "one_of" rather than its single
+ * "when" (rejected too — koan.ts's compiled `TurnSpec` does not vary by
+ * variant, so nothing here could make a joiner hold across whichever one
+ * the trace picks), and `joinedBySeen` is the one record, shared with the
+ * turn-level pass over `compact` turns, of whether some "joined_by" has
+ * already claimed the koan's one.
  */
 function parseTrace(
   ctx: Ctx<unknown>,
   inTurns: boolean,
   inSubagent: boolean,
   crashSeen: { at?: string; kind?: 'tool' | 'bare' } = {},
+  inCompactTurn = false,
+  joinedBySeen: { at?: string } = {},
+  oneOfVariant = false,
 ): Parsed<Trace> {
   const { node, at } = ctx;
   // Unquoted, unlike the callers above: they already reject a missing or
@@ -886,7 +942,10 @@ function parseTrace(
       // `inTurns` rides into the child: a block nested in a turn's trace
       // is still inside that turn, so what a turn forbids — a
       // a death inside a prompt's work above all — stays forbidden at every depth.
-      const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), inTurns, true, crashSeen);
+      // `inCompactTurn: false` regardless of the parent: a subagent block
+      // is rejected outright below (`inSubagent`), so what the parent
+      // turn is never changes the answer here.
+      const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), inTurns, true, crashSeen, false, joinedBySeen);
       if (isProblem(childTrace)) return childTrace;
       const childLast = childTrace.steps[childTrace.steps.length - 1];
       const settles =
@@ -913,24 +972,31 @@ function parseTrace(
       continue;
     }
 
-    const entry = item as { request?: unknown; response?: unknown; prompt?: unknown } | null;
+    const entry = item as { request?: unknown; response?: unknown; prompt?: unknown; joined_by?: unknown } | null;
     const req = entry?.request;
     const res = entry?.response;
     const rawPrompt = entry?.prompt;
+    const rawJoinedBy = entry?.joined_by;
     if (req === undefined || req === null) return problem(`${at_i} needs "request"`);
 
     // A misspelled key would otherwise be dropped in silence, and the two
     // that can be dropped hurt most: a mistyped `prompt` leaves a koan
     // that still passes while scripting no delivery at all.
     for (const key of Object.keys(entry as Record<string, unknown>)) {
-      if (key !== 'request' && key !== 'response' && key !== 'prompt') {
+      if (key !== 'request' && key !== 'response' && key !== 'prompt' && key !== 'joined_by') {
         return problem(
-          `${at_i} has unknown key "${key}" — a trace step is a "request" and its "response", plus a tool step's "prompt"; anything else belongs inside one of them`,
+          `${at_i} has unknown key "${key}" — a trace step is a "request" and its "response", plus a tool step's "prompt" or a compaction step's "joined_by"; anything else belongs inside one of them`,
         );
       }
     }
     const target = parseRequestTarget(at_i, req);
     if (isProblem(target)) return target;
+
+    if (rawJoinedBy !== undefined && !(target.kind === 'model' && target.purpose === 'compaction')) {
+      return problem(
+        `${at_i}.joined_by belongs on a compaction step — the differing ask delivered while that fold is still summarizing, not on this request`,
+      );
+    }
 
     // Which calls a response-less request may close (koan-spec.ts) is a
     // whole-trace question, left to the tool-request matching in
@@ -974,6 +1040,37 @@ function parseTrace(
       if (target.purpose !== undefined) {
         const fold = parseCompactionStep(at_i, res, (inTurns && i === 0) || inSubagent);
         if (isProblem(fold)) return fold;
+        if (rawJoinedBy !== undefined) {
+          if (typeof rawJoinedBy !== 'string' || rawJoinedBy.trim().length === 0) {
+            return problem(
+              `${at_i}.joined_by must be a non-empty string — the differing ask delivered while this fold is summarizing`,
+            );
+          }
+          if (inSubagent) {
+            return problem(
+              `${at_i}.joined_by cannot appear inside a subagent block — only the run's own conversation has a caller to ask`,
+            );
+          }
+          if (inCompactTurn) {
+            return problem(
+              `${at_i}.joined_by cannot appear inside a "compact" turn's own trace — that turn's fold is ask-initiated, ` +
+                `so the turn-level "joined_by" (beside "compact") is how a joiner is written for it instead`,
+            );
+          }
+          if (oneOfVariant) {
+            return problem(
+              `${at_i}.joined_by cannot appear inside a "one_of" variant — how many requests a fold costs may vary by ` +
+                `variant, but the turn's own joiner does not, so this format does not script one here`,
+            );
+          }
+          if (joinedBySeen.at !== undefined) {
+            return problem(
+              `${at_i}.joined_by: a koan may write "joined_by" once, wherever it lands — ${joinedBySeen.at} already does`,
+            );
+          }
+          joinedBySeen.at = `${at_i}.joined_by`;
+          fold.joinedBy = rawJoinedBy;
+        }
         steps.push(fold);
         continue;
       }
@@ -1187,7 +1284,7 @@ function parseUsedTokens(at: string, raw: unknown): Parsed<number | undefined> {
  * one that failed carries the failure the endpoint answered with, and
  * neither carries the other's fields.
  */
-function parseCompactionStep(at: string, res: unknown, mayFoldHere: boolean): Parsed<Step> {
+function parseCompactionStep(at: string, res: unknown, mayFoldHere: boolean): Parsed<CompactionStep> {
   // Anywhere but a turn's first step, or inside a subagent block, would
   // pin down one of two conforming designs: some agents fold before the
   // next request of a turn already running, some once that turn settles
@@ -1274,7 +1371,7 @@ function parseFoldSummaries(at: string, raw: unknown): Parsed<[string, ...string
 // A fold the model endpoint refused. `status` is restricted the same way a
 // model API failure's is, and for the same reason: a koan cannot script a
 // status the client under test would retry on a schedule of its own.
-function parseFailedCompaction(at: string, res: Record<string, unknown>): Parsed<Step> {
+function parseFailedCompaction(at: string, res: Record<string, unknown>): Parsed<CompactionStep> {
   for (const key of Object.keys(res)) {
     if (key !== 'status' && key !== 'body' && key !== 'compaction') {
       return problem(`${at}.response has unknown key "${key}" — a failed compaction carries only "status", "body", and "compaction"`);

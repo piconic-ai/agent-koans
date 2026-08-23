@@ -731,7 +731,7 @@ const rows: Row[] = [
           intercept: p
     `),
     message:
-      `when[0] has unknown key "intercept" — a trace step is a "request" and its "response", plus a tool step's "prompt"; anything else belongs inside one of them`,
+      `when[0] has unknown key "intercept" — a trace step is a "request" and its "response", plus a tool step's "prompt" or a compaction step's "joined_by"; anything else belongs inside one of them`,
   },
   {
     rule: 'a mid-run "prompt" belongs on a tool step',
@@ -2179,6 +2179,134 @@ const rows: Row[] = [
             response: ok
     `),
     message: 'turns[0] has unknown key "joined_by" — a prompt entry carries only "prompt", "when", "one_of", and "then"',
+  },
+  {
+    rule: '"joined_by" on a compaction step belongs only there, not on any other step',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request: model
+            response: ok
+            joined_by: "Keep only the dates."
+    `),
+    message:
+      'turns[0].when[0].joined_by belongs on a compaction step — the differing ask delivered while that fold is still summarizing, not on this request',
+  },
+  {
+    rule: 'a step-level "joined_by" must be a non-empty string',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request:
+              type: model
+              purpose: compaction
+            joined_by: "   "
+            response:
+              body: "summary"
+              used_tokens: 100
+              compaction: completed
+    `),
+    message: 'turns[0].when[0].joined_by must be a non-empty string — the differing ask delivered while this fold is summarizing',
+  },
+  {
+    rule: 'a step-level "joined_by" cannot appear inside a subagent block',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { subagent: r, prompt: "go look" }
+        - subagent: r
+          when:
+            - request:
+                type: model
+                purpose: compaction
+              joined_by: "Keep only the dates."
+              response:
+                body: "summary"
+                used_tokens: 100
+                compaction: completed
+    `),
+    message:
+      'when[1].when[0].joined_by cannot appear inside a subagent block — only the run\'s own conversation has a caller to ask',
+  },
+  {
+    rule: 'a step-level "joined_by" cannot appear inside a "compact" turn\'s own trace',
+    // Not `turnsKoan`: an ask cannot open a koan (turns[0].compact is
+    // rejected before this row's own check ever runs), so the "compact"
+    // turn under test needs a valid opening turn ahead of it.
+    yaml: `name: x\n${dedent(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - compact: true
+          when:
+            - request:
+                type: model
+                purpose: compaction
+              joined_by: "Keep only the dates."
+              response:
+                body: "summary"
+                used_tokens: 100
+                compaction: completed
+    `)}`,
+    message:
+      'turns[1].when[0].joined_by cannot appear inside a "compact" turn\'s own trace — that turn\'s fold is ask-initiated, ' +
+      'so the turn-level "joined_by" (beside "compact") is how a joiner is written for it instead',
+  },
+  {
+    rule: 'a step-level "joined_by" cannot appear inside a "one_of" variant',
+    yaml: turnsKoan(`
+      - prompt: a
+        one_of:
+          x:
+            - request:
+                type: model
+                purpose: compaction
+              joined_by: "Keep only the dates."
+              response:
+                body: "summary"
+                used_tokens: 100
+                compaction: completed
+          y:
+            - request: model
+              response: ok2
+    `),
+    message:
+      'turns[0].one_of.x[0].joined_by cannot appear inside a "one_of" variant — how many requests a fold costs may vary ' +
+      'by variant, but the turn\'s own joiner does not, so this format does not script one here',
+  },
+  {
+    rule: 'a koan writes "joined_by" once, wherever it lands — turn-level and step-level share the count',
+    yaml: `name: x\n${dedent(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - compact: true
+          joined_by: "Keep only the dates."
+          when:
+            - request:
+                type: model
+                purpose: compaction
+              response:
+                body: "summary"
+                used_tokens: 100
+                compaction: completed
+        - prompt: b
+          when:
+            - request:
+                type: model
+                purpose: compaction
+              joined_by: "Keep only the operator codes."
+              response:
+                body: "summary2"
+                used_tokens: 100
+                compaction: completed
+    `)}`,
+    message:
+      'turns[2].when[0].joined_by: a koan may write "joined_by" once, wherever it lands — turns[1].joined_by already does',
   },
   {
     rule: 'a koan cannot open with an ask',

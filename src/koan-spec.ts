@@ -175,7 +175,11 @@ export interface CompactTurn {
    * fold, whose wording was fixed when it began, and not a second fold
    * after it, since one fold serves every ask that converged on it
    * (SPEC.md §3). Mutually exclusive with `retried`: an identical resend
-   * is `retry: compact`'s to write.
+   * is `retry: compact`'s to write. Where the fold in flight is the
+   * run's own declared threshold's doing rather than an ask's, a joiner
+   * is written on the compaction step itself instead (`Step`'s own
+   * `joinedBy`, below) — this turn's fold is always ask-initiated, so
+   * only this field is legal here.
    */
   joinedBy?: string;
 }
@@ -320,8 +324,35 @@ export type Step =
    * it must carry depends on how it ended, neither of which a shared shape
    * could say.
    */
-  | { kind: 'compaction'; summaries: [string, ...string[]]; used_tokens: number; report: 'completed' }
-  | { kind: 'compaction'; fails: HttpToolResponse; report: 'failed' }
+  | {
+      kind: 'compaction';
+      summaries: [string, ...string[]];
+      used_tokens: number;
+      report: 'completed';
+      /** See the sibling field on the failed variant, below — this carries the same thing for a fold that completed. */
+      joinedBy?: string;
+    }
+  | {
+      kind: 'compaction';
+      fails: HttpToolResponse;
+      report: 'failed';
+      /**
+       * A DIFFERENT ask, delivered while THIS fold — the run's own
+       * declared threshold's doing, not an ask's — is still in flight
+       * (`joined_by`, written beside this step) — it joins the fold the
+       * threshold already started, the same way `CompactTurn.joinedBy`
+       * joins one an ask started, and reaches nothing for the same
+       * reason: its wording was fixed when the fold it joins began, and
+       * no second fold starts for it to reach instead (SPEC.md §3).
+       * Legal only here — the start of a later turn of a "turns:" koan,
+       * where a threshold fold sits (parse.ts's `mayFoldHere`) — never
+       * inside a `compact:` turn's own trace, whose fold is already
+       * ask-initiated and already has `CompactTurn.joinedBy` to write a
+       * joiner with, and never inside a subagent block, where a
+       * delegate's own conversation has no caller of its own to ask.
+       */
+      joinedBy?: string;
+    }
   /**
    * The agent's process is killed without warning (SIGKILL) once every
    * exchange before this step has been observed, and restarted; the trace

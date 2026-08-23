@@ -154,12 +154,17 @@ export interface ModelTurn {
   compactRetried?: boolean;
   /**
    * Set on a fold's first-served request when a DIFFERENTLY worded ask
-   * joins it while it is in flight (`joined_by`) — the words of that
-   * joining ask, held here only so the mock can forbid them from every
-   * request of the run (`Trace.forbiddenEverywhere`). Held the same way
-   * `compactRetried` is: the mock withholds this response until the
-   * runner releases it. Never set alongside `compactRetried` — an
-   * identical resend is that field's to carry.
+   * joins it while it is in flight — the words of that joining ask, held
+   * here only so the mock can forbid them from every request of the run
+   * (`Trace.forbiddenEverywhere`). Held the same way `compactRetried` is:
+   * the mock withholds this response until the runner releases it. Never
+   * set alongside `compactRetried` — an identical resend is that field's
+   * to carry. Two origins compile here the same way, since joining and
+   * the reach-nothing rule do not depend on what began the fold (SPEC.md
+   * §3): a `compact:` turn's own `joined_by` (an ask joining a fold
+   * another ask started), and a plain turn's compaction step's own
+   * `joined_by` (an ask joining a fold the run's own declared threshold
+   * started).
    */
   compactJoined?: string;
   /** This held fold's position among the trace's held actions — which hold the runner pairs it with, numbered the same way as `CallToolInstruction.holdIndex`. */
@@ -317,7 +322,20 @@ export interface Judgment {
  * of this entry's own to judge.
  */
 export type TurnSpec =
-  | { kind: 'prompt'; prompt: string; then: Judgment }
+  | {
+      kind: 'prompt';
+      prompt: string;
+      then: Judgment;
+      /**
+       * Words of a DIFFERENT ask that joins, mid-flight, the threshold fold
+       * this turn's own first step is (koan-spec.ts's compaction `Step`
+       * `joined_by`) — absent for a plain turn. Runner.ts's turns loop
+       * reads this to know the turn's own prompt delivery must be paired
+       * with a joining `POST /compact`, the way a `compact` entry's own
+       * `joinedBy`, below, pairs one with its own second delivery.
+       */
+      joinedBy?: string;
+    }
   | { kind: 'compact'; instructions?: string; retried?: boolean; joinedBy?: string }
   | { kind: 'crash' };
 
@@ -496,6 +514,7 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
       case 'compaction': {
         // `openCalls` survives: folding a conversation down is not what
         // closes a call, so one still open across it stays open.
+        const before = conv.turns.length;
         if (step.report === 'failed') {
           conv.turns.push({ fails: step.fails, usedTokens: carried(), compaction: 'failed' });
         } else {
@@ -513,6 +532,14 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
             });
           });
         }
+        // This step's own "joined_by" (koan-spec.ts) — a threshold fold a
+        // differently worded ask joins mid-flight. Lands on the group's
+        // first-served request, the same placement a `compact:` turn's own
+        // `joinedBy` gets below (compileTurnsVariant): a fold cannot settle
+        // while that request is unanswered, so holding it is what proves
+        // the joining ask lands mid-fold, however many requests the fold
+        // costs.
+        if (step.joinedBy !== undefined) conv.turns[before].compactJoined = step.joinedBy;
         break;
       }
       case 'tool': {
@@ -723,7 +750,12 @@ function compileTurnsTrace(
             ...(t.retried ? { retried: true as const } : {}),
             ...(t.joinedBy !== undefined ? { joinedBy: t.joinedBy } : {}),
           }
-        : { kind: 'prompt', prompt: t.prompt, then: compileJudgment(t.then) },
+        : {
+            kind: 'prompt',
+            prompt: t.prompt,
+            then: compileJudgment(t.then),
+            ...(promptTurnJoinedBy(t) !== undefined ? { joinedBy: promptTurnJoinedBy(t) } : {}),
+          },
   );
 
   const oneOfIndex = turns.findIndex((t) => t !== 'crash' && t.trace?.kind === 'one_of');
@@ -795,7 +827,14 @@ function compileTurnsVariant(
   // interleave with these.
   heldActions(main);
 
-  const joinedWords = turns.flatMap((t) => (t !== 'crash' && t.kind === 'compact' && t.joinedBy !== undefined ? [t.joinedBy] : []));
+  // Read off `main.turns.compactJoined` rather than `turns` itself: that
+  // field is already set for both origins by now — a `compact:` turn's
+  // own `joinedBy` (just above) and a plain turn's compaction step's own
+  // (compileSteps) — so one sweep here catches every joiner the trace
+  // scripts, wherever it was written. Never a subagent conversation's:
+  // parse.ts rejects `joined_by` inside a subagent block, so `main` is
+  // the whole of what there is to sweep.
+  const joinedWords = main.turns.flatMap((mt) => (mt.compactJoined !== undefined ? [mt.compactJoined] : []));
   return { conversations, ...(joinedWords.length > 0 ? { forbiddenEverywhere: joinedWords } : {}) };
 }
 
@@ -807,6 +846,18 @@ function turnStepsOf(t: Exclude<ParsedTurn, 'crash'>, pickVariant: string | unde
   if (t.trace === undefined) return undefined;
   if (t.trace.kind === 'one') return t.trace.trace.steps;
   return t.trace.variants[pickVariant as string].steps;
+}
+
+// The words of a prompt turn's own opening step's "joined_by"
+// (koan-spec.ts's compaction `Step`), if it has one — a differently
+// worded ask joining, mid-flight, the threshold fold that step is. Read
+// off the parsed turn directly, ahead of `compileTurnsVariant` below,
+// because `TurnSpec` (unlike the compiled `Trace` it sits beside) does
+// not vary by variant, so this only ever looks at a "when" trace: parse.ts
+// rejects `joined_by` inside a "one_of" variant for exactly that reason.
+function promptTurnJoinedBy(t: Exclude<ParsedTurn, 'crash'>): string | undefined {
+  const firstStep = t.trace?.kind === 'one' ? t.trace.trace.steps[0] : undefined;
+  return firstStep?.kind === 'compaction' ? firstStep.joinedBy : undefined;
 }
 
 // After compiling rather than in compileSteps, which never sees

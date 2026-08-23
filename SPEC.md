@@ -288,9 +288,13 @@ caller who asked.
 
 An ask that arrives while a fold is already in progress MUST NOT start a
 second one — it joins the fold already running, whatever it says: joining
-does not depend on the wording. You answer it the same way: once that
-fold has ended and been reported. One fold, one report, serves every ask
-that converged on it, however many and however differently worded. A
+does not depend on the wording, and it does not depend on how that fold
+began, either. The fold already running may be one an earlier ask
+brought about, or one your own declared threshold did on its own — a
+joining ask reaches whichever is in flight the same way. You answer it
+the same way too: once that fold has ended and been reported. One fold,
+one report, serves every ask that converged on it, however many, however
+differently worded, and whatever started the fold they converged on. A
 joining ask's own instructions, if any, reach nothing — not the fold
 already running, whose wording was fixed when it began, and not a second
 fold after it, because there is no second fold for them to reach.
@@ -483,6 +487,7 @@ it cannot drift from the contract it indexes.
 | [091-delegation-depth](./koans/091-delegation-depth.yaml) | The run permits one level of delegation and the delegate tries to delegate again. A depth cap is crossed, not spent: the child's delegation is refused the way an undeclared name's is — no conversation opens for it, the refusal reaches the child, and the child finishes its own work with what it has. The run completes (SPEC.md §3). |
 | [092-follow-up-after-failure](./koans/092-follow-up-after-failure.yaml) | The run's only model request is refused and the run settles failed. A failure seals nothing: the caller's follow-up prompt re-opens the same conversation, the model now answers with the history the failed turn left behind, and the run completes (SPEC.md §3). |
 | [093-joining-ask-different-words](./koans/093-joining-ask-different-words.yaml) | Two fold asks with different words: the second arrives while the fold the first brought about is still summarizing. The second ask joins that fold and is answered by it — its own instructions reach nothing: not the running fold, whose wording was fixed when it began, and not a second fold after it, because one fold serves every ask that converged on it (SPEC.md §3). |
+| [094-joining-ask-mid-threshold-fold](./koans/094-joining-ask-mid-threshold-fold.yaml) | The run's declared threshold starts a fold, and the caller's ask — instructions and all — arrives while it is summarizing. The ask joins the fold the run had already begun: it is answered once that fold ends and is reported, and its instructions reach nothing — the fold's wording was fixed when it began, and no second fold starts for them (SPEC.md §3). |
 
 <!-- koan-index:end -->
 

@@ -557,7 +557,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
 
       for (const [k, action] of actions.entries()) {
         // A second fold ask — identical (`retried`) or differently
-        // worded (`joinedBy`) — is the turns loop's to deliver; the ask
+        // worded (`joinAsk`) — is the turns loop's to deliver; the ask
         // that engages its hold has not even been sent yet here.
         if (action.kind === 'compact') continue;
         const label =
@@ -749,7 +749,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // against the state the one that actually stopped left behind.
       let stoppedEarly = false;
       // One hold per fold ask a second ask converges on — identical
-      // (`retried`) or differently worded (`joinedBy`) — in turn order.
+      // (`retried`) or differently worded (`joinAsk`) — in turn order.
       // In a `turns:` koan these are the only held actions parse.ts
       // admits, so the filter narrows nothing today — it keeps the
       // pairing explicit.
@@ -786,7 +786,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
                   }
                 : {}),
             };
-            if (!entry.retried && entry.joinedBy === undefined) {
+            if (!entry.retried && entry.joinAsk === undefined) {
               const compactRes = await fetch(`${base}/runs/${runId}/compact`, askInit);
               if (compactRes.status !== 202 && compactRes.status !== 200) {
                 throw new Error(`POST /runs/${runId}/compact returned ${compactRes.status}, expected 202 or 200`);
@@ -810,7 +810,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             // Two asks converging on one fold: fire the first, wait until
             // its fold's own summarizing request is provably in flight
             // (held by the mock), deliver the second — the same ask again
-            // (`retried`) or a differently worded one (`joinedBy`) — then
+            // (`retried`) or a differently worded one (`joinAsk`) — then
             // let the fold go. What convergence must show is one fold,
             // which judgeReportedFolds and the script's own request count
             // already pin — never the delivery slack below.
@@ -823,11 +823,11 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             // its ask apart from an identical resend, and what mock-llm.ts
             // is checking never reaches the running fold.
             const askBInit =
-              entry.joinedBy !== undefined
+              entry.joinAsk !== undefined
                 ? {
                     method: 'POST',
                     headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({ instructions: entry.joinedBy }),
+                    body: JSON.stringify({ instructions: entry.joinAsk }),
                   }
                 : askInit;
             let askB!: Promise<Response>;
@@ -874,8 +874,8 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
               judgeAsk(askA, 'the first', ''),
               judgeAsk(
                 askB,
-                entry.joinedBy !== undefined ? 'the joining' : 'the repeated',
-                entry.joinedBy !== undefined
+                entry.joinAsk !== undefined ? 'the joining' : 'the repeated',
+                entry.joinAsk !== undefined
                   ? ' — an ask sent mid-fold joins the running fold, whatever its wording — it is not an error (SPEC.md §3)'
                   : ' — an identical ask re-sent mid-fold joins the running fold, it is not an error (SPEC.md §3)',
               ),
@@ -888,13 +888,13 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             run = (await settled.json()) as RunState;
             continue;
           }
-          if (entry.joinedBy !== undefined) {
+          if (entry.joinAsk !== undefined) {
             // This turn's own opening step is the run's own declared
             // threshold's fold, joined mid-flight by a differently worded
-            // ask (koan-spec.ts's compaction `Step` "joined_by") — unlike
-            // the `compact` entry above, there is no first ask to await
-            // here: the threshold started this fold on its own, so the
-            // turn's prompt delivery is what engages the hold, and the
+            // ask (koan-spec.ts's compaction `Step`, its own `compact`) —
+            // unlike the `compact` entry above, there is no first ask to
+            // await here: the threshold started this fold on its own, so
+            // the turn's prompt delivery is what engages the hold, and the
             // joining ask is the only one this turn sends.
             const before = foldsEnded(run);
             const hold = foldHolds[nextFoldHold++];
@@ -923,7 +923,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
               ask = fetch(`${base}/runs/${runId}/compact`, {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ instructions: entry.joinedBy }),
+                body: JSON.stringify({ instructions: entry.joinAsk }),
               });
               ask.catch(() => {});
               // Delivery slack, the same reason as the `compact` entry's

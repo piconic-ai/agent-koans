@@ -25,7 +25,7 @@ turns:
       - request:
           type: model
           purpose: compaction
-        joined_by: "Keep the dock numbers only."
+        compact: "Keep the dock numbers only."
         response:
           body: "Earlier: dock D-7 has cargo bay seal code K-3-9925."
           used_tokens: 9000

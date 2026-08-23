@@ -486,10 +486,10 @@ export function startMockLlm(
   const allowed = conversationValues(trace);
   const forbidden = buildForbidden(allowed, trace.conversations);
   const identifying = buildIdentifying(allowed);
-  // A joining ask's own words (`joined_by`) reach no request of any
-  // conversation, not just the fold it joined — so unlike the rest of
-  // `forbidden`, this entry goes onto every script, the source
-  // conversation included, rather than every OTHER one.
+  // A joining ask's own words (a compaction step's own `compact`) reach no
+  // request of any conversation, not just the fold it joined — so unlike
+  // the rest of `forbidden`, this entry goes onto every script, the
+  // source conversation included, rather than every OTHER one.
   const joinForbidden = (trace.forbiddenEverywhere ?? []).map((value) => ({
     value,
     reason:

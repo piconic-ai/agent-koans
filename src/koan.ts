@@ -154,19 +154,23 @@ export interface ModelTurn {
   compactRetried?: boolean;
   /**
    * Set on a fold's first-served request when a DIFFERENTLY worded ask
-   * joins it while it is in flight — the words of that joining ask, held
-   * here only so the mock can forbid them from every request of the run
-   * (`Trace.forbiddenEverywhere`). Held the same way `compactRetried` is:
-   * the mock withholds this response until the runner releases it. Never
-   * set alongside `compactRetried` — an identical resend is that field's
-   * to carry. Two origins compile here the same way, since joining and
-   * the reach-nothing rule do not depend on what began the fold (SPEC.md
-   * §3): a `compact:` turn's own `joined_by` (an ask joining a fold
-   * another ask started), and a plain turn's compaction step's own
-   * `joined_by` (an ask joining a fold the run's own declared threshold
-   * started).
+   * joins it while it is in flight (a compaction step's own `compact` —
+   * mirrors `CallToolInstruction.promptDuring`: a caller's ask delivered
+   * while this fold's first-served request is held, the way `promptDuring`
+   * is a caller's prompt delivered while a tool invocation is held) — the
+   * words of that joining ask, held here only so the mock can forbid them
+   * from every request of the run (`Trace.forbiddenEverywhere`). Held the
+   * same way `compactRetried` is: the mock withholds this response until
+   * the runner releases it. Never set alongside `compactRetried` — an
+   * identical resend is that field's to carry. One spelling compiles here
+   * for both fold origins, since joining and the reach-nothing rule do not
+   * depend on what began the fold (SPEC.md §3): a `compact:` turn's own
+   * step-level `compact` (an ask joining a fold another ask started), and
+   * a plain turn's threshold-fold step's own `compact` (an ask joining a
+   * fold the run's own declared threshold started) — koan-spec.ts's
+   * compaction `Step`, either way.
    */
-  compactJoined?: string;
+  askDuring?: string;
   /** This held fold's position among the trace's held actions — which hold the runner pairs it with, numbered the same way as `CallToolInstruction.holdIndex`. */
   holdIndex?: number;
   /** This turn's tool-call instruction(s); more than one means a parallel group. */
@@ -253,12 +257,13 @@ export interface Trace {
   conversations: Conversation[];
   /**
    * Words of an ask that joined a fold running elsewhere in this trace
-   * (`joined_by`) — must never reach a request of ANY conversation here,
-   * not just the fold it joined: the fold it joined had its wording
-   * fixed before it arrived, and no second fold starts for it to reach
-   * instead (SPEC.md §3). Fed into every `ConversationScript.forbidden`
-   * (mock-llm.ts), the same channel a value scripted into one
-   * conversation and forbidden from another already goes through.
+   * (a compaction step's own `compact`) — must never reach a request of
+   * ANY conversation here, not just the fold it joined: the fold it
+   * joined had its wording fixed before it arrived, and no second fold
+   * starts for it to reach instead (SPEC.md §3). Fed into every
+   * `ConversationScript.forbidden` (mock-llm.ts), the same channel a
+   * value scripted into one conversation and forbidden from another
+   * already goes through.
    */
   forbiddenEverywhere?: string[];
 }
@@ -267,15 +272,15 @@ export interface Trace {
  * One caller action a held invocation carries — a mid-run prompt, a
  * re-send of the turn's own submission, a fold ask re-sent while its own
  * fold is in flight, whether identical (`retry: compact`) or differently
- * worded (`joined_by`) — or the one action that is not the caller's at all:
- * the runner killing the agent while the invocation is in flight
- * (`response: crash`).
+ * worded (a compaction step's own `compact`) — or the one action that is
+ * not the caller's at all: the runner killing the agent while the
+ * invocation is in flight (`response: crash`).
  */
 export type HeldAction =
   | { kind: 'prompt'; prompt: string }
   | { kind: 'retry' }
   | { kind: 'crash' }
-  | { kind: 'compact'; joinInstructions?: string };
+  | { kind: 'compact'; instructions?: string };
 
 /** A `then`-block matcher; a bare scalar means `equals`. */
 export type Matcher =
@@ -327,16 +332,20 @@ export type TurnSpec =
       prompt: string;
       then: Judgment;
       /**
-       * Words of a DIFFERENT ask that joins, mid-flight, the threshold fold
-       * this turn's own first step is (koan-spec.ts's compaction `Step`
-       * `joined_by`) — absent for a plain turn. Runner.ts's turns loop
+       * Words of a DIFFERENT ask that joins, mid-flight, the fold this
+       * turn's own trace scripts (koan-spec.ts's compaction `Step`, its
+       * own `compact`) — undefined where the turn scripts no fold, or
+       * where its trace scripts one with no joiner. Runner.ts's turns loop
        * reads this to know the turn's own prompt delivery must be paired
        * with a joining `POST /compact`, the way a `compact` entry's own
-       * `joinedBy`, below, pairs one with its own second delivery.
+       * `joinAsk`, below, pairs one with its own second delivery. Same
+       * field name on both variants — `turnJoinAsk` (koan.ts) derives it
+       * for either from the turn's own trace, the origin no longer
+       * changing where it comes from.
        */
-      joinedBy?: string;
+      joinAsk?: string;
     }
-  | { kind: 'compact'; instructions?: string; retried?: boolean; joinedBy?: string }
+  | { kind: 'compact'; instructions?: string; retried?: boolean; joinAsk?: string }
   | { kind: 'crash' };
 
 /** A compiled koan: shared `given`/`then` plus one or more trace variants. */
@@ -532,14 +541,14 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
             });
           });
         }
-        // This step's own "joined_by" (koan-spec.ts) — a threshold fold a
-        // differently worded ask joins mid-flight. Lands on the group's
-        // first-served request, the same placement a `compact:` turn's own
-        // `joinedBy` gets below (compileTurnsVariant): a fold cannot settle
-        // while that request is unanswered, so holding it is what proves
-        // the joining ask lands mid-fold, however many requests the fold
-        // costs.
-        if (step.joinedBy !== undefined) conv.turns[before].compactJoined = step.joinedBy;
+        // This step's own "compact" (koan-spec.ts) — a differently worded
+        // ask joins this fold mid-flight, whichever origin brought the
+        // fold about: the run's own declared threshold, or an ask whose
+        // own `compact:` turn this step sits inside. Lands on the group's
+        // first-served request: a fold cannot settle while that request is
+        // unanswered, so holding it is what proves the joining ask lands
+        // mid-fold, however many requests the fold costs.
+        if (step.compact !== undefined) conv.turns[before].askDuring = step.compact;
         break;
       }
       case 'tool': {
@@ -609,15 +618,16 @@ function heldActions(conv: Conversation): Array<{ turn: number; action: HeldActi
   for (const [i, turn] of conv.turns.entries()) {
     // A compaction turn carries no call_tools, so this is mutually
     // exclusive with the member loop below — never both on one turn.
-    // `compactRetried` and `compactJoined` are themselves mutually
-    // exclusive (parse.ts rejects `joined_by` beside `retry`), so at
-    // most one of these two fires.
+    // `compactRetried` and `askDuring` are themselves mutually exclusive
+    // (parse.ts rejects a fold step's own `compact` on a turn that also
+    // carries `retry` — one joining delivery per fold), so at most one of
+    // these two fires.
     if (turn.compactRetried) {
       turn.holdIndex = held.length;
       held.push({ turn: i, action: { kind: 'compact' } });
-    } else if (turn.compactJoined !== undefined) {
+    } else if (turn.askDuring !== undefined) {
       turn.holdIndex = held.length;
-      held.push({ turn: i, action: { kind: 'compact', joinInstructions: turn.compactJoined } });
+      held.push({ turn: i, action: { kind: 'compact', instructions: turn.askDuring } });
     }
     for (const member of turn.call_tools ?? []) {
       const action: HeldAction | undefined =
@@ -686,7 +696,7 @@ export function actionsDuringOf(trace: Trace): HeldAction[] {
   const actions: HeldAction[] = [];
   for (const turn of trace.conversations[0].turns) {
     if (turn.compactRetried) actions.push({ kind: 'compact' });
-    else if (turn.compactJoined !== undefined) actions.push({ kind: 'compact', joinInstructions: turn.compactJoined });
+    else if (turn.askDuring !== undefined) actions.push({ kind: 'compact', instructions: turn.askDuring });
     for (const member of turn.call_tools ?? []) {
       if (member.promptDuring !== undefined) actions.push({ kind: 'prompt', prompt: member.promptDuring });
       else if (member.retryDuring) actions.push({ kind: 'retry' });
@@ -748,13 +758,13 @@ function compileTurnsTrace(
             kind: 'compact',
             ...(t.instructions !== undefined ? { instructions: t.instructions } : {}),
             ...(t.retried ? { retried: true as const } : {}),
-            ...(t.joinedBy !== undefined ? { joinedBy: t.joinedBy } : {}),
+            ...(turnJoinAsk(t) !== undefined ? { joinAsk: turnJoinAsk(t) } : {}),
           }
         : {
             kind: 'prompt',
             prompt: t.prompt,
             then: compileJudgment(t.then),
-            ...(promptTurnJoinedBy(t) !== undefined ? { joinedBy: promptTurnJoinedBy(t) } : {}),
+            ...(turnJoinAsk(t) !== undefined ? { joinAsk: turnJoinAsk(t) } : {}),
           },
   );
 
@@ -811,14 +821,12 @@ function compileTurnsVariant(
       // however many requests the fold costs.
       main.turns[before].compactRetried = true;
     }
-    if (t.kind === 'compact' && t.joinedBy !== undefined) {
-      // Same hold, for the same reason, as `retried` above — proving the
-      // differently worded ask lands while the fold is still unanswered
-      // — but a different field, since `compactRetried` alone drives the
-      // exactly-once wording check in mock-llm.ts, which is about the
-      // first ask's own words, not the joiner's.
-      main.turns[before].compactJoined = t.joinedBy;
-    }
+    // No separate handling for a joining ask here: whichever origin
+    // brought the fold about, its own compaction step — inside this
+    // `compact:` turn's single-step trace, or a plain turn's threshold-
+    // fold step — already carries "compact" (koan-spec.ts), and
+    // `compileSteps` above already set `askDuring` from it when this
+    // turn's own steps were compiled. One spelling, one place it lands.
   }
 
   // Numbers the fold holds into holdIndex. The only held actions a
@@ -827,14 +835,14 @@ function compileTurnsVariant(
   // interleave with these.
   heldActions(main);
 
-  // Read off `main.turns.compactJoined` rather than `turns` itself: that
-  // field is already set for both origins by now — a `compact:` turn's
-  // own `joinedBy` (just above) and a plain turn's compaction step's own
-  // (compileSteps) — so one sweep here catches every joiner the trace
-  // scripts, wherever it was written. Never a subagent conversation's:
-  // parse.ts rejects `joined_by` inside a subagent block, so `main` is
-  // the whole of what there is to sweep.
-  const joinedWords = main.turns.flatMap((mt) => (mt.compactJoined !== undefined ? [mt.compactJoined] : []));
+  // Read off `main.turns.askDuring` rather than `turns` itself: that
+  // field is already set for both origins by now, uniformly, by
+  // `compileSteps`'s own "compaction" case above — so one sweep here
+  // catches every joiner the trace scripts, wherever it was written.
+  // Never a subagent conversation's: parse.ts rejects a joining "compact"
+  // inside a subagent block, so `main` is the whole of what there is to
+  // sweep.
+  const joinedWords = main.turns.flatMap((mt) => (mt.askDuring !== undefined ? [mt.askDuring] : []));
   return { conversations, ...(joinedWords.length > 0 ? { forbiddenEverywhere: joinedWords } : {}) };
 }
 
@@ -848,16 +856,21 @@ function turnStepsOf(t: Exclude<ParsedTurn, 'crash'>, pickVariant: string | unde
   return t.trace.variants[pickVariant as string].steps;
 }
 
-// The words of a prompt turn's own opening step's "joined_by"
+// The words of this turn's own compaction step's joining "compact"
 // (koan-spec.ts's compaction `Step`), if it has one — a differently
-// worded ask joining, mid-flight, the threshold fold that step is. Read
-// off the parsed turn directly, ahead of `compileTurnsVariant` below,
-// because `TurnSpec` (unlike the compiled `Trace` it sits beside) does
-// not vary by variant, so this only ever looks at a "when" trace: parse.ts
-// rejects `joined_by` inside a "one_of" variant for exactly that reason.
-function promptTurnJoinedBy(t: Exclude<ParsedTurn, 'crash'>): string | undefined {
+// worded ask joining, mid-flight, the fold that step is, whichever origin
+// brought that fold about. Reads the same position for both `TurnSpec`
+// variants: a plain turn's opening step (the threshold-fold case), and a
+// `compact:` turn's own single step (`checkCompactStep`'s one-step rule —
+// parse.ts — makes it the trace's first and only one), since one spelling
+// covers both origins now. Read off the parsed turn directly, ahead of
+// `compileTurnsVariant` below, because `TurnSpec` (unlike the compiled
+// `Trace` it sits beside) does not vary by variant, so this only ever
+// looks at a "when" trace: parse.ts rejects a joining "compact" inside a
+// "one_of" variant for exactly that reason.
+function turnJoinAsk(t: Exclude<ParsedTurn, 'crash'>): string | undefined {
   const firstStep = t.trace?.kind === 'one' ? t.trace.trace.steps[0] : undefined;
-  return firstStep?.kind === 'compaction' ? firstStep.joinedBy : undefined;
+  return firstStep?.kind === 'compaction' ? firstStep.compact : undefined;
 }
 
 // After compiling rather than in compileSteps, which never sees

@@ -1,0 +1,24 @@
+name: follow-up-after-failure
+description: >
+  The run's only model request is refused and the run settles failed.
+  A failure seals nothing: the caller's follow-up prompt re-opens the
+  same conversation, the model now answers with the history the failed
+  turn left behind, and the run completes (SPEC.md §3).
+
+turns:
+  - prompt: "What is the operator code for incident INC-4?"
+    when:
+      - request: model
+        response: { status: 400, body: { error: "invalid request" } }
+    then:
+      status: failed
+  # Deliberately repeats nothing of the first prompt: the mock routes by
+  # the history carrying the original task, so a re-open that started a
+  # fresh conversation would have nothing to route this turn by.
+  - prompt: "The model is back now — ask again and give me that code."
+    when:
+      - request: model
+        response: "The operator code for incident INC-4 is OP-4417."
+    then:
+      status: completed
+      output: { contains: "OP-4417" }

@@ -484,11 +484,13 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
       continue;
     }
     if (!last) {
-      // An intermediate turn can only be judged "completed" by ending in
-      // a plain reply — the one seam where a later turn's first request
-      // is allowed to continue the same conversation. Every conforming
-      // shape owes it, not just the one written first.
-      const err = checkEachVariant(turnTrace, i, checkEndsInReply);
+      // An intermediate turn can end in a plain reply (judged "completed")
+      // or a model API failure (judged whatever the turn's own `then`
+      // declares) — the two seams where a later turn's first request is
+      // allowed to continue the same conversation, one settled and one
+      // refused. Every conforming shape owes one of them, not just the
+      // one written first.
+      const err = checkEndsInReply(turnTrace, i, thens[i]);
       if (err) return err;
     }
     turns.push({ kind: 'prompt', prompt: rt.prompt as string, trace: turnTrace, then: thens[i] });
@@ -557,11 +559,43 @@ function checkCompactStep(trace: Trace, at: string): Problem | undefined {
   return undefined;
 }
 
-function checkEndsInReply(trace: Trace, at: string): Problem | undefined {
-  const end = trace.steps[trace.steps.length - 1];
-  if (end.kind !== 'model' || end.response.kind !== 'reply') {
+// An intermediate turn's ending is the turn's own judgment, not each
+// variant's separately: a `one_of` that let one variant settle and
+// another refuse would leave `then` describing only some of them, so
+// every variant is walked here together rather than through
+// checkEachVariant, which judges each in isolation.
+function checkEndsInReply(turnTrace: TurnTrace, i: number, then: Judgment): Problem | undefined {
+  const variants =
+    turnTrace.kind === 'one'
+      ? [{ at: `turns[${i}].when`, trace: turnTrace.trace }]
+      : Object.entries(turnTrace.variants).map(([variant, trace]) => ({ at: `turns[${i}].one_of.${variant}`, trace }));
+
+  let endKind: 'reply' | 'api-failure' | undefined;
+  for (const { at, trace } of variants) {
+    const end = trace.steps[trace.steps.length - 1];
+    const kind = end.kind === 'model' && end.response.kind === 'reply' ? 'reply'
+      : end.kind === 'model' && end.response.kind === 'api-failure' ? 'api-failure'
+      : undefined;
+    if (kind === undefined) {
+      return problem(
+        `${at} must end with a plain text reply or a model API failure — an intermediate turn can only be judged ` +
+          `"completed" or its declared failure by ending in one`,
+      );
+    }
+    if (endKind === undefined) {
+      endKind = kind;
+    } else if (endKind !== kind) {
+      const article = (k: 'reply' | 'api-failure') => (k === 'api-failure' ? 'an' : 'a');
+      return problem(
+        `turns[${i}].one_of: every variant must end the same way — a judgment is the turn's, not a variant's, so ` +
+          `${at} cannot end in ${article(kind)} ${kind} while another variant ends in ${article(endKind)} ${endKind}`,
+      );
+    }
+  }
+  if (endKind === 'api-failure' && then.status !== 'failed') {
     return problem(
-      `${at} must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one`,
+      `turns[${i}] ends in a model API failure — it must declare "then: { status: failed }" so the runner knows ` +
+        `the stop is scripted, not an early one`,
     );
   }
   return undefined;
@@ -1778,8 +1812,34 @@ function checkToolMatching(koan: KoanFile, steps: Step[], at: string): Problem |
  * header), so seeing whether anything comes after needs a fresh pass over
  * the finished trace — one per conversation, since the rule is scoped to
  * one.
+ *
+ * A `turns:` koan is the one exception `scriptedTraces` cannot see: it
+ * flattens every turn's steps into one array, so a follow-up prompt's
+ * turn — legitimately continuing the same conversation after the turn
+ * before it declared `then: { status: failed }` (checkEndsInReply) —
+ * would otherwise look like more exchange following the refusal. That
+ * seam is a turn boundary, not the refused exchange carrying on, so
+ * `turns:` walks its own conversations here and marks each boundary to
+ * exempt from the rule.
  */
 function apiFailureEndsTheTrace(koan: KoanFile): Problem | undefined {
+  if (koan.body.kind === 'turns') {
+    for (const { label, conv } of turnsScriptedConversations(koan.body.turns)) {
+      const turnBoundaries = new Set<number>();
+      let offset = 0;
+      for (const entry of conv) {
+        offset += entry.steps.length;
+        turnBoundaries.add(offset);
+      }
+      const found = checkApiFailureEnds(
+        conv.flatMap((t) => t.steps),
+        label,
+        turnBoundaries,
+      );
+      if (found) return found;
+    }
+    return undefined;
+  }
   for (const { steps, at } of scriptedTraces(koan)) {
     const found = checkApiFailureEnds(steps, at);
     if (found) return found;
@@ -1787,10 +1847,15 @@ function apiFailureEndsTheTrace(koan: KoanFile): Problem | undefined {
   return undefined;
 }
 
-function checkApiFailureEnds(steps: Step[], at: string): Problem | undefined {
+function checkApiFailureEnds(steps: Step[], at: string, turnBoundaries?: Set<number>): Problem | undefined {
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    if (step.kind === 'model' && step.response.kind === 'api-failure' && i !== steps.length - 1) {
+    if (
+      step.kind === 'model' &&
+      step.response.kind === 'api-failure' &&
+      i !== steps.length - 1 &&
+      !turnBoundaries?.has(i + 1)
+    ) {
       return problem(`${at}[${i + 1}]: nothing can follow a model API failure — the conversation it refused must stop`);
     }
     if (step.kind === 'subagent') {

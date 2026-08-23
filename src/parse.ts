@@ -155,7 +155,7 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
     files = rawFiles as Record<string, string>;
   }
 
-  let limits: { run?: { model_requests?: number }; prompt?: { duration_ms?: number } } | undefined;
+  let limits: { run?: { model_requests?: number; delegation_depth?: number }; prompt?: { duration_ms?: number } } | undefined;
   if (g.limits !== undefined) {
     const rawLimits = g.limits;
     if (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits)) {
@@ -172,7 +172,7 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
     // `limits:` to begin with. The same rule one level down: an empty
     // scope block is a scope with nothing budgeted.
     if (Object.keys(rl).length === 0) return problem('"given.limits" declares no budget');
-    const scoped = (scope: 'run' | 'prompt', allowed: string): Record<string, unknown> | Problem | undefined => {
+    const scoped = (scope: 'run' | 'prompt', allowed: string[]): Record<string, unknown> | Problem | undefined => {
       if (rl[scope] === undefined) return undefined;
       const raw = rl[scope];
       if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
@@ -180,16 +180,16 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
       }
       const block = raw as Record<string, unknown>;
       for (const key of Object.keys(block)) {
-        if (key !== allowed) {
-          return problem(`"given.limits.${scope}" has unknown key "${key}" (allowed: ${allowed})`);
+        if (!allowed.includes(key)) {
+          return problem(`"given.limits.${scope}" has unknown key "${key}" (allowed: ${allowed.join(', ')})`);
         }
       }
       if (Object.keys(block).length === 0) return problem(`"given.limits.${scope}" declares no budget`);
       return block;
     };
-    const runBlock = scoped('run', 'model_requests');
+    const runBlock = scoped('run', ['model_requests', 'delegation_depth']);
     if (isProblem(runBlock)) return runBlock;
-    const promptBlock = scoped('prompt', 'duration_ms');
+    const promptBlock = scoped('prompt', ['duration_ms']);
     if (isProblem(promptBlock)) return promptBlock;
     let model_requests: number | undefined;
     if (runBlock?.model_requests !== undefined) {
@@ -197,6 +197,17 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
         return problem('"given.limits.run.model_requests" must be a positive integer');
       }
       model_requests = runBlock.model_requests as number;
+    }
+    // Not a budget: nothing is spent against it request by request, and
+    // crossing it refuses one delegation rather than ending the run
+    // (SPEC.md §3, Budgets) — but it still lives under `run`, since it is
+    // still a ceiling the whole run shares across every conversation.
+    let delegation_depth: number | undefined;
+    if (runBlock?.delegation_depth !== undefined) {
+      if (!Number.isInteger(runBlock.delegation_depth) || (runBlock.delegation_depth as number) < 1) {
+        return problem('"given.limits.run.delegation_depth" must be a positive integer');
+      }
+      delegation_depth = runBlock.delegation_depth as number;
     }
     let duration_ms: number | undefined;
     if (promptBlock?.duration_ms !== undefined) {
@@ -206,7 +217,14 @@ function parseGiven(rawGiven: unknown): Parsed<Given> {
       duration_ms = promptBlock.duration_ms as number;
     }
     limits = {
-      ...(model_requests !== undefined ? { run: { model_requests } } : {}),
+      ...(model_requests !== undefined || delegation_depth !== undefined
+        ? {
+            run: {
+              ...(model_requests !== undefined ? { model_requests } : {}),
+              ...(delegation_depth !== undefined ? { delegation_depth } : {}),
+            },
+          }
+        : {}),
       ...(duration_ms !== undefined ? { prompt: { duration_ms } } : {}),
     };
   }
@@ -1537,37 +1555,66 @@ function checkFoldsReachTheirConversation(steps: Step[], at: string): Problem | 
 
 /**
  * Unlike a tool call, a delegation has no round trip a koan may omit: it
- * must be answered — unless it names someone outside a declared roster,
- * which must have no block at all. The roster rule rides the same walk:
- * both decide which delegations get a block.
+ * must be answered — unless it names someone outside a declared roster, or
+ * it is issued from a conversation already at `given.limits.run.
+ * delegation_depth`, either of which must have no block at all. Both rules
+ * ride the same walk: they decide which delegations get a block, the
+ * roster by name and the cap by where the issuing conversation sits.
  */
 function everyDelegationHasABlock(koan: KoanFile): Problem | undefined {
   const roster = koan.given.subagents ? new Set(Object.keys(koan.given.subagents)) : undefined;
+  const cap = koan.given.limits?.run?.delegation_depth;
   for (const { steps, at } of scriptedTraces(koan)) {
-    const found = checkDelegationsResolved(steps, at, roster);
+    const found = checkDelegationsResolved(steps, at, roster, cap, 0);
     if (found) return found;
   }
   return undefined;
 }
 
-// `roster` is threaded through the recursion rather than re-derived per
-// block: it is the whole run's, not each conversation's own. A non-roster
-// delegation is dropped from `unresolved` rather than flagged — it is
-// intentionally blockless, the way an undeclared tool call gets no tool
-// request.
-function checkDelegationsResolved(steps: Step[], at: string, roster: Set<string> | undefined): Problem | undefined {
+// `roster` and `cap` are threaded through the recursion rather than
+// re-derived per block: both are the whole run's, not each conversation's
+// own. `depth` is the one thing that does change per block — one more than
+// the conversation that opened it — since it is what a cap is compared
+// against. A non-roster delegation, or one issued at or past the cap, is
+// dropped from `unresolved` rather than flagged — it is intentionally
+// blockless, the way an undeclared tool call gets no tool request. Which of
+// the two a dropped name was is kept in `refusedByDepth`, since a block
+// mistakenly written for it needs to say which rule refused it.
+function checkDelegationsResolved(
+  steps: Step[],
+  at: string,
+  roster: Set<string> | undefined,
+  cap: number | undefined,
+  depth: number,
+): Problem | undefined {
+  const overCap = cap !== undefined && depth >= cap;
   let unresolved: Array<{ subagent: string; prompt: string }> = [];
+  let refusedByDepth = new Set<string>();
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const at_i = `${at}[${i}]`;
     if (step.kind === 'model') {
       if (unresolved.length > 0) return problem(unresolvedDelegationMessage(at_i, unresolved));
       const delegations = step.response.kind === 'instructions' ? step.response.instructions.filter(isDelegate) : [];
-      unresolved = roster ? delegations.filter((d) => roster.has(d.subagent)) : delegations;
+      // Over the cap, every delegation this step issues is refused —
+      // roster membership does not save it: the cap is crossed before a
+      // name is even looked up (SPEC.md §3, Delegation).
+      if (overCap) {
+        unresolved = [];
+        refusedByDepth = new Set(delegations.map((d) => d.subagent));
+      } else {
+        unresolved = roster ? delegations.filter((d) => roster.has(d.subagent)) : delegations;
+        refusedByDepth = new Set();
+      }
     } else if (step.kind === 'subagent') {
       if (roster && !roster.has(step.name)) {
         return problem(
           `${at_i}: subagent block "${step.name}" is not in given.subagents — when the run declares its delegates, a conversation can only belong to one of them`,
+        );
+      }
+      if (refusedByDepth.has(step.name)) {
+        return problem(
+          `${at_i}: subagent block "${step.name}" scripts a conversation given.limits.run.delegation_depth (${cap}) forbids opening — a delegation issued from depth ${depth} is refused, not answered`,
         );
       }
       const di = unresolved.findIndex((d) => d.subagent === step.name);
@@ -1577,7 +1624,7 @@ function checkDelegationsResolved(steps: Step[], at: string, roster: Set<string>
         );
       }
       unresolved.splice(di, 1);
-      const found = checkDelegationsResolved(step.trace.steps, `${at_i}.when`, roster);
+      const found = checkDelegationsResolved(step.trace.steps, `${at_i}.when`, roster, cap, depth + 1);
       if (found) return found;
     }
   }

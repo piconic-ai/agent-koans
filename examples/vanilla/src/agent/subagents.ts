@@ -22,13 +22,17 @@ export interface SubagentDef {
  * a delegate the run declared none for, which is what leaves that
  * conversation's window and threshold both unset. `callId` is the wire
  * `tool_call_id` of the delegation instruction, threaded through so the
- * child conversation it starts can be found again after a crash.
+ * child conversation it starts can be found again after a crash. `depth`
+ * is the child conversation's own — one more than the delegating
+ * conversation's (SPEC.md §3) — set on it so a delegation of its own can
+ * be checked against the cap in turn.
  */
 export type Delegate = (
   prompt: string,
   context: RunContext | undefined,
   signal: AbortSignal,
   callId: string,
+  depth: number,
 ) => Promise<string | undefined>;
 
 /**
@@ -40,8 +44,12 @@ export type Delegate = (
  */
 export const SUBAGENT_TOOL_NAME = 'subagent';
 
-/** Make delegation runnable, over the delegates the run declared. */
-export function createSubagentTool(subagents: SubagentDef[], delegate: Delegate): Tool {
+/**
+ * Make delegation runnable, over the delegates the run declared. `cap` is
+ * `given.limits.run.delegation_depth` (SPEC.md §3) — absent, delegation
+ * nests as deep as the model keeps asking for it.
+ */
+export function createSubagentTool(subagents: SubagentDef[], delegate: Delegate, cap?: number): Tool {
   return {
     def: {
       name: SUBAGENT_TOOL_NAME,
@@ -54,7 +62,7 @@ export function createSubagentTool(subagents: SubagentDef[], delegate: Delegate)
         required: ['name', 'prompt'],
       },
     },
-    async invoke(argsJson, signal, callId) {
+    async invoke(argsJson, signal, callId, depth) {
       const args = parseArgs(argsJson);
       const name = typeof args?.name === 'string' ? args.name : undefined;
       const prompt = typeof args?.prompt === 'string' ? args.prompt : undefined;
@@ -65,12 +73,18 @@ export function createSubagentTool(subagents: SubagentDef[], delegate: Delegate)
       if (prompt === undefined) {
         return `Error: subagent "${name}" call is missing "prompt"`;
       }
+      // Crossed, not spent (SPEC.md §3, Budgets): refused here rather than
+      // even reaching `delegate`, the same way an unknown name never does —
+      // no child conversation opens for it.
+      if (cap !== undefined && depth >= cap) {
+        return `Error: cannot delegate to "${name}" — this conversation is already at the run's declared delegation_depth (${cap})`;
+      }
 
       // The briefing, and nothing else: what the parent knows is the
       // parent's, and what the parent gets back is this one answer.
       let text: string | undefined;
       try {
-        text = await delegate(prompt, def.context, signal, callId);
+        text = await delegate(prompt, def.context, signal, callId, depth + 1);
       } catch (err) {
         // Not rethrown: losing the model ends the child's conversation,
         // not the run — the parent's model decides what a failed

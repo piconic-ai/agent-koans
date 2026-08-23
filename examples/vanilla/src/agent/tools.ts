@@ -25,9 +25,12 @@ export interface Tool {
    * text, too. `callId` is the wire `tool_call_id` of this invocation;
    * most tools have no use for it, but the subagent tool does (it is
    * what lets a delegation's child conversation be found again after a
-   * crash — SPEC.md §3).
+   * crash — SPEC.md §3). `depth` is how many delegation levels below the
+   * run's own conversation the CALLING conversation already sits at (0
+   * for the run's own); every tool but the subagent one has no use for
+   * this either, since only delegation can be capped by it.
    */
-  invoke(argsJson: string, signal: AbortSignal, callId: string): Promise<string>;
+  invoke(argsJson: string, signal: AbortSignal, callId: string, depth: number): Promise<string>;
 }
 
 /** Read a call's arguments; `undefined` when the model did not write a JSON object. */

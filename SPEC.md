@@ -131,12 +131,16 @@ time between prompts does not count. The split is not arbitrary: a
 request count does not tick while the run sits idle between prompts,
 but a wall clock does, so a run-scoped wall clock would expire on a
 caller who simply waited before following up. Exhausting any budget
-before a final answer MUST end the run `aborted`. A budget is a
-ceiling, not permission to stop early: you MUST NOT settle a run
-`aborted` before its declared budget expires just because one is
-declared. Where inside the window you give up on a
-slow dependency is yours; no per-tool timeout is mandated unless the
-run declares one (below).
+before a final answer MUST end the run `aborted`. `run.delegation_depth`
+(Delegation, below) sits in the same scope but is not a budget in this
+sense: nothing is spent against it request by request, so there is
+nothing for it to exhaust — it is crossed, not spent, and crossing it
+ends nothing; it refuses the one delegation that would cross it, and
+the run carries on. A budget is a ceiling, not permission to stop
+early: you MUST NOT settle a run `aborted` before its declared budget
+expires just because one is declared. Where inside the window you give
+up on a slow dependency is yours; no per-tool timeout is mandated
+unless the run declares one (below).
 
 **Tool timeout.** A declared tool MAY carry `timeout_ms` (openapi.yaml):
 how long the caller wants an invocation of it waited for. An invocation
@@ -233,7 +237,13 @@ defer to. A delegation naming a delegate the run never declared opens no
 conversation: the refusal is the delegation's outcome and MUST reach the
 conversation that delegated, the way a call to a tool that was never
 declared does — what it means for the run stays that conversation's to
-decide, and the run does not end for it. An implementation that wants
+decide, and the run does not end for it. A run MAY declare
+`limits.run.delegation_depth` (openapi.yaml): how many delegation levels
+below the run's own conversation may open, at least one. A delegation
+that would cross it — issued by a conversation already at that depth —
+opens no conversation either, and is refused the same way: the refusal
+MUST reach the conversation that delegated, and the run does not end for
+it. An implementation that wants
 open-ended, on-demand delegation offers it the way real frameworks do: as
 a general-purpose delegate under a declared name of its own, which a
 caller names in `subagents` like any other — never by serving a name that
@@ -464,6 +474,7 @@ it cannot drift from the contract it indexes.
 | [088-joining-ask-keeps-its-words](./koans/088-joining-ask-keeps-its-words.yaml) | The caller's fold ask carries instructions and arrives twice — the same ask, re-sent while the fold it brought about is still summarizing. The words reach the summarizing request as they were written, and once: a joining ask's own instructions do not reach the fold already running, because its wording was fixed when that fold began (SPEC.md §3). |
 | [089-unanswered-question-costs-nothing](./koans/089-unanswered-question-costs-nothing.yaml) | The run has exactly the budget its two answers need, and the process dies with the second question sent and unanswered. A question that was never answered cost nothing and changed nothing: the recovered process asks it again from the recorded history, and the budget still covers it — a restart that had charged the doomed request would find nothing left to ask with (SPEC.md §3). |
 | [090-creation-retry-after-settle](./koans/090-creation-retry-after-settle.yaml) | The caller names the run, never sees its acceptance, and re-sends the identical creation — after the run has already settled. The resend lands on the run it already started: the same acceptance with the same run_id, the committed result untouched, and no second conversation — a run is created once, however late the caller's retry arrives (SPEC.md §3). |
+| [091-delegation-depth](./koans/091-delegation-depth.yaml) | The run permits one level of delegation and the delegate tries to delegate again. A depth cap is crossed, not spent: the child's delegation is refused the way an undeclared name's is — no conversation opens for it, the refusal reaches the child, and the child finishes its own work with what it has. The run completes (SPEC.md §3). |
 
 <!-- koan-index:end -->
 

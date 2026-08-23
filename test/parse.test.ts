@@ -217,7 +217,7 @@ const rows: Row[] = [
         - request: model
           response: ok
     `),
-    message: '"given.limits.run" has unknown key "duration_ms" (allowed: model_requests)',
+    message: '"given.limits.run" has unknown key "duration_ms" (allowed: model_requests, delegation_depth)',
   },
   {
     rule: '"given.limits.run" declares no budget when empty',
@@ -254,6 +254,19 @@ const rows: Row[] = [
           response: ok
     `),
     message: '"given.limits.run.model_requests" must be a positive integer',
+  },
+  {
+    rule: '"given.limits.run.delegation_depth" is a positive integer',
+    yaml: koan(`
+      given:
+        limits:
+          run:
+            delegation_depth: 0
+      when:
+        - request: model
+          response: ok
+    `),
+    message: '"given.limits.run.delegation_depth" must be a positive integer',
   },
   {
     rule: '"given.limits.prompt.duration_ms" is a positive integer',
@@ -1365,6 +1378,32 @@ const rows: Row[] = [
               response: ok
     `),
     message: `when[1]: subagent block "field-scout" is not in given.subagents — when the run declares its delegates, a conversation can only belong to one of them`,
+  },
+  {
+    rule: 'a declared delegation_depth still refuses a delegation past it, even for a declared name, even when a block follows',
+    yaml: koan(`
+      given:
+        subagents:
+          researcher: {}
+          helper: {}
+        limits:
+          run:
+            delegation_depth: 1
+      when:
+        - request: model
+          response: { subagent: researcher, prompt: "go look" }
+        - subagent: researcher
+          when:
+            - request: model
+              response: { subagent: helper, prompt: "help me" }
+            - subagent: helper
+              when:
+                - request: model
+                  response: ok
+            - request: model
+              response: ok
+    `),
+    message: `when[1].when[1]: subagent block "helper" scripts a conversation given.limits.run.delegation_depth (1) forbids opening — a delegation issued from depth 1 is refused, not answered`,
   },
   {
     rule: 'a trace entry needs "request"',

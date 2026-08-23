@@ -56,9 +56,13 @@ export interface Given {
    * Budgets the caller lets the agent spend; exhausting any one of them
    * must end the run `aborted`. Each budget is written under its scope:
    * `run` budgets cover the whole run and survive a crash, `prompt`
-   * budgets start again at every prompt the caller sends.
+   * budgets start again at every prompt the caller sends. `run.
+   * delegation_depth` lives in the same scope but is not itself a budget:
+   * nothing is spent against it request by request, and crossing it
+   * refuses one delegation rather than ending the run (SPEC.md §3,
+   * Budgets and Delegation).
    */
-  limits?: { run?: { model_requests?: number }; prompt?: { duration_ms?: number } };
+  limits?: { run?: { model_requests?: number; delegation_depth?: number }; prompt?: { duration_ms?: number } };
   /** The window the run's own conversation grows into, and when to fold it down. */
   context?: ContextSetup;
   /**

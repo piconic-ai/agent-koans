@@ -10,14 +10,16 @@
 const MAX_STEPS = 16;
 
 /**
- * What a run declared about how much it may spend (SPEC.md §3). Both
- * budgets travel on the same wire object, so they share this one type
- * rather than each getting a shape of its own; `prompt.duration_ms` is
- * spent by lifecycle.ts's own timer, not this file's `take()` — a
- * wall-clock ceiling is not a claim this module hands out.
+ * What a run declared about how much it may spend (SPEC.md §3), plus
+ * `run.delegation_depth` riding the same scope though it spends nothing:
+ * checked by subagents.ts, not this file's `take()`. Both budgets travel
+ * on the same wire object, so they share this one type rather than each
+ * getting a shape of its own; `prompt.duration_ms` is spent by
+ * lifecycle.ts's own timer, not this file's `take()` — a wall-clock
+ * ceiling is not a claim this module hands out.
  */
 export interface RunLimits {
-  run?: { model_requests?: number };
+  run?: { model_requests?: number; delegation_depth?: number };
   prompt?: { duration_ms?: number };
 }
 

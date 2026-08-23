@@ -343,8 +343,10 @@ function checkCoherence(
   // way: the parent's model cannot react to an outcome it was not told.
   for (const d of delegations) {
     // No content check for a refused delegation: its phrasing is the
-    // agent's own, same as a refused tool call's above.
-    if (d.undeclared) continue;
+    // agent's own, same as a refused tool call's above. Two different
+    // rules can refuse one (an undeclared name, or a cap crossed), but
+    // both compile to no `final` and skip the same way here.
+    if (d.undeclared || d.overDepth) continue;
     if (d.fails !== undefined) {
       const indicators = [String(d.fails.status), ...scalarLeaves(d.fails.body)];
       if (!indicators.some((s) => text.includes(s))) {

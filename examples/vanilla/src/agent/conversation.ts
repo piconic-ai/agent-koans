@@ -28,6 +28,14 @@ export interface Conversation {
    */
   context?: RunContext;
   /**
+   * How many delegation levels below the run's own conversation this one
+   * sits at: absent (0) for the run's own, one more than the delegating
+   * conversation's for a subagent's (run.ts's `delegate`). What
+   * `given.limits.run.delegation_depth` is checked against before this
+   * conversation is allowed to delegate again (subagents.ts).
+   */
+  depth?: number;
+  /**
    * Told after every change to the recorded history — a message
    * appended, or a fold's rewrite. A durable agent hooks its store here
    * (SPEC.md §3), a delegate's conversation included: a crash can land
@@ -48,7 +56,7 @@ export async function runConversation(
   run: Run,
   signal: AbortSignal,
 ): Promise<string | undefined> {
-  const { messages, size, context, onRecord } = conversation;
+  const { messages, size, context, onRecord, depth } = conversation;
   for (;;) {
     if (reachedThreshold(size, context)) {
       if (!(await foldOnThreshold(conversation, run, signal))) return undefined;
@@ -72,7 +80,7 @@ export async function runConversation(
       messages.push(message);
       onRecord?.();
       for (const call of message.tool_calls) {
-        const content = await executeToolCall(call, run, signal);
+        const content = await executeToolCall(call, run, signal, depth ?? 0);
         messages.push({ role: 'tool', tool_call_id: call.id, content });
         onRecord?.();
       }
@@ -95,10 +103,10 @@ function wireTools(run: Run) {
   return [...run.tools.values()].map((t) => t.def);
 }
 
-async function executeToolCall(call: ToolCall, run: Run, signal: AbortSignal): Promise<string> {
+async function executeToolCall(call: ToolCall, run: Run, signal: AbortSignal, depth: number): Promise<string> {
   const tool = run.tools.get(call.function.name);
   if (tool === undefined) {
     return `Error: unknown tool "${call.function.name}"`;
   }
-  return tool.invoke(call.function.arguments, signal, call.id);
+  return tool.invoke(call.function.arguments, signal, call.id, depth);
 }

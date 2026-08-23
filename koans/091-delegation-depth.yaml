@@ -1,0 +1,35 @@
+name: delegation-depth
+description: >
+  The run permits one level of delegation and the delegate tries to
+  delegate again. A depth cap is crossed, not spent: the child's
+  delegation is refused the way an undeclared name's is — no
+  conversation opens for it, the refusal reaches the child, and the
+  child finishes its own work with what it has. The run completes
+  (SPEC.md §3).
+
+given:
+  subagents:
+    researcher: {}
+    helper: {}
+  limits:
+    run:
+      delegation_depth: 1
+
+prompt: "Have the researcher find the operator code for incident INC-9."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Find the operator code for incident INC-9." }
+  - subagent: researcher
+    when:
+      - request: model
+        response: { subagent: helper, prompt: "Look up incident INC-9." }
+      # The cap is one level down and this is two: refused, no conversation.
+      - request: model
+        response: "I could not hand this off, but incident INC-9's operator code is R-9-3120 from the record I hold."
+  - request: model
+    response: "The researcher reports operator code R-9-3120 for INC-9."
+
+then:
+  status: completed
+  output: { contains: "R-9-3120" }

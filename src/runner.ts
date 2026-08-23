@@ -432,8 +432,13 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // (SPEC.md §3): only a caller that knows the name it asked for can
       // show the resend landed on the same run. Minted fresh per
       // execution, never written in the koan — a fixed name would land a
-      // re-run of the suite on the previous execution's settled run.
-      const clientRunId = actions.some((a) => a.kind === 'retry') ? `koan-${randomUUID()}` : undefined;
+      // re-run of the suite on the previous execution's settled run. A
+      // late retry needs the same naming for the same reason, even
+      // though it carries no held action of its own (`actions` never
+      // sees it — koan.ts compiles it onto the trace, not an action).
+      const creationRetriedLate = trace.conversations[0].turns.at(-1)?.creationRetriedLate === true;
+      const clientRunId =
+        actions.some((a) => a.kind === 'retry') || creationRetriedLate ? `koan-${randomUUID()}` : undefined;
       // Kept verbatim for the retry: what the caller re-sends is the
       // identical request, not a semantically-equal one.
       const submitBody = JSON.stringify({
@@ -888,6 +893,45 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         const res = await fetch(`${base}/runs/${runId}`);
         if (!res.ok) throw new Error(`GET /runs/${runId} returned ${res.status}`);
         run = (await res.json()) as typeof run;
+      }
+
+      // The identical creation, again — after the run already settled and
+      // the caller never saw its first acceptance (SPEC.md §3, mirroring
+      // 019/070's late-abort idempotence): the resend must still land on
+      // the run it already started, and the committed result must not
+      // move. Independent of the `abortKind === 'late'` block above: this
+      // koan scripts no abort of its own (parse.ts rejects combining the
+      // two), so the two blocks never both run.
+      if (creationRetriedLate) {
+        const before = { status: run.status, output: run.output, error: run.error };
+        const retryRes = await fetch(`${base}/runs`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: submitBody,
+        });
+        if (retryRes.status !== 201 && retryRes.status !== 202) {
+          throw new Error(
+            `the late creation resend returned ${retryRes.status} — an identical creation resent after the run ` +
+              `settled must land on the same acceptance (201/202), not a different outcome`,
+          );
+        }
+        const retried = (await retryRes.json()) as { run_id?: string };
+        if (retried.run_id !== runId) {
+          throw new Error(
+            `the late creation resend answered run_id ${JSON.stringify(retried.run_id)} — the caller named ` +
+              `"${runId}", so the identical resend must land on that run, not create another`,
+          );
+        }
+        const res = await fetch(`${base}/runs/${runId}`);
+        if (!res.ok) throw new Error(`GET /runs/${runId} returned ${res.status}`);
+        run = (await res.json()) as RunState;
+        const after = { status: run.status, output: run.output, error: run.error };
+        if (JSON.stringify(after) !== JSON.stringify(before)) {
+          failures.push(
+            `a creation resend rewrote the committed result: was ${JSON.stringify(before)}, now ${JSON.stringify(after)} — ` +
+              `a creation resend never rewrites a committed result (SPEC.md §3)`,
+          );
+        }
       }
 
       failures.push(...llm.state.violations, ...tools.state.violations);

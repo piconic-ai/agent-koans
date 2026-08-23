@@ -574,20 +574,24 @@ function abortKindOf(trace: Trace): AbortKind {
 }
 
 /**
- * A trace: its steps, the `abort` that may end it, and the mid-run
- * `prompt` one of its tool steps may carry. The bare `abort` item leaves the step
+ * A trace: its steps, the `abort` that may end it, the mid-run `prompt`
+ * one of its tool steps may carry, and the late `- retry: prompt` its
+ * final reply may be followed by. The bare `abort` item leaves the step
  * list here and becomes the trace's own field (koan-spec.ts's header),
  * which is why nothing downstream has to check that it came last — this
- * function still has to, against the raw list. `inTurns`/`inSubagent` are
- * context, not shape: they say where this array sits, for the rules that
- * read that context (`abort` and a mid-run `prompt` inside a `turns`
- * koan or a subagent block). `crashSeen` is threaded through this
- * function's own recursion into a subagent block, rather than a fresh
- * local each call: "one death per koan" has to see across that boundary,
- * which a call-local flag could not. `kind` records which shape the one
- * death seen so far was — only a tool step answered "crash" leaves room
- * for a second, and only directly after it (checked locally, against
- * `prev`, since that adjacency does not cross the recursion boundary).
+ * function still has to, against the raw list. A trailing `- retry:
+ * prompt` becomes a trace field the same way (`creationRetriedLate`),
+ * for the same reason: koan.ts wants it once compilation is done, not a
+ * step to walk past. `inTurns`/`inSubagent` are context, not shape: they
+ * say where this array sits, for the rules that read that context
+ * (`abort` and a mid-run `prompt` inside a `turns` koan or a subagent
+ * block). `crashSeen` is threaded through this function's own recursion
+ * into a subagent block, rather than a fresh local each call: "one death
+ * per koan" has to see across that boundary, which a call-local flag
+ * could not. `kind` records which shape the one death seen so far was —
+ * only a tool step answered "crash" leaves room for a second, and only
+ * directly after it (checked locally, against `prev`, since that
+ * adjacency does not cross the recursion boundary).
  */
 function parseTrace(
   ctx: Ctx<unknown>,
@@ -620,6 +624,14 @@ function parseTrace(
 
   let abort = false;
   let abortRetried = false;
+  // Set inside the per-item loop below, not popped off `written` early
+  // like `abort`'s markers: unlike a live retry (which folds onto the
+  // tool step it follows) or `abort` itself (which can only be the
+  // trace's last written item), a late retry is recognized by what it
+  // follows only once the loop reaches it — the same `- retry: prompt`
+  // word as the live case, told apart by position (koan-spec.ts's
+  // header), so nothing upstream of the loop can tell the two apart.
+  let creationRetriedLate = false;
   // Set here, not inside the per-item loop below: the marker this admits
   // is popped off `written` before that loop ever sees it (same move as
   // `retryingAbort`'s), since it is a property of the trace's last turn
@@ -741,6 +753,35 @@ function parseTrace(
       }
       if (inSubagent) {
         return problem(`${at_i}: "retry" cannot appear inside a subagent block — only the caller's own request can be retried`);
+      }
+      // The late case: the trace's very last written item, directly after
+      // a model step that already settled the run with a plain reply. An
+      // API failure settles a run too, but the resend of a FAILED run's
+      // creation is a case this format does not script yet — that
+      // position is claimed by this branch anyway so it gets its own
+      // rejection below instead of the misleading tool-step one. Nothing
+      // upstream folds this onto a tool step the way the live case is,
+      // because there is no held invocation here to fold onto; it is a
+      // trace-level marker instead (`creationRetriedLate`), the same
+      // move `abort` makes into `abortKindOf`.
+      if (i === written.length - 1 && prev?.kind === 'model' && (prev.response.kind === 'reply' || prev.response.kind === 'api-failure')) {
+        if (abort) {
+          return problem(
+            `${at_i}: a late "retry: prompt" cannot share a trace with "abort" — one ending per trace is all this format scripts`,
+          );
+        }
+        if (crashSeen.at !== undefined) {
+          return problem(
+            `${at_i}: a late "retry: prompt" cannot share a trace with "crash" — one ending per trace is all this format scripts`,
+          );
+        }
+        if (prev.response.kind === 'api-failure') {
+          return problem(
+            `${at_i}: a trailing "retry: prompt" cannot follow a model API failure — the resend of a FAILED run's creation is a different case this format does not script yet`,
+          );
+        }
+        creationRetriedLate = true;
+        continue;
       }
       if (prev === undefined || prev.kind !== 'tool') {
         return problem(
@@ -1006,6 +1047,7 @@ function parseTrace(
     }
     trace.abortCrashed = true;
   }
+  if (creationRetriedLate) trace.creationRetriedLate = true;
   return trace;
 }
 

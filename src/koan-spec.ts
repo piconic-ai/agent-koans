@@ -204,6 +204,18 @@ export interface Trace {
    * settled, so a death after it tests nothing new.
    */
   abortCrashed?: boolean;
+  /**
+   * The caller's own creation, delivered a second time after the run has
+   * already settled — a trailing `- retry: prompt`, written directly
+   * after the trace's final reply rather than folded onto a held tool
+   * step (`Step`'s own `retry`, below): there is no invocation left open
+   * to fold onto, so this position is what tells the late case apart
+   * from the live one, the same way `AbortKind` tells `abort` apart by
+   * what it follows. Must land on the same run — the same acceptance,
+   * the same `run_id` — and the committed result must not move (SPEC.md
+   * §3, mirroring 019/070's late-abort idempotence).
+   */
+  creationRetriedLate?: true;
 }
 
 /** Derived: `live` cancels a run in progress, `late` one already settled. */
@@ -241,7 +253,13 @@ export type Step =
    * folded onto the tool step it follows, the same move `abort` makes in
    * the other direction; a word rather than a flag, so what is re-sent is
    * named — `prompt` is the only object yet. One caller action per held
-   * invocation: a step carries `prompt` or `retry`, never both.
+   * invocation: a step carries `prompt` or `retry`, never both. This is
+   * the live position — the run is still working, proven by the held
+   * invocation the resend arrives beside. The late one — the run has
+   * already settled — has no invocation left to fold onto, so it is not
+   * written here at all: it is `Trace`'s own `creationRetriedLate`
+   * (above), a trailing `- retry: prompt` recognized by following the
+   * trace's final reply instead of a held tool step.
    */
   | { kind: 'tool'; tool: string; args?: ParsedArgs; response: ToolResponse; prompt?: string; retry?: 'prompt' }
   /**

@@ -1042,7 +1042,7 @@ const rows: Row[] = [
     message: 'when[3]: a late "retry: prompt" cannot share a trace with "crash" — one ending per trace is all this format scripts',
   },
   {
-    rule: '"crash" cannot appear inside a turn\'s own trace',
+    rule: '"crash" cannot appear inside the opening turn\'s own trace',
     yaml: turnsKoan(`
       - prompt: a
         when:
@@ -1051,10 +1051,10 @@ const rows: Row[] = [
           - crash
     `),
     message:
-      'turns[0].when[1]: "crash" cannot appear inside a turn\'s own trace — a death inside a prompt\'s own work is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
+      'turns[0].when[1]: "crash" cannot appear inside the opening turn\'s own trace — that position tests nothing a plain koan\'s own crash (067) does not already; only a follow-up turn\'s own trace, or the seam between turns, is scripted here',
   },
   {
-    rule: 'a turn forbids "crash" at every depth — a nested subagent block included',
+    rule: 'a subagent block nested in a turn\'s trace forbids "crash" at every depth, the opening turn\'s included',
     yaml: turnsKoan(`
       - prompt: a
         when:
@@ -1071,7 +1071,75 @@ const rows: Row[] = [
             response: ok
     `),
     message:
-      'turns[0].when[1].when[1]: "crash" cannot appear inside a turn\'s own trace — a death inside a prompt\'s own work is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself',
+      'turns[0].when[1].when[1]: "crash" cannot appear inside a subagent block nested in a turn\'s own trace — a death there is not supported in a "turns" koan yet',
+  },
+  {
+    rule: 'a subagent block nested in a follow-up turn\'s trace still forbids "crash"',
+    yaml: bareKoan(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - prompt: b
+          when:
+            - request: model
+              response: { subagent: helper, prompt: go }
+            - subagent: helper
+              when:
+                - request: model
+                  response: { tool: t, args: {} }
+                - crash
+                - request: model
+                  response: done
+            - request: model
+              response: ok
+    `),
+    message:
+      'turns[1].when[1].when[1]: "crash" cannot appear inside a subagent block nested in a turn\'s own trace — a death there is not supported in a "turns" koan yet',
+  },
+  {
+    rule: 'a tool step answered "crash" still cannot appear inside a follow-up turn either',
+    yaml: bareKoan(`
+      given:
+        tools:
+          x:
+            input_schema: { type: object }
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - prompt: b
+          when:
+            - request: model
+              response: { tool: x, args: {} }
+            - request: { tool: x }
+              response: crash
+    `),
+    message:
+      'turns[1].when[1]: a tool step answered "crash" cannot appear inside a "turns" koan — a mid-invocation death is not supported here yet, and the "- crash" entry of "turns" scripts a different death: between two turns, with nothing in flight',
+  },
+  {
+    rule: 'a koan carries at most one "crash" across a bare in-turn step and the "- crash" turn entry',
+    yaml: bareKoan(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - prompt: b
+          when:
+            - request: model
+              response: ok
+            - crash
+        - crash
+        - prompt: c
+          when:
+            - request: model
+              response: ok
+    `),
+    message: 'turns[1].when[1]: a second "crash" — one death per koan, wherever it lands',
   },
   {
     rule: 'a bare "crash" before "abort" still cannot share a trace with it',

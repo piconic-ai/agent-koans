@@ -390,11 +390,14 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
   // own step-level pass — the only place this key is written now — checks
   // and updates the very same record.
   const joinAskSeen: { at?: string } = {};
-  // Whether a "crash" entry has already been seen — at most one death per
-  // koan, the same one-per-trace rule a mid-trace "crash" step carries
-  // (parseTrace), just checked here instead since this "crash" is an
-  // entry of "turns" itself rather than a step of one turn's own trace.
-  let crashAt = -1;
+  // Whether a death has already been seen — at most one per koan, however
+  // it is spelled: a "crash" entry of "turns" itself (between two turns,
+  // recorded here as `kind: 'turn'`) and a bare "crash" step inside some
+  // turn's own trace (recorded by parseTrace as `kind: 'bare'`, once
+  // relaxed for a follow-up turn) draw from this very same record, passed
+  // down into every turn's own parseTurnTraceField call below — one death
+  // per koan holds across both spellings, not just within one.
+  const crashSeen: { at?: string; kind?: 'tool' | 'bare' | 'turn' } = {};
   for (let i = 0; i < rawTurns.length; i++) {
     if (rawTurns[i] === 'crash') {
       if (i === 0) {
@@ -403,12 +406,13 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
       if (i === rawTurns.length - 1) {
         return problem(`turns[${i}]: nothing follows this "crash" — a koan that ends at the death tests nothing about recovery`);
       }
-      if (crashAt !== -1) {
+      if (crashSeen.at !== undefined) {
         return problem(
           `turns[${i}]: a second "crash" — one death per koan; what survives it is the same record however often you kill the process`,
         );
       }
-      crashAt = i;
+      crashSeen.at = `turns[${i}]`;
+      crashSeen.kind = 'turn';
       thens.push({});
       continue;
     }
@@ -486,7 +490,7 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
       continue;
     }
     const enclosingCompact = rt.compact === undefined ? false : typeof rt.compact === 'string' ? rt.compact : undefined;
-    const turnTrace = parseTurnTraceField(ctx, rt, i, enclosingCompact, joinAskSeen);
+    const turnTrace = parseTurnTraceField(ctx, rt, i, crashSeen, enclosingCompact, joinAskSeen);
     if (isProblem(turnTrace)) return turnTrace;
     if (rt.compact !== undefined) {
       const err = checkEachVariant(turnTrace, i, checkCompactStep);
@@ -550,9 +554,11 @@ function parseTurnTraceField(
   ctx: Ctx<KoanFile>,
   rt: Record<string, unknown>,
   i: number,
+  crashSeen: { at?: string; kind?: 'tool' | 'bare' | 'turn' },
   enclosingCompact: string | false | undefined,
   joinAskSeen: { at?: string },
 ): Parsed<TurnTrace> {
+  const openingTurn = i === 0;
   if (rt.one_of !== undefined) {
     const rawOneOf = rt.one_of;
     if (typeof rawOneOf !== 'object' || rawOneOf === null || Array.isArray(rawOneOf)) {
@@ -575,10 +581,11 @@ function parseTurnTraceField(
         into(ctx, `turns[${i}].one_of.${variant}`, rawSteps),
         true,
         false,
-        undefined,
+        crashSeen,
         enclosingCompact,
         joinAskSeen,
         true,
+        openingTurn,
       );
       if (isProblem(trace)) return trace;
       variants[variant] = trace;
@@ -588,7 +595,7 @@ function parseTurnTraceField(
   if (!Array.isArray(rt.when) || rt.when.length === 0) {
     return problem(`turns[${i}].when must be a non-empty list of trace steps`);
   }
-  const trace = parseTrace(into(ctx, `turns[${i}].when`, rt.when), true, false, undefined, enclosingCompact, joinAskSeen);
+  const trace = parseTrace(into(ctx, `turns[${i}].when`, rt.when), true, false, crashSeen, enclosingCompact, joinAskSeen, false, openingTurn);
   if (isProblem(trace)) return trace;
   return { kind: 'one', trace };
 }
@@ -697,16 +704,18 @@ function abortKindOf(trace: Trace): AbortKind {
  * step to walk past. `inTurns`/`inSubagent` are context, not shape: they
  * say where this array sits, for the rules that read that context
  * (`abort` and a mid-run `prompt` inside a `turns` koan or a subagent
- * block). `crashSeen` is threaded through this function's own recursion
- * into a subagent block, rather than a fresh local each call: "one death
- * per koan" has to see across that boundary, which a call-local flag
- * could not. `kind` records which shape the one death seen so far was —
- * only a tool step answered "crash" leaves room for a second, and only
- * directly after it (checked locally, against `prev`, since that
- * adjacency does not cross the recursion boundary). `enclosingCompact`,
- * `joinAskSeen`, and `oneOfVariant` are this same kind of threaded
- * context and record, carried down from `parseTurnTraceField` for a
- * compaction step's own joining "compact" (koan-spec.ts's `Step`):
+ * block). `openingTurn` blocks a bare "crash" step in `turns[0]` only —
+ * that position duplicates 067's own single-turn crash, so nothing there
+ * is untested elsewhere. `crashSeen` threads across both this function's
+ * own recursion into a subagent block AND every turn's top-level call
+ * (`parseTurnsBody`) — "one death per koan" must hold across both, which
+ * a call-local flag could not; `kind` records which shape the one death
+ * was, since only a tool step answered "crash" leaves room for a second
+ * (directly after it — checked locally, against `prev`).
+ * `enclosingCompact`, `joinAskSeen`, and `oneOfVariant`
+ * are this same kind of threaded context and record, carried down from
+ * `parseTurnTraceField` for a compaction step's own joining "compact"
+ * (koan-spec.ts's `Step`):
  * `enclosingCompact` carries the enclosing turn's own `compact` field
  * (`false` outside any ask, `undefined` for an ask that said nothing,
  * or its instructions string) — legal here regardless, but a step's own
@@ -723,10 +732,11 @@ function parseTrace(
   ctx: Ctx<unknown>,
   inTurns: boolean,
   inSubagent: boolean,
-  crashSeen: { at?: string; kind?: 'tool' | 'bare' } = {},
+  crashSeen: { at?: string; kind?: 'tool' | 'bare' | 'turn' } = {},
   enclosingCompact: string | false | undefined = false,
   joinAskSeen: { at?: string } = {},
   oneOfVariant = false,
+  openingTurn = false,
 ): Parsed<Trace> {
   const { node, at } = ctx;
   // Unquoted, unlike the callers above: they already reject a missing or
@@ -832,9 +842,14 @@ function parseTrace(
     const item: unknown = written[i];
 
     if (item === 'crash') {
-      if (inTurns) {
+      if (inTurns && inSubagent) {
         return problem(
-          `${at_i}: "crash" cannot appear inside a turn's own trace — a death inside a prompt's own work is not supported in a "turns" koan yet; only the seam between turns is, written as an entry of "turns" itself`,
+          `${at_i}: "crash" cannot appear inside a subagent block nested in a turn's own trace — a death there is not supported in a "turns" koan yet`,
+        );
+      }
+      if (inTurns && openingTurn) {
+        return problem(
+          `${at_i}: "crash" cannot appear inside the opening turn's own trace — that position tests nothing a plain koan's own crash (067) does not already; only a follow-up turn's own trace, or the seam between turns, is scripted here`,
         );
       }
       if (abort) {
@@ -948,12 +963,14 @@ function parseTrace(
         return problem(`${at_i}.subagent must be a non-empty delegate name`);
       }
       // `inTurns` rides into the child: a block nested in a turn's trace
-      // is still inside that turn, so what a turn forbids — a
-      // a death inside a prompt's work above all — stays forbidden at every depth.
-      // `enclosingCompact: false` regardless of the parent: a subagent block
-      // is rejected outright below (`inSubagent`), so what the parent
-      // turn is never changes the answer here.
-      const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), inTurns, true, crashSeen, false, joinAskSeen);
+      // is still inside that turn, so what a turn forbids stays forbidden
+      // at every depth — a bare "crash" step above all, since `inSubagent`
+      // rejects it here regardless of `openingTurn`'s own answer (a death
+      // nested inside a subagent block is not supported at any turn yet,
+      // opening or follow-up). `enclosingCompact: false` regardless of the
+      // parent: a subagent block is rejected outright below (`inSubagent`),
+      // so what the parent turn is never changes the answer here.
+      const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), inTurns, true, crashSeen, false, joinAskSeen, false, openingTurn);
       if (isProblem(childTrace)) return childTrace;
       const childLast = childTrace.steps[childTrace.steps.length - 1];
       const settles =

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { AgentRunError, type AgentInstanceHandle, init, observe } from '@flue/runtime';
+import { AgentRunError, type AgentInstanceHandle, type DispatchReceipt, init, observe } from '@flue/runtime';
 import { sqlite, start } from '@flue/runtime/node';
 import { Assistant, type AssistantData, type RunContext } from './agents/assistant.js';
 import { armBudget, budgetSpent, budgetTripped } from './budget.js';
@@ -66,6 +66,29 @@ interface RunRow {
   initialData: AssistantData;
   limits?: RunLimits;
   spent?: number;
+  /**
+   * Whether `prompt` names the opening turn — only its recovery
+   * redispatches keyed by `run.run_id`. Left keyed rather than unified
+   * onto the reattach path below: a key needs no captured receipt, so
+   * the opening turn keeps recovery without the admission-gap fallback
+   * a follow-up needs (`submissionId`).
+   */
+  openingTurn: boolean;
+  /**
+   * The follow-up turn's admitted dispatch receipt, recorded before the
+   * long `read()` wait so a mid-turn crash can re-attach by reading it
+   * instead of re-dispatching.
+   *
+   * Unkeyed, unlike the opening turn's redispatch: an idempotencyKey on
+   * a LIVE follow-up dispatch (one that may race a concurrent delivery)
+   * breaks Flue's serialize-or-join handling — the request reaching the
+   * model comes out mid-tool-call. So the live dispatch stays unkeyed,
+   * and recovery reads the already-admitted submission instead.
+   *
+   * Undefined until admission; a crash in that narrow gap falls back to
+   * a fresh unkeyed dispatch, same as an unadmitted sendPrompt would.
+   */
+  submissionId?: string;
 }
 
 const rows = new Map<string, RunRow>();
@@ -140,60 +163,84 @@ function reasonOf(error: unknown): string {
 // dispatch into the SAME durable conversation instead of a fresh one.
 const handles = new Map<string, AgentInstanceHandle>();
 
-// Runs (or re-runs, for a follow-up) one turn: dispatches `prompt` to
-// `agent` and settles `run` from the reply. `initialData` is passed only
-// on the turn that creates the instance — Flue itself ignores it on any
-// later dispatch to an existing one, so this is just for clarity here.
+// The declared-duration timer is armed fresh on every call, not once
+// per run: the process that armed an earlier one may not be this one,
+// and a recovery's re-attach owes the same budget a fresh dispatch's
+// wait does. Not Flue's own durability timeout (`timeoutMs`): that
+// fires on the coordinator's reconciliation cadence, far too coarse
+// for a seconds-scale budget, and settles the submission `failed`
+// where this wire contract asks for `aborted`.
+// A budget stop is this agent giving up, not an error: aborted. A
+// durable abort rejects read() with AgentRunError outcome 'aborted',
+// which the same mapping carries through.
+function settleTerminal(run: Run, err: unknown): void {
+  run.status = budgetTripped()
+    ? 'aborted'
+    : err instanceof AgentRunError
+      ? err.outcome
+      : 'failed';
+  run.error = err instanceof Error ? err.message : String(err);
+}
+
+async function settleFromRead(run: Run, agent: AgentInstanceHandle, target: DispatchReceipt | string): Promise<void> {
+  const budgetMs = declaredDuration();
+  const timer = budgetMs === undefined ? undefined : setTimeout(() => void agent.abort(), budgetMs);
+  try {
+    const reply = await agent.read(target);
+    run.status = 'completed';
+    run.output = reply.text;
+  } catch (err) {
+    // Terminal-state guarantee: errors end the run, they never strand it.
+    settleTerminal(run, err);
+  } finally {
+    saveRuns();
+    // Cleared on every settlement, not just the timer's own firing: a
+    // turn that settles for any other reason must never leave a timer
+    // that could later abort a following, unrelated turn.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+// Runs (or re-runs, for a follow-up) one turn. `initialData` is passed
+// only on the turn that creates the instance — Flue ignores it on any
+// later dispatch. `onAdmitted` fires right after dispatch() resolves,
+// before the long read() wait.
 function runTurn(
   run: Run,
   agent: AgentInstanceHandle,
   prompt: string,
   initialData?: AssistantData,
   idempotencyKey?: string,
+  onAdmitted?: (submissionId: string) => void,
 ): void {
   void (async () => {
-    // The declared budget covers this one prompt (SPEC.md §3) and
-    // restarts fresh for every prompt, so the timer is armed here, on
-    // every call, rather than once for the run. Not Flue's own
-    // durability timeout (`timeoutMs` / DURABILITY_DEFAULT_TIMEOUT_MS):
-    // that fires on the coordinator's reconciliation cadence, far too
-    // coarse for a seconds-scale declared budget, and it settles the
-    // submission `failed` (reason `exceeded_timeout`) where this wire
-    // contract asks for `aborted`.
-    const budgetMs = declaredDuration();
-    const timer = budgetMs === undefined ? undefined : setTimeout(() => void agent.abort(), budgetMs);
+    let receipt: DispatchReceipt;
     try {
-      // The key makes the dispatch safe to repeat: a recovery after a
-      // crash re-sends it and converges on the submission the dead
-      // process already opened, instead of opening a second turn.
-      const receipt = await agent.dispatch({
+      // The key, on the turns that carry one, makes the dispatch safe to
+      // repeat: a recovery after a crash re-sends it and converges on the
+      // submission the dead process already opened, instead of opening a
+      // second turn.
+      receipt = await agent.dispatch({
         message: prompt,
         ...(initialData !== undefined ? { initialData } : {}),
         ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
       });
-      const reply = await agent.read(receipt);
-      run.status = 'completed';
-      run.output = reply.text;
     } catch (err) {
-      // Terminal-state guarantee: errors end the run, they never strand it.
-      // A budget stop is this agent giving up, not an error: aborted.
-      // A durable abort (handle.abort() from the caller's own request, or
-      // from the declared-duration timer above) rejects read() with
-      // AgentRunError outcome 'aborted', which this same branch maps.
-      run.status = budgetTripped()
-        ? 'aborted'
-        : err instanceof AgentRunError
-          ? err.outcome
-          : 'failed';
-      run.error = err instanceof Error ? err.message : String(err);
-    } finally {
+      // dispatch() itself refused — never admitted, no receipt to read.
+      settleTerminal(run, err);
       saveRuns();
-      // Cleared on every settlement, not just the timer's own firing: a
-      // turn that settles for any other reason must never leave a timer
-      // that could later abort a following, unrelated turn.
-      if (timer !== undefined) clearTimeout(timer);
+      return;
     }
+    onAdmitted?.(receipt.submissionId);
+    await settleFromRead(run, agent, receipt);
   })();
+}
+
+// read() only, never a second dispatch(): the submission's history is
+// already on Flue's durable record — nothing left to redo, only to
+// observe.
+function reattachTurn(run: Run, agent: AgentInstanceHandle, submissionId: string): void {
+  void settleFromRead(run, agent, submissionId);
 }
 
 function startRun(
@@ -231,22 +278,24 @@ function startRun(
     workspaceDir: config.workspace.dir,
     context,
   };
-  rows.set(run.run_id, { run, prompt, initialData, ...(limits !== undefined ? { limits } : {}) });
+  const row: RunRow = { run, prompt, initialData, openingTurn: true, ...(limits !== undefined ? { limits } : {}) };
+  rows.set(run.run_id, row);
   // On record before the dispatch: a crash between the two must still
   // leave a row to recover from.
   saveRuns();
+  // run.run_id is safe as this dispatch's key: no other turn ever
+  // reuses it (sendPrompt mints none).
   runTurn(run, agent, prompt, initialData, run.run_id);
   return run;
 }
 
-// Re-attach what a previous process left behind. Flue is already driving
-// every admitted submission (reconciliation ran inside start()); this
-// loop only rebuilds the adapter's own join and re-issues the keyed
-// dispatch, which converges on the submission the dead process opened —
-// read() then maps its settlement onto the run the caller is polling.
-// The stored prompt is the opening one: the koans that script a crash
-// are single-turn, and a follow-up-aware recovery is not built until a
-// koan needs it.
+// Re-attach what a previous process left behind — Flue is already
+// driving every admitted submission (reconciliation ran inside
+// start()); this loop only rejoins it. The row names whichever turn was
+// running at the death, never presumed to be the run's first. The
+// `running` guard keeps a settled turn from re-running: a crash between
+// turns leaves the row on the completed turn, skipped here until
+// sendPrompt/startRun move it forward again.
 for (const row of loadRunRows()) {
   const run = row.run;
   rows.set(run.run_id, row);
@@ -262,7 +311,20 @@ for (const row of loadRunRows()) {
   if (run.status === 'running') {
     armWindow(row.initialData.context?.window);
     armDuration(row.limits?.prompt?.duration_ms);
-    runTurn(run, agent, row.prompt, row.initialData, run.run_id);
+    if (row.openingTurn) {
+      runTurn(run, agent, row.prompt, row.initialData, run.run_id);
+    } else if (row.submissionId !== undefined) {
+      reattachTurn(run, agent, row.submissionId);
+    } else {
+      // The follow-up's own dispatch never got far enough to be admitted
+      // before the death: nothing is on record yet, so this is its first
+      // real delivery — unkeyed, exactly what sendPrompt's own live call
+      // would do for a prompt nothing had admitted (RunRow's own doc).
+      runTurn(run, agent, row.prompt, undefined, undefined, (submissionId) => {
+        row.submissionId = submissionId;
+        saveRuns();
+      });
+    }
   }
 }
 
@@ -278,12 +340,22 @@ for (const row of loadRunRows()) {
 function sendPrompt(runId: string, prompt: string): boolean {
   const run = runs.get(runId);
   const agent = handles.get(runId);
-  if (!run || !agent) return false;
+  const row = rows.get(runId);
+  if (!run || !agent || !row) return false;
   run.status = 'running';
   run.output = undefined;
   run.error = undefined;
+  // On record before the dispatch, same discipline as startRun: a crash
+  // before the receipt arrives must find THIS turn's prompt, not a stale
+  // earlier submission for recovery to re-attach to.
+  row.prompt = prompt;
+  row.openingTurn = false;
+  row.submissionId = undefined;
   saveRuns();
-  runTurn(run, agent, prompt);
+  runTurn(run, agent, prompt, undefined, undefined, (submissionId) => {
+    row.submissionId = submissionId;
+    saveRuns();
+  });
   return true;
 }
 

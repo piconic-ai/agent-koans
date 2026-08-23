@@ -699,12 +699,34 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       const crashCarrier = crashCarrierOf(trace);
       const crashBefore = crashCarrier?.crashBefore;
       const crashThreshold = crashBefore?.at(-1);
-      const crashed = crashBefore !== undefined || actions.some((a) => a.kind === 'crash') || abortCrashed;
-      if (crashThreshold !== undefined) {
+      // `koan.turns !== undefined` guards against a plain koan's own
+      // `followUps` (set for an unrelated reason: a mid-run prompt held
+      // during a tool call) being mistaken for a turn boundary here. -1
+      // means "not a follow-up turn's" — a real span check rather than a
+      // koan-shape gate, so nothing breaks silently if parse.ts's
+      // opening-turn "crash" rejection is ever lifted.
+      const crashFollowUpIndex =
+        koan.turns !== undefined && crashThreshold !== undefined && crashCarrier?.followUps !== undefined
+          ? crashCarrier.followUps.findIndex(
+              (b, k) =>
+                crashThreshold >= b.start &&
+                crashThreshold < (crashCarrier.followUps![k + 1]?.start ?? crashCarrier!.turns.length),
+            )
+          : -1;
+      // One name for "does this call site own the trace's crash": -1 is
+      // the opening span, a follow-up turn's own index otherwise.
+      const ownsCrashAt = (span: number) => crashThreshold !== undefined && crashFollowUpIndex === span;
+      const crashed = (crashBefore !== undefined && crashFollowUpIndex === -1) || actions.some((a) => a.kind === 'crash') || abortCrashed;
+
+      // Shared by the opening-turn case below and the follow-up-turn case
+      // in the turns loop: both owe the same "death provably lands with
+      // work in flight" guarantee before killing, so extracted rather
+      // than duplicated.
+      const waitOutCrashAndRecover = async (threshold: number) => {
         // Not killed at the threshold alone: without the doomed request
         // parked at the gate, "in flight and unanswered at the death"
         // (SPEC.md §3) would be a race the suite only sometimes exercises.
-        const expectsDoomedRequest = crashCarrier!.turns.length > crashThreshold;
+        const expectsDoomedRequest = crashCarrier!.turns.length > threshold;
         // Not the generic run timeout when an earlier death already fired
         // (a gate sequence of more than one entry): the request this wait
         // owes is that death's own recovery, which runs on the cadence
@@ -713,20 +735,24 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         const crashTimeoutMs = waitingThroughRecovery ? CRASH_RECOVERY_TIMEOUT_MS : (agent.runTimeoutMs ?? 15_000);
         const crashDeadline = Date.now() + crashTimeoutMs;
         while (
-          (llm.state.served[crashCarrier!.name] ?? 0) < crashThreshold ||
+          (llm.state.served[crashCarrier!.name] ?? 0) < threshold ||
           pending.length !== 0 ||
           (expectsDoomedRequest && llm.parkedCount() < 1)
         ) {
           if (Date.now() > crashDeadline) {
             throw new Error(
               `the trace's pre-crash steps were not fully observed within ${crashTimeoutMs}ms: ` +
-                `${llm.state.served[crashCarrier!.name] ?? 0}/${crashThreshold} model requests served, ${pending.length} tool call(s) still unresolved, ` +
+                `${llm.state.served[crashCarrier!.name] ?? 0}/${threshold} model requests served, ${pending.length} tool call(s) still unresolved, ` +
                 `${llm.parkedCount()} request(s) parked at the gate`,
             );
           }
           await sleep(100);
         }
         await crashAndRecover();
+      };
+
+      if (ownsCrashAt(-1)) {
+        await waitOutCrashAndRecover(crashThreshold!);
       }
 
       const scriptConsumed = () =>
@@ -792,6 +818,8 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // pairing explicit.
       const foldHolds = actions.flatMap((a, k) => (a.kind === 'compact' ? [holds[k]] : []));
       let nextFoldHold = 0;
+      // Indexes follow-up prompt turns in koan.ts's own followUps order.
+      let followUpTurnIndex = 0;
       if (koan.turns) {
         for (let t = 1; t < koan.turns.length; t++) {
           const previous = koan.turns[t - 1];
@@ -804,6 +832,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             }
           }
           const entry = koan.turns[t];
+          const thisFollowUpTurnIndex = entry.kind === 'prompt' ? followUpTurnIndex++ : -1;
           if (entry.kind === 'crash') {
             // The previous prompt turn was already judged above, against
             // a fully settled run: nothing is in flight here, so the
@@ -1013,7 +1042,18 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
           // not the opening prompt's, and not wherever the previous turn
           // happened to settle.
           const turnAcceptedAt = Date.now();
-          const polled = await pollWithinBudget(base, runId, agent.runTimeoutMs ?? 15_000, turnAcceptedAt, maxDurationMs);
+          // The pre-crash steps this turn's crash depends on do not exist
+          // until its own prompt is delivered, so the opening-work case
+          // above (which runs too early) cannot own it.
+          const ownsCrash = thisFollowUpTurnIndex !== -1 && ownsCrashAt(thisFollowUpTurnIndex);
+          if (ownsCrash) await waitOutCrashAndRecover(crashThreshold!);
+          const polled = await pollWithinBudget(
+            base,
+            runId,
+            ownsCrash ? CRASH_RECOVERY_TIMEOUT_MS : (agent.runTimeoutMs ?? 15_000),
+            turnAcceptedAt,
+            maxDurationMs,
+          );
           run = polled.run;
           // `turns:` never scripts `abort` (koan.ts rejects it), so unlike
           // the opening submission above there is no abortKind to exempt.

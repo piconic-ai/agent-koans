@@ -1796,15 +1796,6 @@ const rows: Row[] = [
     message: '"given.context.compaction" must be "off" or a percentage of the window, like "90%"',
   },
   {
-    rule: '"used_tokens" needs a declared window',
-    yaml: koan(`
-      when:
-        - request: model
-          response: { body: ok, used_tokens: 50 }
-    `),
-    message: 'when[0]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of',
-  },
-  {
     rule: '"used_tokens" fits the window',
     yaml: koan(`
       given:

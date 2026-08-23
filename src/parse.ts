@@ -2201,15 +2201,13 @@ function usedTokensFitTheWindow(koan: KoanFile): Problem | undefined {
         if (step.kind !== 'model' && step.kind !== 'compaction') continue;
         const written = step.kind === 'compaction' && step.report === 'failed' ? undefined : step.used_tokens;
         if (written === undefined) continue;
-        if (context === undefined) {
-          // Only the run's own conversation must have one to compare
-          // against: a delegate's without a declared context has no
-          // window at all, so its reported size is whatever the endpoint
-          // says, unbounded — koan 060 scripts exactly this.
-          if (name === undefined) {
-            return problem(`${turn.at}[${i}]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of`);
-          }
-        } else if (written > context.window) {
+        // Bounded only under a declared context: without one there is no
+        // window for the report to be a part of — the model endpoint
+        // reports usage whether or not anyone declared one, so the size is
+        // unbounded here (koan 060 scripts this for a delegate; koan 095
+        // for the run's own — SPEC.md §3 forbids compacting a window
+        // nobody declared, not the report of pressure against it).
+        if (context !== undefined && written > context.window) {
           // Named by the declaration that actually applies: a delegate's
           // overflow against its own declared window would otherwise be
           // reported against the run's, which may not even exist.

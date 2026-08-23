@@ -1,0 +1,22 @@
+name: no-declared-window-no-fold
+description: >
+  The run declares no context, and the model reports heavy usage
+  anyway. Pressure is not permission: with no declared window there is
+  no threshold to cross, the conversation is carried as it stands, and
+  no fold the caller never declared appears — the follow-up turn sees
+  the history verbatim (SPEC.md §3).
+
+turns:
+  - prompt: "Remember this: locker 41's combination is 9-22-7."
+    when:
+      - request: model
+        response:
+          body: "Stored: locker 41, combination 9-22-7."
+          used_tokens: 180000
+  - prompt: "What was locker 41's combination?"
+    when:
+      - request: model
+        response: "Locker 41's combination is 9-22-7."
+    then:
+      status: completed
+      output: { contains: "9-22-7" }

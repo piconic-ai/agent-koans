@@ -258,6 +258,10 @@ about.
 given, and the share of it at which the agent compacts — folds the
 conversation into a summary and carries on from it. Where a run declares no
 threshold, and where it declares no context at all, you MUST NOT compact.
+The model endpoint MAY report usage regardless of whether a window was
+declared for it, and heavy usage reported against a window you were never
+given is not permission: with nothing declared there is no threshold for
+that report to cross, and you MUST carry the conversation as it stands.
 Where it declares one, the size to compare against is the last
 `usage.prompt_tokens` the model endpoint reported for that conversation, not
 an estimate of your own — and each conversation's own: a delegate's usage
@@ -488,6 +492,7 @@ it cannot drift from the contract it indexes.
 | [092-follow-up-after-failure](./koans/092-follow-up-after-failure.yaml) | The run's only model request is refused and the run settles failed. A failure seals nothing: the caller's follow-up prompt re-opens the same conversation, the model now answers with the history the failed turn left behind, and the run completes (SPEC.md §3). |
 | [093-joining-ask-different-words](./koans/093-joining-ask-different-words.yaml) | Two fold asks with different words: the second arrives while the fold the first brought about is still summarizing. The second ask joins that fold and is answered by it — its own instructions reach nothing: not the running fold, whose wording was fixed when it began, and not a second fold after it, because one fold serves every ask that converged on it (SPEC.md §3). |
 | [094-joining-ask-mid-threshold-fold](./koans/094-joining-ask-mid-threshold-fold.yaml) | The run's declared threshold starts a fold, and the caller's ask — instructions and all — arrives while it is summarizing. The ask joins the fold the run had already begun: it is answered once that fold ends and is reported, and its instructions reach nothing — the fold's wording was fixed when it began, and no second fold starts for them (SPEC.md §3). |
+| [095-no-declared-window-no-fold](./koans/095-no-declared-window-no-fold.yaml) | The run declares no context, and the model reports heavy usage anyway. Pressure is not permission: with no declared window there is no threshold to cross, the conversation is carried as it stands, and no fold the caller never declared appears — the follow-up turn sees the history verbatim (SPEC.md §3). |
 
 <!-- koan-index:end -->
 

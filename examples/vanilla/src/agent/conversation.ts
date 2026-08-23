@@ -43,6 +43,18 @@ export interface Conversation {
    * survive it the same way the run's own does.
    */
   onRecord?: () => void;
+  /**
+   * Set for as long as a fold of this conversation is in flight, whoever
+   * started it — the loop below, once the conversation reaches the run's
+   * own declared threshold, or the caller's own ask (lifecycle.ts's
+   * `compactRun`). Kept on the conversation rather than on the run
+   * session that owns `compactRun`: this loop also drives a delegate's
+   * conversation, which has no session of its own, and a caller's ask
+   * that lands while either origin's fold is still summarizing must join
+   * it rather than start a second one (SPEC.md §3) — the two origins
+   * only see the same fold if they share where "one is running" is kept.
+   */
+  folding?: Promise<unknown>;
 }
 
 /**
@@ -59,7 +71,15 @@ export async function runConversation(
   const { messages, size, context, onRecord, depth } = conversation;
   for (;;) {
     if (reachedThreshold(size, context)) {
-      if (!(await foldOnThreshold(conversation, run, signal))) return undefined;
+      // Recorded on `conversation.folding` before the await, the same
+      // field a concurrent ask joins instead of starting a second fold
+      // (lifecycle.ts's `compactRun`) — set synchronously, so an ask
+      // that lands anywhere during this summarizing request finds it.
+      const folding = foldOnThreshold(conversation, run, signal);
+      conversation.folding = folding.finally(() => {
+        conversation.folding = undefined;
+      });
+      if (!(await folding)) return undefined;
     }
 
     // Read before every request rather than after a fold: what a full

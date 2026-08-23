@@ -84,8 +84,6 @@ interface RunSession {
    * a simplification no koan here exercises against a queue.
    */
   timeLimit?: ReturnType<typeof setTimeout>;
-  /** Set while a caller-asked fold is running: an ask arriving before it settles joins this one instead of starting a second (SPEC.md §3). */
-  folding?: Promise<void>;
 }
 
 /** One session's recorded state, as written to `<state.dir>/runs.json` — everything a successor process needs to rebuild it after a crash. */
@@ -399,16 +397,25 @@ export function createAgent(
     // whether or not a turn is in flight to carry it.
     //
     // A fold already running is what this ask joins rather than starting
-    // a second one (SPEC.md §3): `folding` is set for as long as one is
-    // in flight, so an ask that lands inside that window just awaits it.
-    if (session.folding === undefined) {
-      session.folding = foldOnRequest(session.conversation, session.run, new AbortController().signal, instructions).finally(
-        () => {
-          session.folding = undefined;
-        },
-      );
+    // a second one (SPEC.md §3) — whichever of the two things that put
+    // one there: this same ask's own earlier delivery, or the run's own
+    // declared threshold, crossed while a turn's loop was running
+    // (conversation.ts). `conversation.folding` is set for as long as
+    // either is in flight, so an ask landing inside that window just
+    // awaits it instead of starting its own — its own instructions, if
+    // this is a join, reach nothing: `foldOnRequest` below never runs
+    // for it, so there is no summarizing request left for them to reach.
+    if (session.conversation.folding === undefined) {
+      session.conversation.folding = foldOnRequest(
+        session.conversation,
+        session.run,
+        new AbortController().signal,
+        instructions,
+      ).finally(() => {
+        session.conversation.folding = undefined;
+      });
     }
-    await session.folding;
+    await session.conversation.folding;
     return true;
   }
 

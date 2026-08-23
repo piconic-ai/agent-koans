@@ -731,7 +731,7 @@ const rows: Row[] = [
           intercept: p
     `),
     message:
-      `when[0] has unknown key "intercept" — a trace step is a "request" and its "response", plus a tool step's "prompt"; anything else belongs inside one of them`,
+      `when[0] has unknown key "intercept" — a trace step is a "request" and its "response", plus a tool step's "prompt" or a compaction step's "compact"; anything else belongs inside one of them`,
   },
   {
     rule: 'a mid-run "prompt" belongs on a tool step',
@@ -1796,15 +1796,6 @@ const rows: Row[] = [
     message: '"given.context.compaction" must be "off" or a percentage of the window, like "90%"',
   },
   {
-    rule: '"used_tokens" needs a declared window',
-    yaml: koan(`
-      when:
-        - request: model
-          response: { body: ok, used_tokens: 50 }
-    `),
-    message: 'when[0]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of',
-  },
-  {
     rule: '"used_tokens" fits the window',
     yaml: koan(`
       given:
@@ -2145,29 +2136,16 @@ const rows: Row[] = [
     message: 'turns[0] has unknown key "retry" — a prompt entry carries only "prompt", "when", "one_of", and "then"',
   },
   {
-    rule: '"joined_by" cannot combine with "retry" on the same entry',
+    rule: '"joined_by" no longer exists — a joining ask is a compaction step\'s own "compact", so the turn-level spelling is unknown',
     yaml: turnsKoan(`
       - compact: true
-        retry: compact
         joined_by: "Keep only the dates."
         when:
           - request: model
             response: ok
     `),
     message:
-      'turns[0].joined_by cannot be combined with "retry" — one joining delivery per fold is all this format scripts, and an identical resend is "retry: compact"\'s to write',
-  },
-  {
-    rule: '"joined_by" equal to the turn\'s own "compact" instructions is a resend, not a join',
-    yaml: turnsKoan(`
-      - compact: "Keep every operator code verbatim."
-        joined_by: "Keep every operator code verbatim."
-        when:
-          - request: model
-            response: ok
-    `),
-    message:
-      'turns[0].joined_by repeats this turn\'s own "compact" instructions — an identical resend is "retry: compact"\'s to script, write that instead',
+      'turns[0] has unknown key "joined_by" — an entry asking for a fold carries only "compact", "retry", "when", and "one_of"',
   },
   {
     rule: '"joined_by" cannot appear on a prompt entry',
@@ -2179,6 +2157,162 @@ const rows: Row[] = [
             response: ok
     `),
     message: 'turns[0] has unknown key "joined_by" — a prompt entry carries only "prompt", "when", "one_of", and "then"',
+  },
+  {
+    rule: 'a step\'s "compact" belongs only on a compaction step, not on any other',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request: model
+            response: ok
+            compact: "Keep only the dates."
+    `),
+    message:
+      'turns[0].when[0].compact belongs on a compaction step — the differing ask delivered while that fold is still summarizing, not on this request',
+  },
+  {
+    rule: 'a step-level joining "compact" must be a non-empty string',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request:
+              type: model
+              purpose: compaction
+            compact: "   "
+            response:
+              body: "summary"
+              used_tokens: 100
+              compaction: completed
+    `),
+    message: 'turns[0].when[0].compact must be a non-empty string — the differing ask delivered while this fold is summarizing',
+  },
+  {
+    rule: 'a step-level joining "compact" cannot appear inside a subagent block',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { subagent: r, prompt: "go look" }
+        - subagent: r
+          when:
+            - request:
+                type: model
+                purpose: compaction
+              compact: "Keep only the dates."
+              response:
+                body: "summary"
+                used_tokens: 100
+                compaction: completed
+    `),
+    message:
+      'when[1].when[0].compact cannot appear inside a subagent block — only the run\'s own conversation has a caller to ask',
+  },
+  {
+    rule: 'a step-level "compact" equal to the enclosing turn\'s own "compact" instructions is a resend, not a join',
+    // Not `turnsKoan`: an ask cannot open a koan (turns[0].compact is
+    // rejected before this row's own check ever runs), so the "compact"
+    // turn under test needs a valid opening turn ahead of it. The
+    // "compact" turn's own trace is where an ask-origin joiner is legal
+    // now (koans/093-joining-ask-different-words.yaml exercises the legal
+    // case) — this row is the one way it can still be rejected there:
+    // repeating the turn's own instructions verbatim.
+    yaml: `name: x\n${dedent(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - compact: "Keep every operator code verbatim."
+          when:
+            - request:
+                type: model
+                purpose: compaction
+              compact: "Keep every operator code verbatim."
+              response:
+                body: "summary"
+                used_tokens: 100
+                compaction: completed
+    `)}`,
+    message:
+      'turns[1].when[0].compact repeats the enclosing turn\'s own "compact" instructions — an identical resend is ' +
+      '"retry: compact"\'s to script, write that instead',
+  },
+  {
+    rule: 'a step-level joining "compact" cannot share its turn with "retry"',
+    yaml: `name: x\n${dedent(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - compact: "Keep every operator code verbatim."
+          retry: compact
+          when:
+            - request:
+                type: model
+                purpose: compaction
+              compact: "Keep only the incident dates."
+              response:
+                body: "summary"
+                used_tokens: 100
+                compaction: completed
+    `)}`,
+    message:
+      'turns[1].when[0].compact cannot share this turn with "retry" — one joining delivery per fold is all this ' +
+      'format scripts, and an identical resend is "retry: compact"\'s to write',
+  },
+  {
+    rule: 'a step-level joining "compact" cannot appear inside a "one_of" variant',
+    yaml: turnsKoan(`
+      - prompt: a
+        one_of:
+          x:
+            - request:
+                type: model
+                purpose: compaction
+              compact: "Keep only the dates."
+              response:
+                body: "summary"
+                used_tokens: 100
+                compaction: completed
+          y:
+            - request: model
+              response: ok2
+    `),
+    message:
+      'turns[0].one_of.x[0].compact cannot appear inside a "one_of" variant — how many requests a fold costs may vary ' +
+      'by variant, but the turn\'s own joiner does not, so this format does not script one here',
+  },
+  {
+    rule: 'a koan writes a joining "compact" once, wherever it lands — an ask-origin step and a threshold-origin step share the count',
+    yaml: `name: x\n${dedent(`
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: ok
+        - compact: "Keep only the incident dates."
+          when:
+            - request:
+                type: model
+                purpose: compaction
+              compact: "Keep only the operator codes."
+              response:
+                body: "summary"
+                used_tokens: 100
+                compaction: completed
+        - prompt: b
+          when:
+            - request:
+                type: model
+                purpose: compaction
+              compact: "Keep only the dates."
+              response:
+                body: "summary2"
+                used_tokens: 100
+                compaction: completed
+    `)}`,
+    message:
+      'turns[2].when[0].compact: a koan may write a joining "compact" step once, wherever it lands — turns[1].when[0].compact already does',
   },
   {
     rule: 'a koan cannot open with an ask',

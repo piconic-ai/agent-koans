@@ -1,0 +1,37 @@
+name: joining-ask-mid-threshold-fold
+description: >
+  The run's declared threshold starts a fold, and the caller's ask —
+  instructions and all — arrives while it is summarizing. The ask joins
+  the fold the run had already begun: it is answered once that fold
+  ends and is reported, and its instructions reach nothing — the fold's
+  wording was fixed when it began, and no second fold starts for them
+  (SPEC.md §3).
+
+given:
+  context:
+    window: 100000
+    compaction: 90%
+
+turns:
+  - prompt: "Log this: the cargo bay seal code for dock D-7 is K-3-9925."
+    when:
+      - request: model
+        response:
+          body: "Logged: dock D-7 seal code K-3-9925."
+          used_tokens: 95000
+
+  - prompt: "What seal code did I log for that dock?"
+    when:
+      - request:
+          type: model
+          purpose: compaction
+        compact: "Keep the dock numbers only."
+        response:
+          body: "Earlier: dock D-7 has cargo bay seal code K-3-9925."
+          used_tokens: 9000
+          compaction: completed
+      - request: model
+        response: "The seal code for dock D-7 is K-3-9925."
+    then:
+      status: completed
+      output: { contains: "K-3-9925" }

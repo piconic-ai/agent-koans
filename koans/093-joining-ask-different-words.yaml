@@ -21,11 +21,11 @@ turns:
           used_tokens: 40000
 
   - compact: "Keep every operator code verbatim."
-    joined_by: "Keep only the incident dates."
     when:
       - request:
           type: model
           purpose: compaction
+        compact: "Keep only the incident dates."
         response:
           body: "Earlier: incident INC-5513 has duty operator code T-2-8841."
           used_tokens: 8000

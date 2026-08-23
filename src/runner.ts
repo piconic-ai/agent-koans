@@ -557,7 +557,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
 
       for (const [k, action] of actions.entries()) {
         // A second fold ask — identical (`retried`) or differently
-        // worded (`joinedBy`) — is the turns loop's to deliver; the ask
+        // worded (`joinAsk`) — is the turns loop's to deliver; the ask
         // that engages its hold has not even been sent yet here.
         if (action.kind === 'compact') continue;
         const label =
@@ -749,7 +749,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // against the state the one that actually stopped left behind.
       let stoppedEarly = false;
       // One hold per fold ask a second ask converges on — identical
-      // (`retried`) or differently worded (`joinedBy`) — in turn order.
+      // (`retried`) or differently worded (`joinAsk`) — in turn order.
       // In a `turns:` koan these are the only held actions parse.ts
       // admits, so the filter narrows nothing today — it keeps the
       // pairing explicit.
@@ -786,7 +786,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
                   }
                 : {}),
             };
-            if (!entry.retried && entry.joinedBy === undefined) {
+            if (!entry.retried && entry.joinAsk === undefined) {
               const compactRes = await fetch(`${base}/runs/${runId}/compact`, askInit);
               if (compactRes.status !== 202 && compactRes.status !== 200) {
                 throw new Error(`POST /runs/${runId}/compact returned ${compactRes.status}, expected 202 or 200`);
@@ -810,7 +810,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             // Two asks converging on one fold: fire the first, wait until
             // its fold's own summarizing request is provably in flight
             // (held by the mock), deliver the second — the same ask again
-            // (`retried`) or a differently worded one (`joinedBy`) — then
+            // (`retried`) or a differently worded one (`joinAsk`) — then
             // let the fold go. What convergence must show is one fold,
             // which judgeReportedFolds and the script's own request count
             // already pin — never the delivery slack below.
@@ -823,11 +823,11 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             // its ask apart from an identical resend, and what mock-llm.ts
             // is checking never reaches the running fold.
             const askBInit =
-              entry.joinedBy !== undefined
+              entry.joinAsk !== undefined
                 ? {
                     method: 'POST',
                     headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({ instructions: entry.joinedBy }),
+                    body: JSON.stringify({ instructions: entry.joinAsk }),
                   }
                 : askInit;
             let askB!: Promise<Response>;
@@ -874,8 +874,8 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
               judgeAsk(askA, 'the first', ''),
               judgeAsk(
                 askB,
-                entry.joinedBy !== undefined ? 'the joining' : 'the repeated',
-                entry.joinedBy !== undefined
+                entry.joinAsk !== undefined ? 'the joining' : 'the repeated',
+                entry.joinAsk !== undefined
                   ? ' — an ask sent mid-fold joins the running fold, whatever its wording — it is not an error (SPEC.md §3)'
                   : ' — an identical ask re-sent mid-fold joins the running fold, it is not an error (SPEC.md §3)',
               ),
@@ -886,6 +886,82 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
             const settled = await fetch(`${base}/runs/${runId}`);
             if (!settled.ok) throw new Error(`GET /runs/${runId} returned ${settled.status}`);
             run = (await settled.json()) as RunState;
+            continue;
+          }
+          if (entry.joinAsk !== undefined) {
+            // This turn's own opening step is the run's own declared
+            // threshold's fold, joined mid-flight by a differently worded
+            // ask (koan-spec.ts's compaction `Step`, its own `compact`) —
+            // unlike the `compact` entry above, there is no first ask to
+            // await here: the threshold started this fold on its own, so
+            // the turn's prompt delivery is what engages the hold, and the
+            // joining ask is the only one this turn sends.
+            const before = foldsEnded(run);
+            const hold = foldHolds[nextFoldHold++];
+            const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ prompt: entry.prompt }),
+            });
+            if (promptRes.status !== 202 && promptRes.status !== 200) {
+              throw new Error(`POST /runs/${runId}/prompts returned ${promptRes.status}, expected 202 or 200`);
+            }
+            const turnAcceptedAt = Date.now();
+            let ask!: Promise<Response>;
+            try {
+              await within(
+                hold.engaged,
+                Date.now() + (agent.runTimeoutMs ?? 15_000),
+                () =>
+                  `the summarizing request the trace holds open for the joining ask was never made within ` +
+                  `${agent.runTimeoutMs ?? 15_000}ms`,
+              );
+              // Not awaited before release: the ask is answered only once
+              // the fold ends, so awaiting it here — before the hold that
+              // fold is waiting on is released — would deadlock (same
+              // note as the `compact` entry's own two-ask flow, above).
+              ask = fetch(`${base}/runs/${runId}/compact`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ instructions: entry.joinAsk }),
+              });
+              ask.catch(() => {});
+              // Delivery slack, the same reason as the `compact` entry's
+              // own askB (RETRY_COMPACT_DELIVERY_SLACK_MS, above): this
+              // request's own delivery has no receipt this suite can await
+              // instead without risking the deadlock the comment above rules out.
+              await sleep(RETRY_COMPACT_DELIVERY_SLACK_MS);
+            } finally {
+              // Released even on failure: the mock is parked on this, and
+              // its server cannot close until it returns.
+              hold.release();
+            }
+            // Judged against a read taken when the ask itself answers,
+            // never the settled run below: by settle time the fold is over
+            // either way, so only a fresh read here can show the ask's own
+            // answer waited for it — the same order the `compact` entry's
+            // judgeAsk reads in. Awaiting the ask is safe now: the hold is
+            // released, so the fold it waits on is free to finish.
+            const askRes = await ask;
+            if (askRes.status !== 202 && askRes.status !== 200) {
+              throw new Error(
+                `the joining POST /runs/${runId}/compact returned ${askRes.status}, expected 202 or 200 — an ask ` +
+                  `sent mid-fold joins the running fold, whatever its wording — it is not an error (SPEC.md §3)`,
+              );
+            }
+            const asked = await fetch(`${base}/runs/${runId}`);
+            if (!asked.ok) throw new Error(`GET /runs/${runId} returned ${asked.status}`);
+            if (foldsEnded((await asked.json()) as RunState) === before) {
+              failures.push(
+                `the joining POST /runs/${runId}/compact answered before the fold ended: a run answers the ask ` +
+                  `once it has folded, so a "compaction" event saying completed or failed is in GET /runs/{run_id} by then`,
+              );
+            }
+            const polled = await pollWithinBudget(base, runId, agent.runTimeoutMs ?? 15_000, turnAcceptedAt, maxDurationMs);
+            run = polled.run;
+            if (maxDurationMs !== undefined && run.status === 'aborted' && polled.elapsed < maxDurationMs - TIME_LIMIT_EARLY_EPSILON_MS) {
+              failures.push(earlyAbortFailure(polled.elapsed, maxDurationMs));
+            }
             continue;
           }
           const promptRes = await fetch(`${base}/runs/${runId}/prompts`, {

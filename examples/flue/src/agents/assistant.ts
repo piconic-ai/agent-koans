@@ -38,7 +38,15 @@ function compactionOf(context: RunContext | undefined) {
 
 export function Assistant() {
   const data = useInitialData<AssistantData>() ?? { runId: '', tools: [], toolsBaseUrl: '', subagents: [], workspaceDir: '' };
-  useModel('koan/default', { compaction: compactionOf(data.context) });
+  // A run with no declared context has no window to fold against
+  // (SPEC.md §3), but Flue's own compaction still triggers off the
+  // registered model's contextWindow regardless of what the run declared
+  // — tuning `compaction` alone cannot stop it once reported usage passes
+  // that registered size (koans/095). `koan/delegate` already exists for
+  // exactly this: an unbounded window a conversation's usage never
+  // reaches (provider.ts, koans/060), so mounting it here for an
+  // undeclared context is the same move the delegates already make.
+  useModel(data.context === undefined ? 'koan/delegate' : 'koan/default', { compaction: compactionOf(data.context) });
   useAgentStart(({ harness }) => {
     noteInstanceStores(data.runId, harness);
   });

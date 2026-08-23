@@ -65,6 +65,12 @@ interface Ctx<T = unknown> {
   koan: KoanFile;
 }
 
+// Narrowed from `Step`'s own union so a compaction step's `compact` — set
+// only after `parseCompactionStep` returns, once its position and
+// multiplicity are known — assigns without every other step kind's own
+// shape getting in the way.
+type CompactionStep = Extract<Step, { kind: 'compaction' }>;
+
 /** A problem found while reading a file — the message its author will see. */
 export type Problem = { kind: 'problem'; message: string };
 
@@ -375,6 +381,15 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
   // naming every combination across more than one such turn is not a
   // thing this format takes on.
   let oneOfTurnAt = -1;
+  // Where a compaction step's own joining "compact" has already been
+  // written, if anywhere — inside an ask's own `compact:` turn, or inside
+  // a plain turn's threshold-fold step. At most one per koan, wherever it
+  // lands: nothing in the suite yet needs a second, and a second would be
+  // an untested claim about how two independent fold holds pair up.
+  // Passed down into parseTrace (as the box, not a copy) so every turn's
+  // own step-level pass — the only place this key is written now — checks
+  // and updates the very same record.
+  const joinAskSeen: { at?: string } = {};
   // Whether a "crash" entry has already been seen — at most one death per
   // koan, the same one-per-trace rule a mid-trace "crash" step carries
   // (parseTrace), just checked here instead since this "crash" is an
@@ -401,12 +416,12 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
     const asking = rt.compact !== undefined;
     for (const key of Object.keys(rt)) {
       const allowed = asking
-        ? key === 'compact' || key === 'retry' || key === 'joined_by' || key === 'when' || key === 'one_of'
+        ? key === 'compact' || key === 'retry' || key === 'when' || key === 'one_of'
         : key === 'prompt' || key === 'when' || key === 'one_of' || key === 'then';
       if (!allowed) {
         return problem(
           asking
-            ? `turns[${i}] has unknown key "${key}" — an entry asking for a fold carries only "compact", "retry", "joined_by", "when", and "one_of"`
+            ? `turns[${i}] has unknown key "${key}" — an entry asking for a fold carries only "compact", "retry", "when", and "one_of"`
             : `turns[${i}] has unknown key "${key}" — a prompt entry carries only "prompt", "when", "one_of", and "then"`,
         );
       }
@@ -437,23 +452,6 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
         return problem(
           `turns[${i}].retry names what the caller re-sends — only "compact" (this same ask, delivered again) is supported on an entry asking for a fold`,
         );
-      }
-      if (rt.joined_by !== undefined) {
-        if (typeof rt.joined_by !== 'string' || rt.joined_by.trim().length === 0) {
-          return problem(
-            `turns[${i}].joined_by must be a non-empty string — the differing ask delivered while this turn's fold is summarizing`,
-          );
-        }
-        if (rt.retry !== undefined) {
-          return problem(
-            `turns[${i}].joined_by cannot be combined with "retry" — one joining delivery per fold is all this format scripts, and an identical resend is "retry: compact"'s to write`,
-          );
-        }
-        if (typeof rt.compact === 'string' && rt.joined_by === rt.compact) {
-          return problem(
-            `turns[${i}].joined_by repeats this turn's own "compact" instructions — an identical resend is "retry: compact"'s to script, write that instead`,
-          );
-        }
       }
       if (i === 0) {
         return problem(`turns[0].compact: the caller asks a run that has already answered — an ask cannot open a koan`);
@@ -487,16 +485,30 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
       turns.push({ kind: 'prompt', prompt: rt.prompt as string, then: thens[i] });
       continue;
     }
-    const turnTrace = parseTurnTraceField(ctx, rt, i);
+    const enclosingCompact = rt.compact === undefined ? false : typeof rt.compact === 'string' ? rt.compact : undefined;
+    const turnTrace = parseTurnTraceField(ctx, rt, i, enclosingCompact, joinAskSeen);
     if (isProblem(turnTrace)) return turnTrace;
     if (rt.compact !== undefined) {
       const err = checkEachVariant(turnTrace, i, checkCompactStep);
       if (err) return err;
+      // Checked here rather than where the step's own "compact" is read:
+      // `retry` is this turn's, and only after checkCompactStep has held
+      // is the trace known to be the single fold step whose joiner it is.
+      if (rt.retry !== undefined) {
+        const joined = checkEachVariant(turnTrace, i, (trace, at) =>
+          trace.steps[0]?.kind === 'compaction' && trace.steps[0].compact !== undefined
+            ? problem(
+                `${at}[0].compact cannot share this turn with "retry" — one joining delivery per fold is all this ` +
+                  `format scripts, and an identical resend is "retry: compact"'s to write`,
+              )
+            : undefined,
+        );
+        if (joined) return joined;
+      }
       turns.push({
         kind: 'compact',
         ...(typeof rt.compact === 'string' ? { instructions: rt.compact } : {}),
         ...(rt.retry !== undefined ? { retried: true } : {}),
-        ...(typeof rt.joined_by === 'string' ? { joinedBy: rt.joined_by } : {}),
         trace: turnTrace,
       });
       continue;
@@ -523,8 +535,24 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
 
 // A turn's own trace: `when` (one step list) or `one_of` (named
 // variants, at least two) — never both, checked in the pass before this
-// one runs.
-function parseTurnTraceField(ctx: Ctx<KoanFile>, rt: Record<string, unknown>, i: number): Parsed<TurnTrace> {
+// one runs. `enclosingCompact` carries this turn's own `compact` field, for
+// the honesty check a step-level joining "compact" owes against it
+// (koan-spec.ts's compaction `Step`): `false` when this turn is not an ask
+// at all (a plain turn, where a step-level "compact" is the threshold-fold
+// origin instead), `undefined` when it is an ask that said nothing
+// (`compact: true`, so there is no instructions string to collide with),
+// and the ask's own instructions string otherwise — the one case a step's
+// "compact" identical to it must be rejected as a resend, not a join.
+// `joinAskSeen` is the whole koan's one shared record of where a joining
+// "compact" has already been written, threaded down so parseTrace's own
+// check of it, further below, accumulates across every turn.
+function parseTurnTraceField(
+  ctx: Ctx<KoanFile>,
+  rt: Record<string, unknown>,
+  i: number,
+  enclosingCompact: string | false | undefined,
+  joinAskSeen: { at?: string },
+): Parsed<TurnTrace> {
   if (rt.one_of !== undefined) {
     const rawOneOf = rt.one_of;
     if (typeof rawOneOf !== 'object' || rawOneOf === null || Array.isArray(rawOneOf)) {
@@ -537,7 +565,21 @@ function parseTurnTraceField(ctx: Ctx<KoanFile>, rt: Record<string, unknown>, i:
       if (!Array.isArray(rawSteps) || rawSteps.length === 0) {
         return problem(`turns[${i}].one_of.${variant} must be a non-empty list of trace steps`);
       }
-      const trace = parseTrace(into(ctx, `turns[${i}].one_of.${variant}`, rawSteps), true, false);
+      // `oneOfVariant: true` — a step-level joining "compact" is rejected
+      // here even where a threshold fold itself is legal (a variant's own
+      // first step): koan.ts's compiled `TurnSpec` does not vary by
+      // variant, so a joiner would have to hold across whichever variant
+      // the trace picks, and nothing here proves every variant picks the
+      // same words, or even has a fold to join at all.
+      const trace = parseTrace(
+        into(ctx, `turns[${i}].one_of.${variant}`, rawSteps),
+        true,
+        false,
+        undefined,
+        enclosingCompact,
+        joinAskSeen,
+        true,
+      );
       if (isProblem(trace)) return trace;
       variants[variant] = trace;
     }
@@ -546,7 +588,7 @@ function parseTurnTraceField(ctx: Ctx<KoanFile>, rt: Record<string, unknown>, i:
   if (!Array.isArray(rt.when) || rt.when.length === 0) {
     return problem(`turns[${i}].when must be a non-empty list of trace steps`);
   }
-  const trace = parseTrace(into(ctx, `turns[${i}].when`, rt.when), true, false);
+  const trace = parseTrace(into(ctx, `turns[${i}].when`, rt.when), true, false, undefined, enclosingCompact, joinAskSeen);
   if (isProblem(trace)) return trace;
   return { kind: 'one', trace };
 }
@@ -661,13 +703,30 @@ function abortKindOf(trace: Trace): AbortKind {
  * could not. `kind` records which shape the one death seen so far was —
  * only a tool step answered "crash" leaves room for a second, and only
  * directly after it (checked locally, against `prev`, since that
- * adjacency does not cross the recursion boundary).
+ * adjacency does not cross the recursion boundary). `enclosingCompact`,
+ * `joinAskSeen`, and `oneOfVariant` are this same kind of threaded
+ * context and record, carried down from `parseTurnTraceField` for a
+ * compaction step's own joining "compact" (koan-spec.ts's `Step`):
+ * `enclosingCompact` carries the enclosing turn's own `compact` field
+ * (`false` outside any ask, `undefined` for an ask that said nothing,
+ * or its instructions string) — legal here regardless, but a step's own
+ * "compact" equal to a string `enclosingCompact` is rejected as a resend,
+ * not a join (`retry: compact`'s to script instead); `oneOfVariant` says
+ * this array is one named member of a turn's "one_of" rather than its
+ * single "when" (rejected — koan.ts's compiled `TurnSpec` does not vary
+ * by variant, so nothing here could make a joiner hold across whichever
+ * one the trace picks), and `joinAskSeen` is the one record, shared
+ * across every turn's own pass, of whether some joining "compact" has
+ * already claimed the koan's one.
  */
 function parseTrace(
   ctx: Ctx<unknown>,
   inTurns: boolean,
   inSubagent: boolean,
   crashSeen: { at?: string; kind?: 'tool' | 'bare' } = {},
+  enclosingCompact: string | false | undefined = false,
+  joinAskSeen: { at?: string } = {},
+  oneOfVariant = false,
 ): Parsed<Trace> {
   const { node, at } = ctx;
   // Unquoted, unlike the callers above: they already reject a missing or
@@ -886,7 +945,10 @@ function parseTrace(
       // `inTurns` rides into the child: a block nested in a turn's trace
       // is still inside that turn, so what a turn forbids — a
       // a death inside a prompt's work above all — stays forbidden at every depth.
-      const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), inTurns, true, crashSeen);
+      // `enclosingCompact: false` regardless of the parent: a subagent block
+      // is rejected outright below (`inSubagent`), so what the parent
+      // turn is never changes the answer here.
+      const childTrace = parseTrace(into(ctx, `[${i}].when`, block.when), inTurns, true, crashSeen, false, joinAskSeen);
       if (isProblem(childTrace)) return childTrace;
       const childLast = childTrace.steps[childTrace.steps.length - 1];
       const settles =
@@ -913,24 +975,31 @@ function parseTrace(
       continue;
     }
 
-    const entry = item as { request?: unknown; response?: unknown; prompt?: unknown } | null;
+    const entry = item as { request?: unknown; response?: unknown; prompt?: unknown; compact?: unknown } | null;
     const req = entry?.request;
     const res = entry?.response;
     const rawPrompt = entry?.prompt;
+    const rawCompact = entry?.compact;
     if (req === undefined || req === null) return problem(`${at_i} needs "request"`);
 
     // A misspelled key would otherwise be dropped in silence, and the two
     // that can be dropped hurt most: a mistyped `prompt` leaves a koan
     // that still passes while scripting no delivery at all.
     for (const key of Object.keys(entry as Record<string, unknown>)) {
-      if (key !== 'request' && key !== 'response' && key !== 'prompt') {
+      if (key !== 'request' && key !== 'response' && key !== 'prompt' && key !== 'compact') {
         return problem(
-          `${at_i} has unknown key "${key}" — a trace step is a "request" and its "response", plus a tool step's "prompt"; anything else belongs inside one of them`,
+          `${at_i} has unknown key "${key}" — a trace step is a "request" and its "response", plus a tool step's "prompt" or a compaction step's "compact"; anything else belongs inside one of them`,
         );
       }
     }
     const target = parseRequestTarget(at_i, req);
     if (isProblem(target)) return target;
+
+    if (rawCompact !== undefined && !(target.kind === 'model' && target.purpose === 'compaction')) {
+      return problem(
+        `${at_i}.compact belongs on a compaction step — the differing ask delivered while that fold is still summarizing, not on this request`,
+      );
+    }
 
     // Which calls a response-less request may close (koan-spec.ts) is a
     // whole-trace question, left to the tool-request matching in
@@ -974,6 +1043,45 @@ function parseTrace(
       if (target.purpose !== undefined) {
         const fold = parseCompactionStep(at_i, res, (inTurns && i === 0) || inSubagent);
         if (isProblem(fold)) return fold;
+        if (rawCompact !== undefined) {
+          if (typeof rawCompact !== 'string' || rawCompact.trim().length === 0) {
+            return problem(
+              `${at_i}.compact must be a non-empty string — the differing ask delivered while this fold is summarizing`,
+            );
+          }
+          if (inSubagent) {
+            return problem(
+              `${at_i}.compact cannot appear inside a subagent block — only the run's own conversation has a caller to ask`,
+            );
+          }
+          // The honesty rule: legal wherever a compaction step's own
+          // "compact" is legal (both fold origins — parse.ts's header),
+          // but not as a disguised identical resend. Only checked when the
+          // enclosing turn is itself an ask with instructions of its own
+          // (`enclosingCompact` a string): a plain turn's threshold-fold
+          // step has no turn-level "compact" to collide with, and an ask
+          // that said nothing (`compact: true`) left no instructions this
+          // step's own words could repeat.
+          if (typeof enclosingCompact === 'string' && rawCompact === enclosingCompact) {
+            return problem(
+              `${at_i}.compact repeats the enclosing turn's own "compact" instructions — an identical resend is ` +
+                `"retry: compact"'s to script, write that instead`,
+            );
+          }
+          if (oneOfVariant) {
+            return problem(
+              `${at_i}.compact cannot appear inside a "one_of" variant — how many requests a fold costs may vary by ` +
+                `variant, but the turn's own joiner does not, so this format does not script one here`,
+            );
+          }
+          if (joinAskSeen.at !== undefined) {
+            return problem(
+              `${at_i}.compact: a koan may write a joining "compact" step once, wherever it lands — ${joinAskSeen.at} already does`,
+            );
+          }
+          joinAskSeen.at = `${at_i}.compact`;
+          fold.compact = rawCompact;
+        }
         steps.push(fold);
         continue;
       }
@@ -1187,7 +1295,7 @@ function parseUsedTokens(at: string, raw: unknown): Parsed<number | undefined> {
  * one that failed carries the failure the endpoint answered with, and
  * neither carries the other's fields.
  */
-function parseCompactionStep(at: string, res: unknown, mayFoldHere: boolean): Parsed<Step> {
+function parseCompactionStep(at: string, res: unknown, mayFoldHere: boolean): Parsed<CompactionStep> {
   // Anywhere but a turn's first step, or inside a subagent block, would
   // pin down one of two conforming designs: some agents fold before the
   // next request of a turn already running, some once that turn settles
@@ -1274,7 +1382,7 @@ function parseFoldSummaries(at: string, raw: unknown): Parsed<[string, ...string
 // A fold the model endpoint refused. `status` is restricted the same way a
 // model API failure's is, and for the same reason: a koan cannot script a
 // status the client under test would retry on a schedule of its own.
-function parseFailedCompaction(at: string, res: Record<string, unknown>): Parsed<Step> {
+function parseFailedCompaction(at: string, res: Record<string, unknown>): Parsed<CompactionStep> {
   for (const key of Object.keys(res)) {
     if (key !== 'status' && key !== 'body' && key !== 'compaction') {
       return problem(`${at}.response has unknown key "${key}" — a failed compaction carries only "status", "body", and "compaction"`);
@@ -2104,15 +2212,13 @@ function usedTokensFitTheWindow(koan: KoanFile): Problem | undefined {
         if (step.kind !== 'model' && step.kind !== 'compaction') continue;
         const written = step.kind === 'compaction' && step.report === 'failed' ? undefined : step.used_tokens;
         if (written === undefined) continue;
-        if (context === undefined) {
-          // Only the run's own conversation must have one to compare
-          // against: a delegate's without a declared context has no
-          // window at all, so its reported size is whatever the endpoint
-          // says, unbounded — koan 060 scripts exactly this.
-          if (name === undefined) {
-            return problem(`${turn.at}[${i}]: "used_tokens" needs "given.context.window" — there is no window for it to be a part of`);
-          }
-        } else if (written > context.window) {
+        // Bounded only under a declared context: without one there is no
+        // window for the report to be a part of — the model endpoint
+        // reports usage whether or not anyone declared one, so the size is
+        // unbounded here (koan 060 scripts this for a delegate; koan 095
+        // for the run's own — SPEC.md §3 forbids compacting a window
+        // nobody declared, not the report of pressure against it).
+        if (context !== undefined && written > context.window) {
           // Named by the declaration that actually applies: a delegate's
           // overflow against its own declared window would otherwise be
           // reported against the run's, which may not even exist.

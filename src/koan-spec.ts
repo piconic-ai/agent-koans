@@ -168,16 +168,6 @@ export interface CompactTurn {
    * named, same as a tool step's `retry: prompt`.
    */
   retried?: boolean;
-  /**
-   * A DIFFERENT ask, delivered while the fold this one brought about is
-   * still in flight (`joined_by`, written beside `compact`) — it joins
-   * the same running fold `retried` does, but reaches nothing: not that
-   * fold, whose wording was fixed when it began, and not a second fold
-   * after it, since one fold serves every ask that converged on it
-   * (SPEC.md §3). Mutually exclusive with `retried`: an identical resend
-   * is `retry: compact`'s to write.
-   */
-  joinedBy?: string;
 }
 
 /**
@@ -320,8 +310,45 @@ export type Step =
    * it must carry depends on how it ended, neither of which a shared shape
    * could say.
    */
-  | { kind: 'compaction'; summaries: [string, ...string[]]; used_tokens: number; report: 'completed' }
-  | { kind: 'compaction'; fails: HttpToolResponse; report: 'failed' }
+  | {
+      kind: 'compaction';
+      summaries: [string, ...string[]];
+      used_tokens: number;
+      report: 'completed';
+      /** See the sibling field on the failed variant, below — this carries the same thing for a fold that completed. */
+      compact?: string;
+    }
+  | {
+      kind: 'compaction';
+      fails: HttpToolResponse;
+      report: 'failed';
+      /**
+       * A DIFFERENT ask, delivered while THIS fold is still in flight
+       * (`compact`, written beside this step's own `request`/`response`)
+       * — it joins the fold already running and reaches nothing: its
+       * wording was fixed when the fold it joins began, and no second
+       * fold starts for it to reach instead (SPEC.md §3). Named the same
+       * as a tool step's own `prompt`: the format names a caller action by
+       * the wire operation it performs — `prompt` is a `POST /prompts`
+       * delivered while a held invocation waits, `compact` is a
+       * `POST /compact` delivered while this fold's own summarizing
+       * request waits — and the outcome (that it joins rather than
+       * queues) is SPEC's to say, not the key's. One spelling for both
+       * fold origins: written on this step whether the fold in flight is
+       * the run's own declared threshold's doing or another ask's — where
+       * it is the latter, this step sits inside that ask's own `compact:`
+       * turn (a `CompactTurn`'s single-step `trace`), and this value must
+       * differ from that turn's own `compact:` instructions, since an
+       * identical resend is `retry: compact`'s to script instead (parse.ts
+       * checks the equality; the type cannot). Never inside a subagent
+       * block, where a delegate's own conversation has no caller of its
+       * own to ask, and never inside a `one_of` variant, since the
+       * compiled turn list does not vary by variant (koan.ts's `TurnSpec`)
+       * so nothing could make a joiner hold across whichever one an
+       * implementation picks. At most one per koan.
+       */
+      compact?: string;
+    }
   /**
    * The agent's process is killed without warning (SIGKILL) once every
    * exchange before this step has been observed, and restarted; the trace

@@ -401,12 +401,12 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
     const asking = rt.compact !== undefined;
     for (const key of Object.keys(rt)) {
       const allowed = asking
-        ? key === 'compact' || key === 'retry' || key === 'when' || key === 'one_of'
+        ? key === 'compact' || key === 'retry' || key === 'joined_by' || key === 'when' || key === 'one_of'
         : key === 'prompt' || key === 'when' || key === 'one_of' || key === 'then';
       if (!allowed) {
         return problem(
           asking
-            ? `turns[${i}] has unknown key "${key}" — an entry asking for a fold carries only "compact", "retry", "when", and "one_of"`
+            ? `turns[${i}] has unknown key "${key}" — an entry asking for a fold carries only "compact", "retry", "joined_by", "when", and "one_of"`
             : `turns[${i}] has unknown key "${key}" — a prompt entry carries only "prompt", "when", "one_of", and "then"`,
         );
       }
@@ -437,6 +437,23 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
         return problem(
           `turns[${i}].retry names what the caller re-sends — only "compact" (this same ask, delivered again) is supported on an entry asking for a fold`,
         );
+      }
+      if (rt.joined_by !== undefined) {
+        if (typeof rt.joined_by !== 'string' || rt.joined_by.trim().length === 0) {
+          return problem(
+            `turns[${i}].joined_by must be a non-empty string — the differing ask delivered while this turn's fold is summarizing`,
+          );
+        }
+        if (rt.retry !== undefined) {
+          return problem(
+            `turns[${i}].joined_by cannot be combined with "retry" — one joining delivery per fold is all this format scripts, and an identical resend is "retry: compact"'s to write`,
+          );
+        }
+        if (typeof rt.compact === 'string' && rt.joined_by === rt.compact) {
+          return problem(
+            `turns[${i}].joined_by repeats this turn's own "compact" instructions — an identical resend is "retry: compact"'s to script, write that instead`,
+          );
+        }
       }
       if (i === 0) {
         return problem(`turns[0].compact: the caller asks a run that has already answered — an ask cannot open a koan`);
@@ -479,6 +496,7 @@ function parseTurnsBody(ctx: Ctx<KoanFile>, rawTurns: unknown): Parsed<Body> {
         kind: 'compact',
         ...(typeof rt.compact === 'string' ? { instructions: rt.compact } : {}),
         ...(rt.retry !== undefined ? { retried: true } : {}),
+        ...(typeof rt.joined_by === 'string' ? { joinedBy: rt.joined_by } : {}),
         trace: turnTrace,
       });
       continue;

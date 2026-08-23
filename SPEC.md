@@ -287,11 +287,13 @@ you fold on your own, and `off` does not take the choice away from the
 caller who asked.
 
 An ask that arrives while a fold is already in progress MUST NOT start a
-second one — it joins the fold already running, and you answer it the
-same way: once that fold has ended and been reported. One fold, one
-report, however many asks converged on it. A joining ask's own
-instructions, if any, do not reach that fold: its wording was already
-fixed when the fold it joins began.
+second one — it joins the fold already running, whatever it says: joining
+does not depend on the wording. You answer it the same way: once that
+fold has ended and been reported. One fold, one report, serves every ask
+that converged on it, however many and however differently worded. A
+joining ask's own instructions, if any, reach nothing — not the fold
+already running, whose wording was fixed when it began, and not a second
+fold after it, because there is no second fold for them to reach.
 
 An ask MAY carry instructions — what the caller wants the summary to keep
 (openapi.yaml). Those words MUST reach the request that summarizes, as
@@ -480,6 +482,7 @@ it cannot drift from the contract it indexes.
 | [090-creation-retry-after-settle](./koans/090-creation-retry-after-settle.yaml) | The caller names the run, never sees its acceptance, and re-sends the identical creation — after the run has already settled. The resend lands on the run it already started: the same acceptance with the same run_id, the committed result untouched, and no second conversation — a run is created once, however late the caller's retry arrives (SPEC.md §3). |
 | [091-delegation-depth](./koans/091-delegation-depth.yaml) | The run permits one level of delegation and the delegate tries to delegate again. A depth cap is crossed, not spent: the child's delegation is refused the way an undeclared name's is — no conversation opens for it, the refusal reaches the child, and the child finishes its own work with what it has. The run completes (SPEC.md §3). |
 | [092-follow-up-after-failure](./koans/092-follow-up-after-failure.yaml) | The run's only model request is refused and the run settles failed. A failure seals nothing: the caller's follow-up prompt re-opens the same conversation, the model now answers with the history the failed turn left behind, and the run completes (SPEC.md §3). |
+| [093-joining-ask-different-words](./koans/093-joining-ask-different-words.yaml) | Two fold asks with different words: the second arrives while the fold the first brought about is still summarizing. The second ask joins that fold and is answered by it — its own instructions reach nothing: not the running fold, whose wording was fixed when it began, and not a second fold after it, because one fold serves every ask that converged on it (SPEC.md §3). |
 
 <!-- koan-index:end -->
 

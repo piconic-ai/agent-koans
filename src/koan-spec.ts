@@ -168,6 +168,16 @@ export interface CompactTurn {
    * named, same as a tool step's `retry: prompt`.
    */
   retried?: boolean;
+  /**
+   * A DIFFERENT ask, delivered while the fold this one brought about is
+   * still in flight (`joined_by`, written beside `compact`) — it joins
+   * the same running fold `retried` does, but reaches nothing: not that
+   * fold, whose wording was fixed when it began, and not a second fold
+   * after it, since one fold serves every ask that converged on it
+   * (SPEC.md §3). Mutually exclusive with `retried`: an identical resend
+   * is `retry: compact`'s to write.
+   */
+  joinedBy?: string;
 }
 
 /**

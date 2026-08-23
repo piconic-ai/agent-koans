@@ -2145,6 +2145,42 @@ const rows: Row[] = [
     message: 'turns[0] has unknown key "retry" — a prompt entry carries only "prompt", "when", "one_of", and "then"',
   },
   {
+    rule: '"joined_by" cannot combine with "retry" on the same entry',
+    yaml: turnsKoan(`
+      - compact: true
+        retry: compact
+        joined_by: "Keep only the dates."
+        when:
+          - request: model
+            response: ok
+    `),
+    message:
+      'turns[0].joined_by cannot be combined with "retry" — one joining delivery per fold is all this format scripts, and an identical resend is "retry: compact"\'s to write',
+  },
+  {
+    rule: '"joined_by" equal to the turn\'s own "compact" instructions is a resend, not a join',
+    yaml: turnsKoan(`
+      - compact: "Keep every operator code verbatim."
+        joined_by: "Keep every operator code verbatim."
+        when:
+          - request: model
+            response: ok
+    `),
+    message:
+      'turns[0].joined_by repeats this turn\'s own "compact" instructions — an identical resend is "retry: compact"\'s to script, write that instead',
+  },
+  {
+    rule: '"joined_by" cannot appear on a prompt entry',
+    yaml: turnsKoan(`
+      - prompt: a
+        joined_by: "Keep only the dates."
+        when:
+          - request: model
+            response: ok
+    `),
+    message: 'turns[0] has unknown key "joined_by" — a prompt entry carries only "prompt", "when", "one_of", and "then"',
+  },
+  {
     rule: 'a koan cannot open with an ask',
     yaml: turnsKoan(`
       - compact: true

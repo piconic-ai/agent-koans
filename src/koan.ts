@@ -152,6 +152,16 @@ export interface ModelTurn {
   asked?: string;
   /** Set on a fold's first-served request when the ask that brought the fold about is re-sent while it is in flight (`retry: compact`): the mock withholds this response until the runner releases it. */
   compactRetried?: boolean;
+  /**
+   * Set on a fold's first-served request when a DIFFERENTLY worded ask
+   * joins it while it is in flight (`joined_by`) — the words of that
+   * joining ask, held here only so the mock can forbid them from every
+   * request of the run (`Trace.forbiddenEverywhere`). Held the same way
+   * `compactRetried` is: the mock withholds this response until the
+   * runner releases it. Never set alongside `compactRetried` — an
+   * identical resend is that field's to carry.
+   */
+  compactJoined?: string;
   /** This held fold's position among the trace's held actions — which hold the runner pairs it with, numbered the same way as `CallToolInstruction.holdIndex`. */
   holdIndex?: number;
   /** This turn's tool-call instruction(s); more than one means a parallel group. */
@@ -236,16 +246,31 @@ export interface Conversation {
 export interface Trace {
   /** The main conversation first; subagent conversations follow in first-appearance order. */
   conversations: Conversation[];
+  /**
+   * Words of an ask that joined a fold running elsewhere in this trace
+   * (`joined_by`) — must never reach a request of ANY conversation here,
+   * not just the fold it joined: the fold it joined had its wording
+   * fixed before it arrived, and no second fold starts for it to reach
+   * instead (SPEC.md §3). Fed into every `ConversationScript.forbidden`
+   * (mock-llm.ts), the same channel a value scripted into one
+   * conversation and forbidden from another already goes through.
+   */
+  forbiddenEverywhere?: string[];
 }
 
 /**
  * One caller action a held invocation carries — a mid-run prompt, a
  * re-send of the turn's own submission, a fold ask re-sent while its own
- * fold is in flight — or the one action that is not the caller's at all:
+ * fold is in flight, whether identical (`retry: compact`) or differently
+ * worded (`joined_by`) — or the one action that is not the caller's at all:
  * the runner killing the agent while the invocation is in flight
  * (`response: crash`).
  */
-export type HeldAction = { kind: 'prompt'; prompt: string } | { kind: 'retry' } | { kind: 'crash' } | { kind: 'compact' };
+export type HeldAction =
+  | { kind: 'prompt'; prompt: string }
+  | { kind: 'retry' }
+  | { kind: 'crash' }
+  | { kind: 'compact'; joinInstructions?: string };
 
 /** A `then`-block matcher; a bare scalar means `equals`. */
 export type Matcher =
@@ -293,7 +318,7 @@ export interface Judgment {
  */
 export type TurnSpec =
   | { kind: 'prompt'; prompt: string; then: Judgment }
-  | { kind: 'compact'; instructions?: string; retried?: boolean }
+  | { kind: 'compact'; instructions?: string; retried?: boolean; joinedBy?: string }
   | { kind: 'crash' };
 
 /** A compiled koan: shared `given`/`then` plus one or more trace variants. */
@@ -557,9 +582,15 @@ function heldActions(conv: Conversation): Array<{ turn: number; action: HeldActi
   for (const [i, turn] of conv.turns.entries()) {
     // A compaction turn carries no call_tools, so this is mutually
     // exclusive with the member loop below — never both on one turn.
+    // `compactRetried` and `compactJoined` are themselves mutually
+    // exclusive (parse.ts rejects `joined_by` beside `retry`), so at
+    // most one of these two fires.
     if (turn.compactRetried) {
       turn.holdIndex = held.length;
       held.push({ turn: i, action: { kind: 'compact' } });
+    } else if (turn.compactJoined !== undefined) {
+      turn.holdIndex = held.length;
+      held.push({ turn: i, action: { kind: 'compact', joinInstructions: turn.compactJoined } });
     }
     for (const member of turn.call_tools ?? []) {
       const action: HeldAction | undefined =
@@ -628,6 +659,7 @@ export function actionsDuringOf(trace: Trace): HeldAction[] {
   const actions: HeldAction[] = [];
   for (const turn of trace.conversations[0].turns) {
     if (turn.compactRetried) actions.push({ kind: 'compact' });
+    else if (turn.compactJoined !== undefined) actions.push({ kind: 'compact', joinInstructions: turn.compactJoined });
     for (const member of turn.call_tools ?? []) {
       if (member.promptDuring !== undefined) actions.push({ kind: 'prompt', prompt: member.promptDuring });
       else if (member.retryDuring) actions.push({ kind: 'retry' });
@@ -689,6 +721,7 @@ function compileTurnsTrace(
             kind: 'compact',
             ...(t.instructions !== undefined ? { instructions: t.instructions } : {}),
             ...(t.retried ? { retried: true as const } : {}),
+            ...(t.joinedBy !== undefined ? { joinedBy: t.joinedBy } : {}),
           }
         : { kind: 'prompt', prompt: t.prompt, then: compileJudgment(t.then) },
   );
@@ -746,6 +779,14 @@ function compileTurnsVariant(
       // however many requests the fold costs.
       main.turns[before].compactRetried = true;
     }
+    if (t.kind === 'compact' && t.joinedBy !== undefined) {
+      // Same hold, for the same reason, as `retried` above — proving the
+      // differently worded ask lands while the fold is still unanswered
+      // — but a different field, since `compactRetried` alone drives the
+      // exactly-once wording check in mock-llm.ts, which is about the
+      // first ask's own words, not the joiner's.
+      main.turns[before].compactJoined = t.joinedBy;
+    }
   }
 
   // Numbers the fold holds into holdIndex. The only held actions a
@@ -754,7 +795,8 @@ function compileTurnsVariant(
   // interleave with these.
   heldActions(main);
 
-  return { conversations };
+  const joinedWords = turns.flatMap((t) => (t !== 'crash' && t.kind === 'compact' && t.joinedBy !== undefined ? [t.joinedBy] : []));
+  return { conversations, ...(joinedWords.length > 0 ? { forbiddenEverywhere: joinedWords } : {}) };
 }
 
 // A turn's own steps: `when`'s single trace, or the named member of

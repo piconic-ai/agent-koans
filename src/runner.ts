@@ -736,13 +736,16 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // Every turn but the last is judged here, against its own `then`;
       // the last turn's judgment happens below, together
       // with the plain `when`/`one_of` koan's, once the run has fully
-      // settled (including any late abort). A turn that did not land
-      // `completed` leaves nothing meaningful to continue, so the runner
-      // stops sending further prompts right there — `stoppedEarly` records
-      // this, so the last turn's judgment below is skipped: that turn
-      // never ran, and judging it would report a failure about the wrong
-      // turn's expectations against the state the one that actually
-      // stopped left behind.
+      // settled (including any late abort). A prompt turn that ends its
+      // own trace in a model API failure declares that in `then` (parse.ts's
+      // checkEndsInReply), so `completed` is not the only settle the next
+      // prompt is owed: it is owed whatever the turn scripted, since a
+      // failed settle there is a seam the koan itself wrote, not the
+      // runner giving up early. Only a settle that matches neither is an
+      // early stop — `stoppedEarly` records that, so the last turn's
+      // judgment below is skipped: that turn never ran, and judging it
+      // would report a failure about the wrong turn's expectations
+      // against the state the one that actually stopped left behind.
       let stoppedEarly = false;
       // One hold per retried fold ask, in turn order. In a `turns:` koan
       // these are the only held actions parse.ts admits, so the filter
@@ -754,7 +757,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
           const previous = koan.turns[t - 1];
           if (previous.kind === 'prompt') {
             failures.push(...judge(previous.then, run));
-            if (run.status !== 'completed') {
+            if (run.status !== 'completed' && run.status !== previous.then.status) {
               stoppedEarly = true;
               failures.push(`turn ${t} of ${koan.turns.length} did not complete; the rest of the koan was not sent`);
               break;

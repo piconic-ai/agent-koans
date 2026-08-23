@@ -208,7 +208,11 @@ never rewrites a committed result.
 `status` returns to `running`, the run reaches a terminal state again, and
 `output` carries the new turn's answer. The conversation MUST carry every
 earlier turn into this turn's model requests — verbatim, unless the run
-asked you to compact and you folded them into a summary (below).
+asked you to compact and you folded them into a summary (below). A
+settled run is any settled run: one that settled `failed` re-opens the
+same way, not a dead end. The history the failed turn left — its own
+prompt, and whatever exchanges completed before the refusal that ended
+it — is still the conversation the follow-up continues.
 
 A prompt sent to a run still `running` MUST be accepted too, and MUST NOT
 then be dropped: the run MUST reach a terminal state carrying an answer to
@@ -475,6 +479,7 @@ it cannot drift from the contract it indexes.
 | [089-unanswered-question-costs-nothing](./koans/089-unanswered-question-costs-nothing.yaml) | The run has exactly the budget its two answers need, and the process dies with the second question sent and unanswered. A question that was never answered cost nothing and changed nothing: the recovered process asks it again from the recorded history, and the budget still covers it — a restart that had charged the doomed request would find nothing left to ask with (SPEC.md §3). |
 | [090-creation-retry-after-settle](./koans/090-creation-retry-after-settle.yaml) | The caller names the run, never sees its acceptance, and re-sends the identical creation — after the run has already settled. The resend lands on the run it already started: the same acceptance with the same run_id, the committed result untouched, and no second conversation — a run is created once, however late the caller's retry arrives (SPEC.md §3). |
 | [091-delegation-depth](./koans/091-delegation-depth.yaml) | The run permits one level of delegation and the delegate tries to delegate again. A depth cap is crossed, not spent: the child's delegation is refused the way an undeclared name's is — no conversation opens for it, the refusal reaches the child, and the child finishes its own work with what it has. The run completes (SPEC.md §3). |
+| [092-follow-up-after-failure](./koans/092-follow-up-after-failure.yaml) | The run's only model request is refused and the run settles failed. A failure seals nothing: the caller's follow-up prompt re-opens the same conversation, the model now answers with the history the failed turn left behind, and the run completes (SPEC.md §3). |
 
 <!-- koan-index:end -->
 

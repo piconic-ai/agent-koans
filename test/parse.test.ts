@@ -522,14 +522,38 @@ const rows: Row[] = [
     message: 'turns[0].when must be a non-empty list of trace steps',
   },
   {
-    rule: 'a non-final turn ends with a plain text reply',
+    rule: 'a non-final turn ends with a plain text reply or a model API failure',
     yaml: turnsKoan(`
       - prompt: a
         when:
           - request: model
             response: { tool: x, args: {} }
     `),
-    message: `turns[0].when must end with a plain text reply — an intermediate turn can only be judged "completed" by ending in one`,
+    message: `turns[0].when must end with a plain text reply or a model API failure — an intermediate turn can only be judged "completed" or its declared failure by ending in one`,
+  },
+  {
+    rule: 'a non-final turn ending in a model API failure declares "then: status: failed"',
+    yaml: turnsKoan(`
+      - prompt: a
+        when:
+          - request: model
+            response: { status: 400 }
+    `),
+    message: `turns[0] ends in a model API failure — it must declare "then: { status: failed }" so the runner knows the stop is scripted, not an early one`,
+  },
+  {
+    rule: 'a non-final "one_of" turn has every variant end the same way',
+    yaml: turnsKoan(`
+      - prompt: a
+        one_of:
+          x:
+            - request: model
+              response: ok
+          y:
+            - request: model
+              response: { status: 400 }
+    `),
+    message: `turns[0].one_of: every variant must end the same way — a judgment is the turn's, not a variant's, so turns[0].one_of.y cannot end in an api-failure while another variant ends in a reply`,
   },
   {
     rule: 'every delegation is answered by a "subagent" block',

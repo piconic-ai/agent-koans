@@ -1,0 +1,36 @@
+name: late-result-discarded
+description: >
+  The tool declares how long an invocation is waited for, the server
+  misses the deadline, and the answer arrives anyway — after the
+  invocation was already given up. A result that missed its deadline is
+  no result: it reaches no model request, it does not reopen the call
+  it missed, and the run's answer stands on the timeout the model was
+  told about (SPEC.md §3).
+
+given:
+  tools:
+    lookup_code:
+      description: "Look up the operator code for an incident"
+      timeout_ms: 1500
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+prompt: "Get the operator code for incident INC-12 and report it."
+
+when:
+  - request: model
+    response: { tool: lookup_code, args: { id: "INC-12" } }
+  - request: { tool: lookup_code }
+    response:
+      duration_ms: 3000
+      status: 200
+      body: { code: "K-3-9925" }
+  - request: model
+    response: "The lookup did not answer in time, so I cannot report incident INC-12's operator code."
+
+then:
+  status: completed
+  output: { contains: "did not answer in time" }

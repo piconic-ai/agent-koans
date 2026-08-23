@@ -152,6 +152,13 @@ tool failure does (§4), the follow-up call, if any, is the model's next
 instruction — never your own retry — and the run carries on. Without a
 declaration nothing changes; the sentence above stands.
 
+Given up means closed. An answer that arrives after the give-up is no
+answer: it MUST NOT reach the model — none of its values may appear in
+any model request of the run — and it MUST NOT reopen the invocation it
+missed. The give-up already told the model what it needed to know; a
+late arrival changes nothing about that, however correct it turns out
+to be.
+
 **Crash recovery.** A koan may kill your agent's process — SIGKILL, no
 warning — and start the same command again (a trace's `crash`). The
 contract is the terminal-state guarantee stretched across the death: a
@@ -493,6 +500,7 @@ it cannot drift from the contract it indexes.
 | [093-joining-ask-different-words](./koans/093-joining-ask-different-words.yaml) | Two fold asks with different words: the second arrives while the fold the first brought about is still summarizing. The second ask joins that fold and is answered by it — its own instructions reach nothing: not the running fold, whose wording was fixed when it began, and not a second fold after it, because one fold serves every ask that converged on it (SPEC.md §3). |
 | [094-joining-ask-mid-threshold-fold](./koans/094-joining-ask-mid-threshold-fold.yaml) | The run's declared threshold starts a fold, and the caller's ask — instructions and all — arrives while it is summarizing. The ask joins the fold the run had already begun: it is answered once that fold ends and is reported, and its instructions reach nothing — the fold's wording was fixed when it began, and no second fold starts for them (SPEC.md §3). |
 | [095-no-declared-window-no-fold](./koans/095-no-declared-window-no-fold.yaml) | The run declares no context, and the model reports heavy usage anyway. Pressure is not permission: with no declared window there is no threshold to cross, the conversation is carried as it stands, and no fold the caller never declared appears — the follow-up turn sees the history verbatim (SPEC.md §3). |
+| [096-late-result-discarded](./koans/096-late-result-discarded.yaml) | The tool declares how long an invocation is waited for, the server misses the deadline, and the answer arrives anyway — after the invocation was already given up. A result that missed its deadline is no result: it reaches no model request, it does not reopen the call it missed, and the run's answer stands on the timeout the model was told about (SPEC.md §3). |
 
 <!-- koan-index:end -->
 

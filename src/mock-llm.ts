@@ -72,7 +72,8 @@ function trailingToolMessages(messages: ChatMessage[], pastPrompt = false): Chat
   return messages.slice(start, end);
 }
 
-function scalarLeaves(value: unknown): string[] {
+/** Every scalar of a value, flattened — the strings a request's text is checked for. */
+export function scalarLeaves(value: unknown): string[] {
   if (value === null || value === undefined) return [];
   if (typeof value !== 'object') return [String(value)];
   return Object.values(value as object).flatMap(scalarLeaves);
@@ -723,7 +724,10 @@ export function startMockLlm(
           pending.push({
             name: member.name,
             args: member.invokeArgs ?? member.args ?? {},
-            respond: member.tool_responds,
+            // Only the tool mock sees `lateResponds`; `tool_responds`
+            // stays `{ never: true }` for every other purpose — the
+            // timeout is what the model must experience.
+            respond: member.lateResponds ?? member.tool_responds,
             ...(hold ? { hold } : {}),
           });
         }

@@ -422,7 +422,23 @@ export interface HttpToolResponse {
  * the work is asked for again is the model's next instruction, never the
  * agent's own retry.
  */
-export type ToolResponse = HttpToolResponse | { disconnect: true } | { never: true } | { crash: true };
+export type ToolResponse =
+  | (HttpToolResponse & {
+      /**
+       * The tool server's answer time in milliseconds. Legal only when
+       * the tool declares `timeout_ms`, and must exceed it — an answer
+       * within the timeout has nothing late to script.
+       *
+       * Not honored as wall-clock time: delivery is gated on the run's
+       * next model request having been served, never on this many
+       * milliseconds passing — only the value's relation to `timeout_ms`
+       * is read.
+       */
+      duration_ms?: number;
+    })
+  | { disconnect: true }
+  | { never: true }
+  | { crash: true };
 
 /** `then`: the run's outcome after the trace settles. */
 export interface Judgment {

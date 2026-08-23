@@ -1,0 +1,40 @@
+name: joining-ask-different-words
+description: >
+  Two fold asks with different words: the second arrives while the fold
+  the first brought about is still summarizing. The second ask joins
+  that fold and is answered by it — its own instructions reach nothing:
+  not the running fold, whose wording was fixed when it began, and not
+  a second fold after it, because one fold serves every ask that
+  converged on it (SPEC.md §3).
+
+given:
+  context:
+    window: 100000
+    compaction: 90%
+
+turns:
+  - prompt: "Note for the record: the duty operator for incident INC-5513 is code T-2-8841."
+    when:
+      - request: model
+        response:
+          body: "Noted: incident INC-5513, duty operator T-2-8841."
+          used_tokens: 40000
+
+  - compact: "Keep every operator code verbatim."
+    joined_by: "Keep only the incident dates."
+    when:
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          body: "Earlier: incident INC-5513 has duty operator code T-2-8841."
+          used_tokens: 8000
+          compaction: completed
+
+  - prompt: "What was that incident's duty operator code?"
+    when:
+      - request: model
+        response: "The duty operator code is T-2-8841."
+    then:
+      status: completed
+      output: { contains: "T-2-8841" }

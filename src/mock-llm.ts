@@ -486,8 +486,17 @@ export function startMockLlm(
   const allowed = conversationValues(trace);
   const forbidden = buildForbidden(allowed, trace.conversations);
   const identifying = buildIdentifying(allowed);
+  // A joining ask's own words (`joined_by`) reach no request of any
+  // conversation, not just the fold it joined — so unlike the rest of
+  // `forbidden`, this entry goes onto every script, the source
+  // conversation included, rather than every OTHER one.
+  const joinForbidden = (trace.forbiddenEverywhere ?? []).map((value) => ({
+    value,
+    reason:
+      "the second ask's own instructions — a joining ask's words reach no fold: the one it joined had its wording fixed when it began (SPEC.md §3)",
+  }));
   for (const script of scripts) {
-    script.forbidden = forbidden.get(script.conv.name) ?? [];
+    script.forbidden = [...(forbidden.get(script.conv.name) ?? []), ...joinForbidden];
     state.served[script.conv.name] = 0;
   }
   const main = scripts[0];

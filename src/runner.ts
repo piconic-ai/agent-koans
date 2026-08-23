@@ -556,7 +556,8 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       }
 
       for (const [k, action] of actions.entries()) {
-        // A retried fold ask is the turns loop's to deliver — the ask
+        // A second fold ask — identical (`retried`) or differently
+        // worded (`joinedBy`) — is the turns loop's to deliver; the ask
         // that engages its hold has not even been sent yet here.
         if (action.kind === 'compact') continue;
         const label =
@@ -747,9 +748,11 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
       // would report a failure about the wrong turn's expectations
       // against the state the one that actually stopped left behind.
       let stoppedEarly = false;
-      // One hold per retried fold ask, in turn order. In a `turns:` koan
-      // these are the only held actions parse.ts admits, so the filter
-      // narrows nothing today — it keeps the pairing explicit.
+      // One hold per fold ask a second ask converges on — identical
+      // (`retried`) or differently worded (`joinedBy`) — in turn order.
+      // In a `turns:` koan these are the only held actions parse.ts
+      // admits, so the filter narrows nothing today — it keeps the
+      // pairing explicit.
       const foldHolds = actions.flatMap((a, k) => (a.kind === 'compact' ? [holds[k]] : []));
       let nextFoldHold = 0;
       if (koan.turns) {
@@ -783,7 +786,7 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
                   }
                 : {}),
             };
-            if (!entry.retried) {
+            if (!entry.retried && entry.joinedBy === undefined) {
               const compactRes = await fetch(`${base}/runs/${runId}/compact`, askInit);
               if (compactRes.status !== 202 && compactRes.status !== 200) {
                 throw new Error(`POST /runs/${runId}/compact returned ${compactRes.status}, expected 202 or 200`);
@@ -804,27 +807,39 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
               continue;
             }
 
-            // The same ask, twice: fire the first, wait until its fold's
-            // own summarizing request is provably in flight (held by the
-            // mock), deliver the identical ask again, then let the fold
-            // go. What convergence must show is one fold, which
-            // judgeReportedFolds and the script's own request count already
-            // pin — never the delivery slack below.
+            // Two asks converging on one fold: fire the first, wait until
+            // its fold's own summarizing request is provably in flight
+            // (held by the mock), deliver the second — the same ask again
+            // (`retried`) or a differently worded one (`joinedBy`) — then
+            // let the fold go. What convergence must show is one fold,
+            // which judgeReportedFolds and the script's own request count
+            // already pin — never the delivery slack below.
             const hold = foldHolds[nextFoldHold++];
             const askA = fetch(`${base}/runs/${runId}/compact`, askInit);
             // Observed below via Promise.all; caught here too so an
             // engagement timeout doesn't leave this rejection unhandled.
             askA.catch(() => {});
+            // The joiner's own words, not the turn's: this is what tells
+            // its ask apart from an identical resend, and what mock-llm.ts
+            // is checking never reaches the running fold.
+            const askBInit =
+              entry.joinedBy !== undefined
+                ? {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ instructions: entry.joinedBy }),
+                  }
+                : askInit;
             let askB!: Promise<Response>;
             try {
               await within(
                 hold.engaged,
                 Date.now() + (agent.runTimeoutMs ?? 15_000),
                 () =>
-                  `the summarizing request the trace holds open for the repeated ask was never made within ` +
+                  `the summarizing request the trace holds open for the second ask was never made within ` +
                   `${agent.runTimeoutMs ?? 15_000}ms`,
               );
-              askB = fetch(`${base}/runs/${runId}/compact`, askInit);
+              askB = fetch(`${base}/runs/${runId}/compact`, askBInit);
               askB.catch(() => {});
               // Delivery slack, not a timing assertion (RETRY_COMPACT_DELIVERY_SLACK_MS):
               // once released, the held response reaches the agent over its
@@ -859,8 +874,10 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
               judgeAsk(askA, 'the first', ''),
               judgeAsk(
                 askB,
-                'the repeated',
-                ' — an identical ask re-sent mid-fold joins the running fold, it is not an error (SPEC.md §3)',
+                entry.joinedBy !== undefined ? 'the joining' : 'the repeated',
+                entry.joinedBy !== undefined
+                  ? ' — an ask sent mid-fold joins the running fold, whatever its wording — it is not an error (SPEC.md §3)'
+                  : ' — an identical ask re-sent mid-fold joins the running fold, it is not an error (SPEC.md §3)',
               ),
             ]);
             // Refreshed after both: judgeReportedFolds below judges this

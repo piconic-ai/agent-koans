@@ -1,0 +1,54 @@
+name: delegate-fold-failure
+description: >
+  A delegate's own declared threshold starts a fold, and the
+  summarizing request is refused. Nothing is summarized and nothing is
+  lost: the delegate's conversation carries on as it was, the failed
+  fold is reported to the caller like any other, and the delegate still
+  finishes the work it was briefed — what decides whether it may ask
+  the model again is the room left in its window, never the fold's
+  outcome (SPEC.md §3).
+
+given:
+  subagents:
+    researcher:
+      context:
+        window: 100000
+        compaction: 90%
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+prompt: "Have the researcher find the operator code for incident INC-2."
+
+when:
+  - request: model
+    response: { subagent: researcher, prompt: "Find the operator code for incident INC-2." }
+  - subagent: researcher
+    when:
+      # The threshold-crossing usage rides the response that still opens the call.
+      - request: model
+        response:
+          body: { tool: lookup_incident, args: { id: "INC-2" } }
+          used_tokens: 95000
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { operator_code: "B-4-7702" } }
+      - request:
+          type: model
+          purpose: compaction
+        response:
+          status: 400
+          body: { error: "summarizer_unavailable" }
+          compaction: failed
+      - request: model
+        response: "The operator code for incident INC-2 is B-4-7702."
+  - request: model
+    response: "The researcher reports operator code B-4-7702 for INC-2."
+
+then:
+  status: completed
+  output: { contains: "B-4-7702" }

@@ -555,11 +555,48 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
         await postAbortAndMaybeCrash();
       }
 
+      // A `duration_ms` result is released by the trace's own next model
+      // turn being served, never by anything this driver sends — so it is
+      // watched here in the background, not in the caller-action loop
+      // below.
+      const lateReleases = actions.flatMap((action, k) => {
+        if (action.kind !== 'late') return [];
+        const p = (async () => {
+          const deadline = Date.now() + (agent.runTimeoutMs ?? 15_000);
+          await within(
+            holds[k].engaged,
+            deadline,
+            () =>
+              `the tool invocation the trace holds a late result open for was never made within ${agent.runTimeoutMs ?? 15_000}ms`,
+          );
+          // Not within(): the loop must stop itself at the deadline —
+          // within() rejects the await but cannot end the polling.
+          while ((llm.state.served[''] ?? 0) < action.releaseAtServedCount) {
+            if (Date.now() > deadline) {
+              throw new Error(
+                `the model request carrying the late tool result's give-up was not served within ` +
+                  `${agent.runTimeoutMs ?? 15_000}ms (served ${llm.state.served[''] ?? 0} of the ` +
+                  `${action.releaseAtServedCount} needed) — the late answer stays withheld until it is`,
+              );
+            }
+            await sleep(100);
+          }
+          holds[k].release();
+        })();
+        // Caught here too, not just at the await below, so a rejection
+        // racing ahead of it never surfaces unhandled (mirrors askA/askB).
+        p.catch(() => {});
+        return [p];
+      });
+
       for (const [k, action] of actions.entries()) {
         // A second fold ask — identical (`retried`) or differently
         // worded (`joinAsk`) — is the turns loop's to deliver; the ask
         // that engages its hold has not even been sent yet here.
         if (action.kind === 'compact') continue;
+        // Released by the background watcher above, not by anything this
+        // loop does.
+        if (action.kind === 'late') continue;
         const label =
           action.kind === 'prompt'
             ? `mid-run prompt #${actions.slice(0, k + 1).filter((a) => a.kind === 'prompt').length}`
@@ -1036,6 +1073,14 @@ async function runTrace(koan: Koan, trace: Trace, agent: AgentConfig): Promise<s
               `a creation resend never rewrites a committed result (SPEC.md §3)`,
           );
         }
+      }
+
+      // Awaited, not left running: a watcher's failure must land in
+      // `failures` before the mocks are torn down below.
+      try {
+        await Promise.all(lateReleases);
+      } catch (err) {
+        failures.push(err instanceof Error ? err.message : String(err));
       }
 
       failures.push(...llm.state.violations, ...tools.state.violations);

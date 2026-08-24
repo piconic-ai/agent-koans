@@ -327,8 +327,10 @@ components:
             for, in milliseconds. An invocation still unanswered at the
             declared timeout must be given up then — not sooner, not
             later — with the failure reaching the model; the run carries
-            on (SPEC.md §3). Absent, when to give up on a slow dependency
-            stays the implementation's own choice.
+            on (SPEC.md §3). Given up means closed: an answer that
+            arrives after the give-up must not reach the model and must
+            not reopen the invocation it missed. Absent, when to give up
+            on a slow dependency stays the implementation's own choice.
 
     RunCreated:
       type: object

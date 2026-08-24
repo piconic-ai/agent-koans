@@ -1510,6 +1510,152 @@ const rows: Row[] = [
     message: 'when[1]: a tool step answered "never" cannot carry "prompt" — its invocation is never released',
   },
   {
+    rule: '"duration_ms" must be a positive integer',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200, body: {}, duration_ms: -5 }
+    `),
+    message: 'when[1].response.duration_ms must be a positive integer — the server\'s own time to answer, in milliseconds',
+  },
+  {
+    rule: '"duration_ms" needs a declared "timeout_ms" on the tool',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200, body: {}, duration_ms: 3000 }
+    `),
+    message:
+      'when[1].response.duration_ms needs "given.tools["x"].timeout_ms" — a wait nobody bounded is never given up, so nothing can be late past it',
+  },
+  {
+    rule: '"duration_ms" at or under the declared "timeout_ms" is rejected',
+    yaml: koan(`
+      given:
+        tools:
+          x:
+            timeout_ms: 1500
+            input_schema: { type: object }
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200, body: {}, duration_ms: 1000 }
+    `),
+    message:
+      'when[1].response.duration_ms (1000) is within the declared timeout_ms (1500) — an answer that arrives in time is just an answer, write it plainly',
+  },
+  {
+    rule: '"duration_ms" cannot appear inside a "turns" koan',
+    yaml: dedent(`
+      name: x
+      given:
+        tools:
+          x:
+            timeout_ms: 999
+            input_schema: { type: object }
+      turns:
+        - prompt: a
+          when:
+            - request: model
+              response: { tool: x, args: {} }
+            - request: { tool: x }
+              response: { status: 200, body: {}, duration_ms: 3000 }
+        - prompt: b
+          when:
+            - request: model
+              response: ok
+    `),
+    message:
+      'turns[0].when[1]: a tool step answered with "duration_ms" cannot appear inside a "turns" koan — a late answer inside one turn\'s own work is not supported here yet',
+  },
+  {
+    rule: '"duration_ms" cannot appear inside a subagent block',
+    yaml: koan(`
+      given:
+        tools:
+          x:
+            timeout_ms: 999
+            input_schema: { type: object }
+      when:
+        - request: model
+          response: { subagent: r, prompt: "go look" }
+        - subagent: r
+          when:
+            - request: model
+              response: { tool: x, args: {} }
+            - request: { tool: x }
+              response: { status: 200, body: {}, duration_ms: 3000 }
+    `),
+    message:
+      'when[1].when[1]: a tool step answered with "duration_ms" cannot appear inside a subagent block — only the caller\'s own run has a give-up for a late answer to arrive after',
+  },
+  {
+    rule: 'a tool step answered with "duration_ms" cannot share a step with "prompt"',
+    yaml: koan(`
+      given:
+        tools:
+          x:
+            timeout_ms: 999
+            input_schema: { type: object }
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200, body: {}, duration_ms: 3000 }
+          prompt: hello
+    `),
+    message:
+      'when[1]: a tool step answered with "duration_ms" cannot share a step with "prompt" — one seam per step; a caller action delivered while this invocation is held and an answer that missed its own deadline are different things',
+  },
+  {
+    rule: '"retry" cannot follow a tool step answered with "duration_ms"',
+    yaml: koan(`
+      given:
+        tools:
+          x:
+            timeout_ms: 999
+            input_schema: { type: object }
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200, body: {}, duration_ms: 3000 }
+        - retry: prompt
+    `),
+    message:
+      'when[2]: "retry" cannot follow a tool step answered with "duration_ms" — one seam per step; the resend of a live invocation and an answer that already missed its deadline are different things',
+  },
+  {
+    rule: '"duration_ms" needs a "body"',
+    yaml: koan(`
+      given:
+        tools:
+          x:
+            timeout_ms: 999
+            input_schema: { type: object }
+      when:
+        - request: model
+          response: { tool: x, args: {} }
+        - request: { tool: x }
+          response: { status: 200, duration_ms: 3000 }
+    `),
+    message: 'when[1].response.duration_ms needs a "body" — an answer with nothing in it proves nothing arrived late',
+  },
+  {
+    rule: '"duration_ms" belongs on a tool step\'s response, not a model response',
+    yaml: koan(`
+      when:
+        - request: model
+          response: { status: 400, duration_ms: 3000 }
+    `),
+    message: `when[0].response.duration_ms belongs on a tool step's response — a model request has no invocation of its own to answer late`,
+  },
+  {
     rule: 'a tool request must follow a model response with a tool-call instruction',
     yaml: koan(`
       when:

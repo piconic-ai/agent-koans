@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
+import { scalarLeaves } from './mock-llm.js';
 import { deepEqual } from './pending.js';
 import type {
   Args,
@@ -68,6 +69,15 @@ export interface CallToolInstruction {
   /** Declared transform from a following tool-request step's `args`; overrides `args` for fidelity checking. */
   invokeArgs?: Record<string, unknown>;
   tool_responds?: ToolResponse;
+  /**
+   * The real answer to a tool step answered with `duration_ms`
+   * (koan-spec.ts) — present only when `tool_responds` above compiles to
+   * `{ never: true }`, so the model experiences a plain timeout while
+   * this is withheld until the give-up reaches it. Its scalar leaves are
+   * forbidden from every request of the run (`forbiddenEverywhere`,
+   * below): the invocation they answer was already given up.
+   */
+  lateResponds?: HttpResponse;
   /** A prompt the caller sends while this invocation is held open. */
   promptDuring?: string;
   /** Set when the caller re-sends the turn's own submission while this invocation is held open (`- retry: prompt`). */
@@ -256,31 +266,37 @@ export interface Trace {
   /** The main conversation first; subagent conversations follow in first-appearance order. */
   conversations: Conversation[];
   /**
-   * Words of an ask that joined a fold running elsewhere in this trace
-   * (a compaction step's own `compact`) — must never reach a request of
-   * ANY conversation here, not just the fold it joined: the fold it
-   * joined had its wording fixed before it arrived, and no second fold
-   * starts for it to reach instead (SPEC.md §3). Fed into every
-   * `ConversationScript.forbidden` (mock-llm.ts), the same channel a
-   * value scripted into one conversation and forbidden from another
-   * already goes through.
+   * Values that must never reach a request of ANY conversation here, not
+   * just wherever they were scripted (`ConversationScript.forbidden`,
+   * mock-llm.ts): a fold-joining ask's own wording, fixed before it
+   * arrived; and a late tool answer's scalar leaves (`duration_ms`,
+   * koan-spec.ts), whose invocation was already given up.
    */
   forbiddenEverywhere?: string[];
 }
 
 /**
  * One caller action a held invocation carries — a mid-run prompt, a
- * re-send of the turn's own submission, a fold ask re-sent while its own
- * fold is in flight, whether identical (`retry: compact`) or differently
- * worded (a compaction step's own `compact`) — or the one action that is
- * not the caller's at all: the runner killing the agent while the
- * invocation is in flight (`response: crash`).
+ * re-send of the turn's own submission, or a fold ask re-sent while its
+ * own fold is in flight (identical via `retry: compact`, or reworded via
+ * a compaction step's own `compact`) — or one of two things that are not
+ * the caller's doing: the runner killing the agent mid-invocation
+ * (`response: crash`), and a `duration_ms` tool step's result, released
+ * once the give-up it missed reaches the model (`kind: 'late'`).
  */
 export type HeldAction =
   | { kind: 'prompt'; prompt: string }
   | { kind: 'retry' }
   | { kind: 'crash' }
-  | { kind: 'compact'; instructions?: string };
+  | { kind: 'compact'; instructions?: string }
+  /**
+   * A `duration_ms` tool step's real answer, held until this
+   * conversation's next model turn — the one carrying the give-up — has
+   * been served (`releaseAtServedCount`, a `MockLlm.state.served`
+   * count). Not caller-driven like the other kinds, so runner.ts's
+   * actions loop skips it (like `compact`) and watches it separately.
+   */
+  | { kind: 'late'; releaseAtServedCount: number };
 
 /** A `then`-block matcher; a bare scalar means `equals`. */
 export type Matcher =
@@ -554,18 +570,25 @@ function compileSteps(steps: Step[], conv: Conversation, conversations: Conversa
       case 'tool': {
         const match = matchOpenCall(openCalls, step.tool, step.args);
         match.compiled.invokeArgs = step.args ?? match.compiled.args;
-        match.compiled.tool_responds =
-          'disconnect' in step.response
-            ? { disconnect: true }
-            : 'never' in step.response
-              ? { never: true }
-              : 'crash' in step.response
-                ? { crash: true }
-                : { status: step.response.status, body: step.response.body };
+        const response = step.response;
+        if ('disconnect' in response) {
+          match.compiled.tool_responds = { disconnect: true };
+        } else if ('never' in response) {
+          match.compiled.tool_responds = { never: true };
+        } else if ('crash' in response) {
+          match.compiled.tool_responds = { crash: true };
+        } else if (response.duration_ms !== undefined) {
+          // A plain timeout for the model — parse.ts proved duration_ms
+          // exceeds timeout_ms, so the give-up is judged like "never".
+          match.compiled.tool_responds = { never: true };
+          match.compiled.lateResponds = { status: response.status, body: response.body };
+        } else {
+          match.compiled.tool_responds = { status: response.status, body: response.body };
+        }
         if (step.prompt !== undefined) match.compiled.promptDuring = step.prompt;
         if (step.retry !== undefined) match.compiled.retryDuring = true;
         openCalls = openCalls.filter((c) => c !== match);
-        toolCrashJustClosed = 'crash' in step.response;
+        toolCrashJustClosed = 'crash' in response;
         break;
       }
       case 'internal': {
@@ -637,7 +660,11 @@ function heldActions(conv: Conversation): Array<{ turn: number; action: HeldActi
             ? { kind: 'retry' }
             : member.tool_responds !== undefined && 'crash' in member.tool_responds
               ? { kind: 'crash' }
-              : undefined;
+              // i+1 is the next turn's index (the one carrying the
+              // give-up); one more turns an index into a served COUNT.
+              : member.lateResponds !== undefined
+                ? { kind: 'late', releaseAtServedCount: i + 2 }
+                : undefined;
       if (action !== undefined) {
         member.holdIndex = held.length;
         held.push({ turn: i, action });
@@ -694,13 +721,16 @@ export function crashCarrierOf(trace: Trace): Conversation | undefined {
 /** The held actions of a trace, in step order — one hold each (runner.ts). */
 export function actionsDuringOf(trace: Trace): HeldAction[] {
   const actions: HeldAction[] = [];
-  for (const turn of trace.conversations[0].turns) {
+  for (const [i, turn] of trace.conversations[0].turns.entries()) {
     if (turn.compactRetried) actions.push({ kind: 'compact' });
     else if (turn.askDuring !== undefined) actions.push({ kind: 'compact', instructions: turn.askDuring });
     for (const member of turn.call_tools ?? []) {
       if (member.promptDuring !== undefined) actions.push({ kind: 'prompt', prompt: member.promptDuring });
       else if (member.retryDuring) actions.push({ kind: 'retry' });
       else if (member.tool_responds !== undefined && 'crash' in member.tool_responds) actions.push({ kind: 'crash' });
+      // Must walk turns/members in heldActions' own order (above), or
+      // holdIndex stops lining up with the hold created there.
+      else if (member.lateResponds !== undefined) actions.push({ kind: 'late', releaseAtServedCount: i + 2 });
     }
   }
   return actions;
@@ -717,7 +747,12 @@ function compileTrace(trace: ParsedTrace, briefing: string, cap?: number): Trace
   if (trace.creationRetriedLate) main.turns.at(-1)!.creationRetriedLate = true;
   const boundaries = promptBoundaries(main);
   if (boundaries.length > 0) main.followUps = boundaries;
-  return { conversations };
+  // A late answer's scalar leaves join the same forbidden channel a
+  // joining ask's words ride (Trace's own doc, above).
+  const lateLeaves = conversations.flatMap((c) =>
+    c.turns.flatMap((t) => (t.call_tools ?? []).flatMap((m) => (m.lateResponds !== undefined ? scalarLeaves(m.lateResponds.body) : []))),
+  );
+  return { conversations, ...(lateLeaves.length > 0 ? { forbiddenEverywhere: lateLeaves } : {}) };
 }
 
 function compileJudgment(then: ParsedJudgment | undefined): Judgment {

@@ -923,6 +923,11 @@ function parseTrace(
       if ('crash' in prev.response) {
         return problem(`${at_i}: "retry" cannot follow a tool step answered "crash" — the process the resend would reach is being killed`);
       }
+      if ('duration_ms' in prev.response && prev.response.duration_ms !== undefined) {
+        return problem(
+          `${at_i}: "retry" cannot follow a tool step answered with "duration_ms" — one seam per step; the resend of a live invocation and an answer that already missed its deadline are different things`,
+        );
+      }
       if (prev.prompt !== undefined || prev.retry !== undefined) {
         return problem(
           `${at_i}: a held invocation carries one caller action — this tool step already carries "${prev.retry !== undefined ? 'retry' : 'prompt'}"`,
@@ -1114,6 +1119,38 @@ function parseTrace(
             `"never" for an invocation accepted and never answered, or "crash" for the agent's process killed while it is in flight`,
         );
       }
+      // The other three forms are bare YAML strings — no slot for a
+      // sibling "duration_ms" key.
+      const rawDurationMs = !disconnects && !never && !crashes ? (res as Record<string, unknown>).duration_ms : undefined;
+      if (rawDurationMs !== undefined && !(Number.isInteger(rawDurationMs) && (rawDurationMs as number) > 0)) {
+        return problem(`${at_i}.response.duration_ms must be a positive integer — the server's own time to answer, in milliseconds`);
+      }
+      const durationMs = rawDurationMs as number | undefined;
+      const late = durationMs !== undefined;
+      const declaredTimeout = ctx.koan.given.tools[reqTool]?.timeout_ms;
+      if (late && declaredTimeout === undefined) {
+        return problem(
+          `${at_i}.response.duration_ms needs "given.tools[\"${reqTool}\"].timeout_ms" — a wait nobody bounded is never given up, so nothing can be late past it`,
+        );
+      }
+      if (late && declaredTimeout !== undefined && durationMs! <= declaredTimeout) {
+        return problem(
+          `${at_i}.response.duration_ms (${durationMs}) is within the declared timeout_ms (${declaredTimeout}) — an answer that arrives in time is just an answer, write it plainly`,
+        );
+      }
+      if (late && inTurns) {
+        return problem(
+          `${at_i}: a tool step answered with "duration_ms" cannot appear inside a "turns" koan — a late answer inside one turn's own work is not supported here yet`,
+        );
+      }
+      if (late && inSubagent) {
+        return problem(
+          `${at_i}: a tool step answered with "duration_ms" cannot appear inside a subagent block — only the caller's own run has a give-up for a late answer to arrive after`,
+        );
+      }
+      if (late && (res as Record<string, unknown>).body === undefined) {
+        return problem(`${at_i}.response.duration_ms needs a "body" — an answer with nothing in it proves nothing arrived late`);
+      }
       // "never" hangs the invocation until something declared gives up on
       // it — the run's own time budget, or the tool's own timeout — and
       // without either, an agent that keeps waiting would just run out
@@ -1171,6 +1208,11 @@ function parseTrace(
             `${at_i}: a tool step's "prompt" cannot appear inside a subagent block — only the caller's own run can be prompted`,
           );
         }
+        if (late) {
+          return problem(
+            `${at_i}: a tool step answered with "duration_ms" cannot share a step with "prompt" — one seam per step; a caller action delivered while this invocation is held and an answer that missed its own deadline are different things`,
+          );
+        }
         if (typeof rawPrompt !== 'string' || rawPrompt.length === 0) {
           return problem(`${at_i}.prompt must be a non-empty string — what the caller sends while this response is held`);
         }
@@ -1184,7 +1226,7 @@ function parseTrace(
         args: reqArgs,
         response:
           r !== undefined
-            ? { status: r.status, body: r.body }
+            ? { status: r.status, body: r.body, ...(late ? { duration_ms: durationMs! } : {}) }
             : never
               ? { never: true }
               : crashes
@@ -1463,6 +1505,9 @@ function parseModelResponse(ctx: Ctx<unknown>): Parsed<ModelResponse> {
     // deterministic: 408/429/5xx are auto-retried by common clients.
     if (status < 400 || status >= 500 || status === 408 || status === 429) {
       return problem(`${at}.response.status must be a non-retryable 4xx (not 408/429) for a model API failure`);
+    }
+    if (node.duration_ms !== undefined) {
+      return problem(`${at}.response.duration_ms belongs on a tool step's response — a model request has no invocation of its own to answer late`);
     }
     return { kind: 'api-failure', status, body: node.body };
   }

@@ -1,0 +1,38 @@
+name: crash-in-a-later-turn
+description: >
+  The death lands inside a follow-up turn's own work this time: the
+  earlier turn settled, the next prompt is mid-flight, and a tool
+  result is already on the record when the process dies. Recovery
+  rebuilds the whole conversation, not just the turn that died — the
+  next request carries the earlier turn's exchange, the follow-up
+  prompt, and the recorded result, and the recorded call is not
+  invoked again (SPEC.md §3).
+
+given:
+  tools:
+    lookup_incident:
+      description: "Look up an incident record by id"
+      input_schema:
+        type: object
+        properties:
+          id: { type: string }
+        required: [id]
+
+turns:
+  - prompt: "Log operator code T-7-8845 for the overnight shift."
+    when:
+      - request: model
+        response: "Logged operator code T-7-8845."
+
+  - prompt: "Look up incident INC-9 and report its status under that code."
+    when:
+      - request: model
+        response: { tool: lookup_incident, args: { id: "INC-9" } }
+      - request: { tool: lookup_incident }
+        response: { status: 200, body: { status_text: "contained" } }
+      - crash
+      - request: model
+        response: "Incident INC-9 is contained, logged under T-7-8845."
+    then:
+      status: completed
+      output: { contains: "contained" }

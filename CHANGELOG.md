@@ -1,5 +1,15 @@
 # agent-koans
 
+## 0.18.0
+
+### Minor Changes
+
+- 601d486: Add koan 098: the process dies inside a follow-up turn's own work, with a tool result already on record. Koan 067 pinned a crash after a recorded result, but with no earlier turn to lose; koan 074 pinned a crash between turns, with nothing in flight when it lands. Neither showed whether a recovery that rebuilds only the dying turn — dropping every earlier turn's exchange, or redispatching the run's opening prompt instead of the one actually in flight — passes, and 098 does exercise that: the next request must carry the earlier turn's exchange, the follow-up prompt, and the recorded result together, and the recorded call is not invoked again.
+
+  The koan caught exactly that in the bundled Flue example: its recovery redispatched the run's opening prompt under every restart, because only `startRun` recorded what to redispatch and a follow-up prompt (`sendPrompt`) never updated it — the adapter's own comment already named the gap ("a follow-up-aware recovery is not built until a koan needs it"). `sendPrompt` now records the turn it is about to dispatch, on the run's row, before dispatching, the same discipline `startRun` already followed. Recovery for that turn re-attaches to the submission it already admitted (a plain `read()`, never a second `dispatch()`) rather than redispatching it under an idempotency key the way the opening turn's own recovery still does — keying a live follow-up dispatch turned out to break Flue's own serialize-or-join handling of two prompts queued while a turn is running (koan 053), so the fix reads the record back instead of asking Flue to redeliver it.
+
+- 1901a01: Add koan 097: a delegate's own declared threshold starts a fold, and the summarizing request is refused. 031 pinned a fold failure on the run's own conversation, always caller-asked; nothing exercised a fold that a threshold started, or one inside a delegate's conversation, so an implementation whose threshold-fold failure ended the conversation instead of carrying on — treating the fold's outcome as if it decided whether the agent may ask the model again — passed the whole suite. Nothing is summarized, the delegate's history stays exactly as it was, the failed fold is reported to the caller the same way any other is, and the delegate still finishes the work it was briefed. The bundled vanilla example already carries on past a failed fold regardless of what started it, main or delegate alike — no fix needed. The bundled Flue example cannot exercise this: its delegates deliberately run on an unbounded-window model with no per-delegate override (063's own limitation), so a delegate's declared threshold never crosses and the koan's refused summarizing request lands on Flue's next ordinary request instead, surfacing as an unrelated model-API failure.
+
 ## 0.17.0
 
 ### Minor Changes
